@@ -9,14 +9,12 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use tracing::{error, info};
 
+use crate::agent::{process_with_agent_with_events, AgentRequestContext, AppState, InboundImages};
 use crate::channel::{deliver_agent_final_to_contact, DeliveryScope, CHANNEL_PROCESSING_ACK};
 use crate::chat_queue::{QueueEnqueueMeta, QueueSource};
 use crate::db::call_blocking;
 use crate::db::StoredMessage;
 use crate::slash_commands::{parse as parse_slash_command, SlashCommand};
-use crate::telegram::{
-    process_with_agent_with_events, AgentRequestContext, AppState, InboundImages,
-};
 
 // --- Webhook query params for verification ---
 
@@ -342,7 +340,7 @@ async fn process_webhook(state: &WhatsAppState, payload: WebhookPayload) -> anyh
                                     )
                                     .await;
                                 } else {
-                                    crate::telegram::archive_conversation(
+                                    crate::agent::archive_conversation(
                                         &state.app_state.config.runtime_data_dir(),
                                         chat_id,
                                         &messages,

@@ -11,13 +11,13 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Utc};
 use tracing::warn;
 
+use crate::agent::AppState;
 use crate::claude::{Message, MessageContent, MessagesResponse, ResponseContentBlock};
 use crate::db::{
     call_blocking, pending_section_setting_key, ConversationTopic, ConversationTopicDraft,
     Database, TopicScope, TopicWindowCursor, TopicWindowMessage,
 };
 use crate::error::FinallyAValueBotError;
-use crate::telegram::AppState;
 
 pub const APP_SETTING_TOPICS_MODEL_SOURCE: &str = "TOPICS_MODEL_SOURCE";
 pub const APP_SETTING_TOPICS_MODEL: &str = "TOPICS_MODEL";

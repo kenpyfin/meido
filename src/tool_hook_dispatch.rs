@@ -5,10 +5,10 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::agent_history::{truncate_preview, ToolCallRecord};
-use crate::channels::telegram::{
+use crate::agent::{
     hook_event_summary, publish_hook_event, AgentEvent, AgentRequestContext, AppState,
 };
+use crate::agent_history::{truncate_preview, ToolCallRecord};
 use crate::hook_actions::apply_hook_memory_effects;
 use crate::hook_runtime::{run_hooks_for_event_async, HookEventName, HookRunInput, HookRunResult};
 use crate::tools::{self, ToolAuthContext, ToolResult};

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use tokio::sync::oneshot;
 
-use crate::channels::telegram::{process_with_agent_with_events, AgentRequestContext, AppState};
+use crate::agent::{process_with_agent_with_events, AgentRequestContext, AppState};
 use crate::chat_queue::{QueueEnqueueMeta, QueueSource};
 use crate::claude::{Message, MessageContent};
 use crate::db::{call_blocking, StoredMessage, MESSAGE_ORIGIN_GUEST};
@@ -126,7 +126,7 @@ pub async fn run_guest_turn(
                     skip_recall: true,
                 },
                 None,
-                crate::telegram::InboundImages::new(),
+                crate::agent::InboundImages::new(),
                 None,
                 cancel,
             )

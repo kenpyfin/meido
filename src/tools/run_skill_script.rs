@@ -249,7 +249,7 @@ pub fn format_run_skill_script_hint(skill_name: &str, skill_dir: &Path) -> Optio
 
 /// Resolve a hint for pipeline validation when a skill was activated.
 pub fn runnable_script_hint_for_skill(
-    state: &crate::telegram::AppState,
+    state: &crate::agent::AppState,
     skill_name: &str,
 ) -> Option<String> {
     let manager = SkillManager::from_skills_dirs(state.config.skill_discovery_dirs());

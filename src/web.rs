@@ -21,6 +21,11 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{broadcast, Mutex};
 use tracing::{error, info, warn};
 
+use crate::agent::{
+    archive_conversation, history_to_claude_messages, process_with_agent,
+    process_with_agent_with_events, trim_to_recent_balanced, AgentEvent, AgentRequestContext,
+    AppState, InboundImages,
+};
 use crate::background_jobs::{
     await_handoff_startup_ack, handoff_trigger_for_db, is_background_handoff_response,
     try_enqueue_background_handoff, HandoffEnqueueOutcome,
@@ -37,11 +42,6 @@ use crate::final_delivery_dedupe::{ensure_visible_turn_text, failed_turn_notice}
 use crate::hook_executor::validate_command_payload;
 use crate::slash_commands::{parse as parse_slash_command, SlashCommand};
 use crate::social_oauth;
-use crate::telegram::{
-    archive_conversation, history_to_claude_messages, process_with_agent,
-    process_with_agent_with_events, trim_to_recent_balanced, AgentEvent, AgentRequestContext,
-    AppState, InboundImages,
-};
 use crate::web_terminal::{self, TerminalHub};
 use std::time::SystemTime;
 
@@ -7622,7 +7622,7 @@ fn connection_in_use(
         .is_some_and(|name| crate::engine_connections::secret_is_saved(data_dir, name))
 }
 
-fn connections_json(state: &crate::telegram::AppState) -> serde_json::Value {
+fn connections_json(state: &crate::agent::AppState) -> serde_json::Value {
     let data_dir = state.config.runtime_data_dir();
     let mm = state.llm.local_delegate_config();
     let local_url = if !mm.tier2_base_url.trim().is_empty() {
@@ -7851,7 +7851,7 @@ fn topics_model_json(
 }
 
 async fn read_topics_model(
-    state: &crate::telegram::AppState,
+    state: &crate::agent::AppState,
 ) -> Result<
     (
         crate::topics::TopicModelChoice,

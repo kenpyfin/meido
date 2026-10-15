@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use teloxide::prelude::*;
 
-use crate::channels::telegram::{
-    send_response_result, strip_embedded_bulletin_focus, WorkspaceAutoImageContext,
-};
+use crate::agent::strip_embedded_bulletin_focus;
 use crate::channels::wecom::WecomGateway;
 use crate::db::{call_blocking, message_origin_interactive, Database, StoredMessage};
 use crate::final_delivery_dedupe::{
@@ -15,6 +13,7 @@ use crate::final_delivery_dedupe::{
 use crate::final_delivery_media::{
     materialize_web_delivery_file_links, normalize_assistant_artifact_references,
 };
+use crate::telegram::{send_response_result, WorkspaceAutoImageContext};
 use crate::tools::auth_context_from_input;
 
 /// Re-export for call sites that already import from `crate::channel`.

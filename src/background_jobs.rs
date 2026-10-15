@@ -9,6 +9,9 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing::{error, info, warn};
 
+use crate::agent::{
+    process_with_agent_with_events, AgentRequestContext, AppState, BACKGROUND_JOB_HANDOFF_PREFIX,
+};
 use crate::channel::{deliver_agent_final_to_contact, DeliveryScope};
 use crate::claude::{Message, MessageContent, ResponseContentBlock};
 use crate::db::call_blocking;
@@ -16,9 +19,6 @@ use crate::job_heartbeat::{
     signal_from_agent_event, spawn_shared_heartbeat, HeartbeatSignal, JobType,
 };
 use crate::llm::LlmProvider;
-use crate::telegram::{
-    process_with_agent_with_events, AgentRequestContext, AppState, BACKGROUND_JOB_HANDOFF_PREFIX,
-};
 
 type JobCancel = Arc<AtomicBool>;
 type JobRegistryValue = (i64, JobCancel);
@@ -323,7 +323,7 @@ pub fn spawn_background_job(
                 skip_recall: false,
             },
             Some(&prompt),
-            crate::telegram::InboundImages::new(),
+            crate::agent::InboundImages::new(),
             Some(&evt_tx),
             Some(cancel.clone()),
         )

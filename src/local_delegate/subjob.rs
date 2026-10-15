@@ -2,10 +2,10 @@
 
 use std::time::Instant;
 
+use crate::agent::AppState;
 use crate::claude::{Message, MessageContent, ResponseContentBlock};
 use crate::error::FinallyAValueBotError;
 use crate::local_delegate::{tool_choice_for_target, RouteTarget};
-use crate::telegram::AppState;
 use crate::tools::{ToolAuthContext, ToolRegistry, ToolResult};
 
 const DEFAULT_MAX_ITERATIONS: usize = 3;

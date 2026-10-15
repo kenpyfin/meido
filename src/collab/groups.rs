@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use tokio::sync::oneshot;
 
-use crate::channels::telegram::{process_with_agent_with_events, AgentRequestContext, AppState};
+use crate::agent::{process_with_agent_with_events, AgentRequestContext, AppState};
 use crate::chat_queue::{QueueEnqueueMeta, QueueSource};
 use crate::claude::{Message, MessageContent};
 use crate::db::call_blocking;
@@ -330,7 +330,7 @@ async fn speak(
             skip_recall: true,
         },
         None,
-        crate::telegram::InboundImages::new(),
+        crate::agent::InboundImages::new(),
         None,
         Some(cancel),
     )

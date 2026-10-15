@@ -7,9 +7,9 @@ use std::time::Duration;
 use serde::Deserialize;
 use tracing::warn;
 
+use crate::agent::BACKGROUND_JOB_HANDOFF_PREFIX;
 use crate::agent_history::append_pdqe_step_to_agent_history;
 use crate::agent_turn_context::SessionGoalContext;
-use crate::channels::telegram::BACKGROUND_JOB_HANDOFF_PREFIX;
 use crate::claude::{Message, MessageContent, ResponseContentBlock};
 use crate::config::Config;
 use crate::db::call_blocking;

@@ -4,9 +4,9 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, UnboundedSender};
 use tracing::warn;
 
+use crate::agent::{AgentEvent, AppState};
 use crate::channel::{deliver_to_contact, DeliveryScope};
 use crate::db::call_blocking;
-use crate::telegram::{AgentEvent, AppState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobType {

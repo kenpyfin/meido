@@ -10,16 +10,16 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{info, warn};
 
-use crate::agent_history::{
-    EvaluatorStepRecord, IterationRecord, PipelineFinishExtras, PipelineStageRecord, ToolCallRecord,
-};
-use crate::channels::telegram::hook_turn_bridge::{
+use crate::agent::hook_turn_bridge::{
     append_hook_context_messages, pre_stop_follow_up, run_before_turn_hooks, run_pre_stop_hooks,
     PreStopFollowUp, DEFERRED_COMMITMENT_MAX_NUDGES,
 };
-use crate::channels::telegram::{
+use crate::agent::{
     pipeline_finish_turn, AgentEvent, AgentProcessResult, AgentRequestContext, AgentRunPrep,
     AppState,
+};
+use crate::agent_history::{
+    EvaluatorStepRecord, IterationRecord, PipelineFinishExtras, PipelineStageRecord, ToolCallRecord,
 };
 use crate::claude::{Message, MessageContent};
 use crate::cursor_delegation_prompt::{
@@ -1792,7 +1792,7 @@ mod tests {
 
     #[test]
     fn full_slim_prompt_includes_roles_and_hook_context() {
-        use crate::channels::telegram::hook_turn_bridge::append_hook_context_messages;
+        use crate::agent::hook_turn_bridge::append_hook_context_messages;
 
         let mut messages = vec![
             Message {

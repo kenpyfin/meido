@@ -8,16 +8,16 @@ use serenity::model::id::ChannelId;
 use serenity::prelude::*;
 use tracing::{error, info};
 
+use crate::agent::{
+    archive_conversation, process_with_agent_with_events, AgentRequestContext, AppState,
+    InboundImages,
+};
 use crate::channel::{DeliveryScope, CHANNEL_PROCESSING_ACK};
 use crate::chat_queue::{QueueEnqueueMeta, QueueSource};
 use crate::claude::Message as ClaudeMessage;
 use crate::db::call_blocking;
 use crate::db::StoredMessage;
 use crate::slash_commands::{parse as parse_slash_command, SlashCommand};
-use crate::telegram::{
-    archive_conversation, process_with_agent_with_events, AgentRequestContext, AppState,
-    InboundImages,
-};
 
 struct Handler {
     app_state: Arc<AppState>,

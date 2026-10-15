@@ -6,7 +6,7 @@ use chrono_tz::Tz;
 use cron::Schedule;
 use std::str::FromStr;
 
-use crate::channels::telegram::AppState;
+use crate::agent::AppState;
 use crate::db::call_blocking;
 use crate::db_collab::clip_chars;
 

@@ -9,6 +9,7 @@ use tracing::{error, info, warn};
 
 use serde_json::json;
 
+use crate::agent::AppState;
 use crate::agent_history::{split_pdqe_for_optimize, split_trace_for_optimize};
 use crate::channel::{deliver_to_contact, DeliveryScope};
 use crate::claude::{ContentBlock, Message, MessageContent, ResponseContentBlock, ToolDefinition};
@@ -17,7 +18,6 @@ use crate::error::FinallyAValueBotError;
 use crate::job_heartbeat::{spawn_shared_heartbeat, HeartbeatSignal, JobType};
 use crate::llm::{create_openai_compatible_provider_with_timeout, LlmProvider, LlmSendOptions};
 use crate::local_delegate::ModelTier;
-use crate::telegram::AppState;
 use crate::tools::ToolAuthContext;
 
 const MAX_OPTIMIZE_HISTORY_BYTES: usize = 80 * 1024;

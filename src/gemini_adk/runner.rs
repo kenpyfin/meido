@@ -9,6 +9,10 @@ use serde_json::json;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{info, warn};
 
+use crate::agent::{
+    pipeline_finish_turn, AgentEvent, AgentProcessResult, AgentRequestContext, AgentRunPrep,
+    AppState,
+};
 use crate::agent_history::{
     EvaluatorStepRecord, IterationRecord, PipelineFinishExtras, PipelineStageRecord, ToolCallRecord,
 };
@@ -24,10 +28,6 @@ use crate::gemini_adk::agent::{
 use crate::gemini_adk::config::{GeminiAdkSettings, DEFAULT_GEMINI_ADK_MODEL};
 use crate::gemini_adk::profile::{AdkAgent, AdkAgentKind, AdkTopologyProfile};
 use crate::llm::{create_provider, LlmProvider};
-use crate::telegram::{
-    pipeline_finish_turn, AgentEvent, AgentProcessResult, AgentRequestContext, AgentRunPrep,
-    AppState,
-};
 use crate::tool_hook_dispatch::{
     dispatch_tool_with_hooks, run_post_tool_batch_hooks, ToolHookDispatchContext,
 };

@@ -14,14 +14,12 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
+use crate::agent::{process_with_agent_with_events, AgentRequestContext, AppState, InboundImages};
 use crate::channel::{deliver_agent_final_to_contact, DeliveryScope, CHANNEL_PROCESSING_ACK};
 use crate::chat_queue::{QueueEnqueueMeta, QueueSource};
 use crate::config::Config;
 use crate::db::{call_blocking, StoredMessage};
 use crate::slash_commands::{parse as parse_slash_command, SlashCommand};
-use crate::telegram::{
-    process_with_agent_with_events, AgentRequestContext, AppState, InboundImages,
-};
 
 use super::wecom_aibot::WecomAiBotClient;
 use super::wecom_crypt::WxBizMsgCrypt;
@@ -803,7 +801,7 @@ async fn handle_slash_command(
                 if messages.is_empty() {
                     "No conversation to archive.".to_string()
                 } else {
-                    crate::telegram::archive_conversation(
+                    crate::agent::archive_conversation(
                         &app_state.config.runtime_data_dir(),
                         chat_id,
                         &messages,

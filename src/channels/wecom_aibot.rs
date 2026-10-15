@@ -12,8 +12,8 @@ use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
+use crate::agent::{AppState, InboundImages};
 use crate::config::Config;
-use crate::telegram::{AppState, InboundImages};
 
 use super::wecom::{
     append_note, chat_allowed, ingest_wecom_incoming, load_wecom_allowed_chats, mime_ext,

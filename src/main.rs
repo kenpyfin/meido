@@ -2,8 +2,8 @@ use finally_a_value_bot::claude::{Message, MessageContent};
 use finally_a_value_bot::config::Config;
 use finally_a_value_bot::error::FinallyAValueBotError;
 use finally_a_value_bot::{
-    builtin_skills, channel_integration_config, db, doctor, gateway, logging, mcp, memory, skills,
-    telegram,
+    agent, builtin_skills, channel_integration_config, db, doctor, gateway, logging, mcp, memory,
+    skills,
 };
 use std::path::Path;
 use tracing::info;
@@ -602,7 +602,7 @@ async fn main() -> anyhow::Result<()> {
         info!("MCP initialized: {} tools available", mcp_tool_count);
     }
 
-    telegram::run_bot(config, db, memory_manager, skill_manager, mcp_manager).await?;
+    agent::run_bot(config, db, memory_manager, skill_manager, mcp_manager).await?;
 
     Ok(())
 }

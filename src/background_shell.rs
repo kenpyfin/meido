@@ -8,12 +8,12 @@ use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{error, info, warn};
 
+use crate::agent::AppState;
 use crate::background_jobs::{try_enqueue_background_handoff, HandoffEnqueueOutcome};
 use crate::channel::{deliver_agent_final_to_contact, deliver_to_contact, DeliveryScope};
 use crate::config::Config;
 use crate::db::{call_blocking, BackgroundJob};
 use crate::job_heartbeat::{spawn_shared_heartbeat, HeartbeatSignal, JobType};
-use crate::telegram::AppState;
 
 const MAX_DELIVERY_OUTPUT_LEN: usize = 30_000;
 const EXIT_CODE_FILE: &str = "exit_code";

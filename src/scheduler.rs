@@ -8,6 +8,7 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
 
+use crate::agent::{process_with_agent_with_events, AgentRequestContext, AppState};
 use crate::background_jobs::{
     await_handoff_startup_ack, is_background_handoff_response, try_enqueue_background_handoff,
     HandoffEnqueueOutcome,
@@ -18,7 +19,6 @@ use crate::error::FinallyAValueBotError;
 use crate::job_heartbeat::{
     signal_from_agent_event, spawn_shared_heartbeat, HeartbeatSignal, JobType,
 };
-use crate::telegram::{process_with_agent_with_events, AgentRequestContext, AppState};
 
 fn channel_from_chat_type(chat_type: &str) -> &'static str {
     match chat_type {
@@ -633,7 +633,7 @@ async fn run_scheduled_agent_and_finalize(
                 skip_recall: false,
             },
             Some(&prompt),
-            crate::telegram::InboundImages::new(),
+            crate::agent::InboundImages::new(),
             Some(&evt_tx),
             cancel,
         )

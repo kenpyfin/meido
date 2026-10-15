@@ -4,10 +4,10 @@ use std::sync::{Arc, OnceLock};
 use async_trait::async_trait;
 use serde_json::json;
 
+use crate::agent::AppState;
 use crate::background_shell::{self, ShellEnqueueOutcome};
 use crate::claude::ToolDefinition;
 use crate::config::Config;
-use crate::telegram::AppState;
 
 use super::bash_safety::{check_bash_safety, parse_confirmation_prefix};
 use super::{auth_context_from_input, schema_object, Tool, ToolResult};

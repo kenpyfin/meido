@@ -16,8 +16,8 @@ use serde_json::json;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{info, warn};
 
+use crate::agent::{AgentEvent, AgentRequestContext, AppState};
 use crate::agent_history::ToolCallRecord;
-use crate::channels::telegram::{AgentEvent, AgentRequestContext, AppState};
 use crate::tool_hook_dispatch::{
     dispatch_tool_with_hooks, run_post_tool_batch_hooks, ToolHookDispatchContext,
     ToolHookDispatchOutcome,

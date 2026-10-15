@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod agent_history;
 pub mod agent_path_discipline;
 pub mod agent_turn_context;
@@ -48,6 +49,7 @@ pub mod queue_abort;
 pub mod recall;
 pub mod response_quality_evaluator;
 pub mod run_optimizer;
+pub mod runtime;
 pub mod runtime_toggles;
 pub mod safety_redaction;
 pub mod scheduler;
