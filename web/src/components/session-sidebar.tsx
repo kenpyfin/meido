@@ -158,7 +158,10 @@ export const SessionSidebar = React.memo(function SessionSidebar({
       <div className="flex justify-between items-center mb-4">
         <div className="min-w-0">
           <span className="text-xl font-semibold tracking-tight">
-            FinallyAValueBot
+            Meido
+          </span>
+          <span className="mt-0.5 block text-xs text-[color:var(--mc-text-muted)]">
+            Finally a helpful one.
           </span>
           <span className="mt-0.5 block">
             {mode === 'personas' ? 'Personas & sessions' : mode}
@@ -360,18 +363,6 @@ export const SessionSidebar = React.memo(function SessionSidebar({
         </p>
       )}
 
-      <div className="mt-4 border-t border-[color:var(--mc-border-soft)] pt-3">
-        <div className="mt-3 flex flex-col items-center gap-1">
-          <a
-            href="https://finally-a-value-bot.ai"
-            target="_blank"
-            rel="noreferrer"
-            className="text-xs text-[color:var(--mc-text-muted)] hover:text-[color:var(--mc-text-primary)]"
-          >
-            finally-a-value-bot.ai
-          </a>
-        </div>
-      </div>
     </aside>
   )
 })

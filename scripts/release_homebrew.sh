@@ -17,9 +17,9 @@ ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 REPO_DIR="$ROOT_DIR"
 TAP_DIR_DEFAULT="$ROOT_DIR/../../github/homebrew-tap"
 TAP_DIR="${TAP_DIR:-$TAP_DIR_DEFAULT}"
-TAP_REPO="everettjf/homebrew-tap"
+TAP_REPO="kenpyfin/homebrew-tap"
 FORMULA_PATH="Formula/finally-a-value-bot.rb"
-GITHUB_REPO="finally-a-value-bot/finally-a-value-bot"
+GITHUB_REPO="kenpyfin/meido"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -61,7 +61,7 @@ build_release_notes() {
   fi
 
   {
-    echo "FinallyAValueBot $new_tag"
+    echo "Meido $new_tag"
     echo
     echo "## Change log"
     if [ -n "$changes" ]; then
@@ -205,7 +205,7 @@ class Microclaw < Formula
   end
 
   test do
-    assert_match "FinallyAValueBot", shell_output("#{bin}/finally-a-value-bot help")
+    assert_match "Meido", shell_output("#{bin}/finally-a-value-bot help")
   end
 end
 RUBY
@@ -218,5 +218,5 @@ echo ""
 echo "Done! Released $TAG and updated Homebrew tap."
 echo ""
 echo "Users can install with:"
-echo "  brew tap everettjf/tap"
+echo "  brew tap kenpyfin/tap"
 echo "  brew install finally-a-value-bot"

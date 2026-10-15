@@ -759,7 +759,7 @@ impl Tool for BuildSkillTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::new(
             "build_skill",
-            "Create or update a FinallyAValueBot skill by running cursor-agent. For new skills activate `create-skill` first; for changes to an existing skill activate `modify-skill` first (enforced when the skill folder already exists). Use this (not write_file under skills/) when the user asks to add or change a skill. Runs in tmux when available so the bot does not block.",
+            "Create or update a Meido skill by running cursor-agent. For new skills activate `create-skill` first; for changes to an existing skill activate `modify-skill` first (enforced when the skill folder already exists). Use this (not write_file under skills/) when the user asks to add or change a skill. Runs in tmux when available so the bot does not block.",
             schema_object(
                 json!({
                     "name": {
@@ -802,7 +802,7 @@ impl Tool for BuildSkillTool {
         let skills_dir = self.config.skills_data_dir_absolute();
         let skills_dir_display = skills_dir.to_string_lossy();
         let prompt = format!(
-            r#"Create or update a FinallyAValueBot agent skill.
+            r#"Create or update a Meido agent skill.
 
 Skills directory: {}
 Create (or update) the skill at: {}/{}/

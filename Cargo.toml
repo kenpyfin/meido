@@ -2,6 +2,8 @@
 name = "finally-a-value-bot"
 version = "0.0.37"
 edition = "2021"
+description = "Meido - finally a helpful one. Web-first agentic assistant."
+repository = "https://github.com/kenpyfin/meido"
 license-file = "LICENSE"
 
 [lints.clippy]

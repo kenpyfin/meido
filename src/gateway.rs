@@ -476,7 +476,7 @@ fn linux_unit_path() -> Result<PathBuf> {
 fn render_linux_unit(ctx: &ServiceContext) -> String {
     let mut unit = String::new();
     unit.push_str("[Unit]\n");
-    unit.push_str("Description=FinallyAValueBot Gateway Service\n");
+    unit.push_str("Description=Meido Gateway Service\n");
     unit.push_str("After=network.target\n\n");
     unit.push_str("[Service]\n");
     unit.push_str("Type=simple\n");

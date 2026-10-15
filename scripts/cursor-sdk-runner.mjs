@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Cursor SDK sidecar for FinallyAValueBot's Cursor agent engine.
+ * Cursor SDK sidecar for Meido's Cursor agent engine.
  *
  * Runs @cursor/sdk in-process (no cursor-sdk-bridge.js). Bot tools stay on
  * loopback MCP (mcp_servers on every send/resume).

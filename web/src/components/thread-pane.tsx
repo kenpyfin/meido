@@ -1485,7 +1485,7 @@ export const ThreadPane = React.memo(function ThreadPane({
             },
             strings: {
               composer: {
-                input: { placeholder: 'Message FinallyAValueBot...' },
+                input: { placeholder: 'Message Meido...' },
               },
             },
             assistantAvatar: {},

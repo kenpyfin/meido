@@ -133,10 +133,7 @@ mod tests {
             parse("/secrets forget NOTION_TOKEN"),
             Some(SlashCommand::Secrets)
         );
-        assert_eq!(
-            parse("/jobs@FinallyAValueBot"),
-            Some(SlashCommand::Schedule)
-        );
+        assert_eq!(parse("/jobs@Meido"), Some(SlashCommand::Schedule));
     }
 
     #[test]

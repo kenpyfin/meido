@@ -1028,8 +1028,8 @@ pub async fn fetch_openai_compatible_models_authenticated(
     }
     if base.contains("openrouter.ai") {
         req = req
-            .header("HTTP-Referer", "https://github.com/finally-a-value-bot")
-            .header("X-Title", "finally-a-value-bot");
+            .header("HTTP-Referer", "https://github.com/kenpyfin/meido")
+            .header("X-Title", "Meido");
     }
     let resp = req
         .send()

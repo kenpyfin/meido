@@ -107,7 +107,7 @@ jobs:
             gh release create "${RELEASE_TAG}" \
               --repo "${GITHUB_REPOSITORY}" \
               -t "${RELEASE_TAG}" \
-              -n "FinallyAValueBot ${RELEASE_TAG}"
+              -n "Meido ${RELEASE_TAG}"
           fi
 
       - name: Upload assets

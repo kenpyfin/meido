@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cursor SDK sidecar (Python rollback) for FinallyAValueBot.
+"""Cursor SDK sidecar (Python rollback) for Meido.
 
 The default runner is scripts/cursor-sdk-runner.mjs (@cursor/sdk in-process).
 Keep this file for CURSOR_SDK_RUNNER_SCRIPT rollback only.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="${FINALLY_A_VALUE_BOT_REPO:-finally-a-value-bot/finally-a-value-bot}"
+REPO="${FINALLY_A_VALUE_BOT_REPO:-kenpyfin/meido}"
 BIN_NAME="finally-a-value-bot"
 API_URL="https://api.github.com/repos/${REPO}/releases/latest"
 
@@ -279,7 +279,6 @@ main() {
     if [ -z "$asset_url" ]; then
       log_error "No prebuilt binary found for ${os}/${arch} in the latest GitHub release."
       log_info "Use a separate install method instead:"
-      log_info "  Homebrew (macOS): brew tap everettjf/tap && brew install finally-a-value-bot"
       log_info "  Build from source: https://github.com/${REPO}"
       exit 1
     fi

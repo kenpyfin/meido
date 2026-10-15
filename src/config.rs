@@ -1867,7 +1867,7 @@ impl Config {
             }
         }
         let mut lines = Vec::new();
-        lines.push("# FinallyAValueBot configuration".into());
+        lines.push("# Meido configuration".into());
         lines.push("".into());
         lines.push("# Telegram".into());
         lines.push(format!(

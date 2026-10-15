@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cursor-agent host runner. Listens for POST /spawn from the FinallyAValueBot bot (in Docker).
+"""Cursor-agent host runner. Listens for POST /spawn from the Meido bot (in Docker).
 Requires: cursor-agent CLI and tmux on the host.
 API: POST /spawn
   Body: {"prompt": "...", "workdir": "...", "model": "...", "detach": bool}

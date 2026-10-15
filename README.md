@@ -1,6 +1,8 @@
-# FinallyAValueBot
+# Meido
 
-FinallyAValueBot is a powerful agentic assistant that lives in your chat (Telegram, Discord, WhatsApp) and has direct access to your local workspace, tools, and Obsidian vault.
+Finally a helpful one.
+
+Meido is an agentic assistant with a web-first operator UI. Telegram, Discord, WhatsApp and WeCom are optional delivery channels. It has direct access to your local workspace, tools, and Obsidian vault.
 
 ## Key Features
 
@@ -13,13 +15,15 @@ FinallyAValueBot is a powerful agentic assistant that lives in your chat (Telegr
 
 ## Quick Start
 
+**Compatibility note:** the binary is still `finally-a-value-bot` and environment variables still use the `FINALLY_A_VALUE_BOT_` prefix. That is unchanged on purpose; an internal rename is planned.
+
 ### 1. Install the binary
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/finally-a-value-bot/finally-a-value-bot/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/kenpyfin/meido/main/install.sh | bash
 ```
 
-Alternatives: **Homebrew** (macOS) — `brew tap everettjf/tap && brew install finally-a-value-bot`; **Windows** — see [`install.ps1`](install.ps1) in this repo. Building from source is described in [DEVELOP.md](DEVELOP.md).
+Build from source: `cargo build --release` and `cd web && npm ci && npm run build`. **Windows** — see [`install.ps1`](install.ps1) in this repo.
 
 The bot reads configuration from a **`.env` file in the current working directory** (or from the path in `FINALLY_A_VALUE_BOT_CONFIG`). Use a dedicated project directory and keep your `.env` there.
 
@@ -52,7 +56,7 @@ finally-a-value-bot help        # all commands
 
 **Minimum configuration**
 
-- **Channel:** at least one of **Telegram** (`TELEGRAM_BOT_TOKEN` + `BOT_USERNAME`) or **Discord** (`DISCORD_BOT_TOKEN`).
+- **Web UI:** sufficient on its own. Messaging channels (Telegram, Discord, WhatsApp, WeCom) are optional.
 - **LLM:** at least one provider API key in `.env` (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`); choose provider and model in **Web UI → Settings → LLM**. Local providers (`ollama`, `llama`, `llamacpp`) may omit API keys.
 
 See [.env.example](.env.example) for the full list (web UI, scheduler, vault, safety, etc.).
@@ -69,7 +73,7 @@ finally-a-value-bot gateway status
 finally-a-value-bot gateway logs
 ```
 
-When channel + LLM configuration is complete, FinallyAValueBot seeds an onboarding task so you can get started from chat.
+When channel + LLM configuration is complete, Meido seeds an onboarding task so you can get started from chat.
 
 ### Vault search (optional)
 
@@ -77,10 +81,6 @@ Built-in vault skills need an embedding endpoint. Configure `VAULT_*` in `.env` 
 
 ## Documentation
 
-- [ARCHITECTURE.md](ARCHITECTURE.md): Agentic loop and project structure.
-- [DEVELOP.md](DEVELOP.md): Contributing and building from source.
-- [TEST.md](TEST.md): Testing guide.
-- [docs/memory-framework.md](docs/memory-framework.md): Canonical memory model and safety notes.
 - Docker deployment is not recommended and is no longer supported in this repo. Prefer the native binary install flow and `finally-a-value-bot gateway install`.
 - [DOCKER.md.bak](DOCKER.md.bak): Archived legacy container notes (reference only).
 
@@ -194,7 +194,7 @@ Common `payload` meanings by `event_type`:
 - Writes are atomic (`.tmp` + rename) with backup (`.json.bak`) when previous state exists.
 - On parse errors, backup recovery is attempted and corresponding diagnostic events are logged.
 
-For a full nested field-by-field reference (including example JSON objects), see [`docs/memory-framework.md`](docs/memory-framework.md).
+For a full nested field-by-field reference (including example JSON objects), see docs/memory-framework.md.
 Runtime prompts also inject a compact `<memory_field_legend>` plus both `<memory_this_persona>` and `<memory_state_json>` blocks so field meanings and live state are available to the model.
 
 ## License
@@ -202,4 +202,4 @@ Runtime prompts also inject a compact `<memory_field_legend>` plus both `<memory
 Mixed license. See [LICENSE](LICENSE).
 
 - **kenpyfin modifications and new files (Copyright 2026):** proprietary, source-available — not MIT. Personal, non-commercial use of this tree is allowed; copying, redistributing, or relicensing those changes is not.
-- **Original work by everettjf (Copyright 2025):** MIT, retained as required.
+- **Upstream-derived portions:** MIT, attribution retained in [LICENSE](LICENSE) as required.

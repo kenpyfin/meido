@@ -1097,7 +1097,7 @@ fn check_mcp_dependencies(report: &mut DoctorReport) {
 }
 
 fn print_report(report: &DoctorReport) {
-    println!("FinallyAValueBot Doctor");
+    println!("Meido Doctor");
     println!(
         "Environment: os={} arch={} wsl={}",
         report.platform, report.arch, report.in_wsl

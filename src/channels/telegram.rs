@@ -5258,7 +5258,7 @@ fn focus_sync_task_delivery(
 
 fn build_focus_sync_system_prompt(chat_id: i64, persona_id: i64, timezone: &str) -> String {
     format!(
-        "You are a post-delivery memory sync sub-agent for FinallyAValueBot.\n\
+        "You are a post-delivery memory sync sub-agent for Meido.\n\
          Timezone: {timezone}. chat_id={chat_id} persona_id={persona_id}.\n\
          Use only the provided tools. Bulletin is the operator-facing episodic focus card.\n\
          Tier 2 = durable knowledge (terminology, SOPs, preferences) — not active status.\n\

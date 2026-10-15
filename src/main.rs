@@ -12,7 +12,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn print_help() {
     println!(
-        r#"FinallyAValueBot v{VERSION} — Agentic AI assistant for Telegram, WhatsApp, Discord & WeCom
+        r#"Meido v{VERSION} — Finally a helpful one. Web-first agentic assistant; Telegram, WhatsApp, Discord & WeCom are optional channels
 
 USAGE:
     finally_a_value_bot <COMMAND>
@@ -54,7 +54,7 @@ SETUP:
        Runtime channel/LLM settings are now managed from Web UI and persisted in SQLite.
 
 CONFIG FILE (.env):
-    FinallyAValueBot reads configuration from .env in the current directory.
+    Meido reads configuration from .env in the current directory.
     Copy .env.example to .env and fill in values. Override path with FINALLY_A_VALUE_BOT_CONFIG.
 
     Core fields:
@@ -492,7 +492,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Err(e) => return Err(e.into()),
     };
-    info!("Starting FinallyAValueBot bot...");
+    info!("Starting Meido...");
 
     let data_root_dir = config.data_root_dir();
     let runtime_data_dir = config.runtime_data_dir();

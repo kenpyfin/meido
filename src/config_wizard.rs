@@ -368,7 +368,7 @@ fn save_config_env(path: &Path, config: &Config) -> Result<Option<PathBuf>, Fina
     }
 
     let mut lines = Vec::new();
-    lines.push("# FinallyAValueBot configuration".into());
+    lines.push("# Meido configuration".into());
     lines.push("".into());
     lines.push("# Telegram".into());
     lines.push(format!(
@@ -563,7 +563,7 @@ pub fn run_config_wizard() -> Result<bool, FinallyAValueBotError> {
     let config_path = resolve_config_path();
     let existing = load_existing_config(&config_path).unwrap_or_else(default_config);
 
-    println!("FinallyAValueBot interactive config");
+    println!("Meido interactive config");
     println!("Press Enter to accept default values. Type 'q' to cancel.");
     println!("Config path: {}", config_path.display());
 

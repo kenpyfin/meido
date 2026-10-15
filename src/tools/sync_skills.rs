@@ -46,7 +46,7 @@ impl SyncSkillsTool {
         for url in candidates {
             match client
                 .get(&url)
-                .header("User-Agent", "FinallyAValueBot/1.0")
+                .header("User-Agent", "Meido/1.0")
                 .send()
                 .await
             {
@@ -136,9 +136,7 @@ impl SyncSkillsTool {
         let description = if !get("description").trim().is_empty() {
             get("description").trim().to_string()
         } else {
-            format!(
-                "Synced from {source_repo} skill '{skill_name}' and adapted for FinallyAValueBot."
-            )
+            format!("Synced from {source_repo} skill '{skill_name}' and adapted for Meido.")
         };
 
         let mut platforms = Self::str_seq(fm.get("platforms"));

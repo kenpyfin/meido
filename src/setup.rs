@@ -1278,7 +1278,7 @@ fn save_config_env(
         let _ = fs::create_dir_all(&origin_path);
     }
 
-    lines.push("# FinallyAValueBot configuration".into());
+    lines.push("# Meido configuration".into());
 
     // Telegram
     emit!(
@@ -1502,7 +1502,7 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
 
     let header = Paragraph::new(vec![
         Line::from(Span::styled(
-            "FinallyAValueBot • Interactive Setup",
+            "Meido • Interactive Setup",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),

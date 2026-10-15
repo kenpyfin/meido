@@ -1,5 +1,5 @@
 param(
-  [string]$Repo = $(if ($env:FINALLY_A_VALUE_BOT_REPO) { $env:FINALLY_A_VALUE_BOT_REPO } else { 'finally-a-value-bot/finally-a-value-bot' }),
+  [string]$Repo = $(if ($env:FINALLY_A_VALUE_BOT_REPO) { $env:FINALLY_A_VALUE_BOT_REPO } else { 'kenpyfin/meido' }),
   [string]$InstallDir = $(if ($env:FINALLY_A_VALUE_BOT_INSTALL_DIR) { $env:FINALLY_A_VALUE_BOT_INSTALL_DIR } else { Join-Path $env:USERPROFILE '.local\bin' })
 )
 
