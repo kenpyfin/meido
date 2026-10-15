@@ -1,0 +1,15 @@
+---
+description: Vault Standard Operating Procedures (workflows are SOP context, not YAML).
+globs:
+  - "docs/sops.md"
+  - "src/sop_context_gate.rs"
+  - "**/ORIGIN/**/SOPs/**"
+---
+
+# Vault SOPs
+
+When changing how the agent interprets "workflow" or procedural memory, read [`docs/sops.md`](docs/sops.md).
+
+- **Workflow** in product vocabulary = vault markdown SOP under `ORIGIN/`, executed via normal agent tools/skills.
+- **Not** GitHub Actions (`.github/workflows/`), cron-only scheduling without reading the SOP, or removed `run_workflow` / `*.workflow.yaml`.
+- SQLite learned workflows remain deprecated; see [`docs/workflow.md`](docs/workflow.md).

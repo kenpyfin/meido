@@ -1,0 +1,23 @@
+---
+description: Enforce scalable, production-grade implementation over MVP shortcuts
+alwaysApply: true
+---
+
+# Scalable Implementation Standard
+
+Do not ship changes as "just MVP." Implement production-grade solutions that remain maintainable as scope and usage grow.
+
+## Expectations for every implementation
+
+- Design for extension: isolate responsibilities, avoid hardcoded one-off behavior, and prefer reusable interfaces.
+- Keep architecture coherent: align with existing module boundaries and shared entry points; avoid parallel ad-hoc paths.
+- Handle operational realities: include validation, error handling, observability, and safe failure behavior.
+- Preserve compatibility: include migrations/backward handling when changing persisted formats, APIs, or contracts.
+- Avoid hidden coupling: do not encode persona-specific or temporary business logic as global framework primitives.
+- Document intent: when behavior is non-obvious, update docs/journal with rationale, boundaries, and follow-ups.
+
+## Delivery quality bar
+
+- Favor complete, durable fixes over partial patches that defer obvious required work.
+- If a phased rollout is necessary, ship a safe and coherent foundation first, with explicit constraints and next steps.
+- Call out trade-offs and residual risks clearly when full hardening is intentionally deferred.

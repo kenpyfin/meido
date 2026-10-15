@@ -1,0 +1,80 @@
+---
+description: Frontend UI craft — domain-specific design over generic AI defaults (web cockpit and future UI)
+globs: web/**/*.{tsx,css,html}
+alwaysApply: false
+---
+
+# Frontend design
+
+Adapted from [frontend-design-principles](https://github.com/joshuadavidthomas/agent-skills/blob/main/frontend-design-principles/SKILL.md). Build interfaces with craft and intention, not template defaults.
+
+## Repo context
+
+- **`web/`** is an **application UI** (operator cockpit: sessions, thread, settings, ops). Use **app** guidance below, not marketing landing-page patterns.
+- Prefer existing tokens in `web/src/styles.css` (`--mc-*`, theme accents). New tokens should stay domain-named (`--mc-*`), not generic (`--gray-700`, `--surface-2`).
+
+## Before writing UI code
+
+Do not ship UI until intent is explicit (ask the user if unclear):
+
+1. **Who** — the actual operator (context before/after this screen), not "users."
+2. **What they must do** — the verb (e.g. find a failed run, change LLM settings, read bulletin updates).
+3. **What it should feel like** — specific words (terminal-dense, calm notebook), not "clean and modern."
+
+Produce and state briefly:
+
+- **Domain** — 5+ concepts/metaphors from this product's world (territory, not feature list).
+- **Color world** — 5+ colors that exist in that domain (materials/light, not warm/cool alone).
+- **Signature** — one visual/structural/interaction element unique to this product.
+- **Defaults to reject** — 3 obvious choices for this UI type (visual + structural) and what replaces each.
+
+Propose direction in one block (domain, colors, signature, rejections, approach). **Test:** without the product name, could someone guess what it's for? For substantial new surfaces, confirm direction before coding.
+
+## Before showing work
+
+Iterate until these pass:
+
+- **Swap test** — would swapping to your usual font/layout matter? No → you defaulted.
+- **Squint test** — hierarchy readable; nothing shouts.
+- **Signature test** — point to specific components, not "overall feel."
+- **Token test** — CSS variable names belong to this product's world.
+
+## Where defaults hide
+
+Everything is design: type **is** the design; navigation **is** the product; data visuals must match **meaning**; token names are design decisions.
+
+## Principles
+
+- Every choice has a stated **why**; "it's common" is a default.
+- **Sameness is failure** — another generic sidebar + card grid reads as AI-generated.
+- **Intent is systemic** — warm/cold must run through surfaces, text, borders, accents, semantics, type.
+- **Infinite expression** — metrics can be hero numbers, sparklines, gauges, deltas, etc.; don't repeat the same card template.
+
+## Craft floor
+
+- **Subtle layering** — whisper-quiet elevation; borders disappear until you look for structure.
+- **Color from somewhere** — palette from the product's physical world; gray for structure, one intentional accent for action; color for meaning, not decoration.
+
+## Application UI (`web/`)
+
+Precision and restraint; design disappears so work stays easy.
+
+- **Direction** (pick and commit): precision/density, warmth, trust/cool, bold clarity, utility density, data-first — or a deliberate blend.
+- **Color:** one accent for interactive elements; semantic colors for state only. Avoid decorative gradients and color-coded charts when monochrome + type works.
+- **Layout:** match content (dense grid vs generous focus; sidebar vs top nav; list-detail splits). Ground screens with nav, location, and operator context.
+- **Sidebars:** prefer same background as main + subtle border (Linear/Supabase style), not heavy panel contrast.
+- **Cards:** internal layout per content type; consistent chrome (radius, border, padding).
+- **Motion:** 150ms micro, 200ms transitions; feedback only, not delight.
+- **States:** hover, focus, disabled, loading, error on interactive elements.
+
+## Marketing UI (if added later)
+
+Bold, memorable first impression — expressive display type, committed palette, designed composition (asymmetry, scale, atmosphere). Avoid Inter/Roboto-only stacks, purple-on-white clichés, hero→grid→testimonials without variation, purposeless gradient blobs. Commit to one aesthetic fully.
+
+## Universal anti-patterns
+
+Never use: dramatic drop shadows (`0 25px 50px`), arbitrary asymmetric padding, thick decorative borders (2px+ for weight), multiple competing accents, mixed border/shadow depth strategies, inconsistent spacing.
+
+## Communication
+
+Do not narrate the design process in chat ("exploring the domain…"). Present suggestions with reasoning; do the checks silently.

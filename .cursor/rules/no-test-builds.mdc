@@ -1,0 +1,9 @@
+---
+description: Do not run cargo test or docker compose test in this repo
+globs: 
+alwaysApply: true
+---
+
+# No Test Commands
+
+Do NOT run `cargo test` or `docker compose test` in this repository. These commands take an extremely long time to complete. Skip testing and proceed directly to building/deploying when verifying changes.

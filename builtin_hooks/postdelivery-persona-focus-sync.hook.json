@@ -1,0 +1,8 @@
+{
+  "name": "postdelivery-persona-focus-sync",
+  "event_name": "PostDelivery",
+  "matcher": null,
+  "action_type": "builtin_persona_focus_sync",
+  "action_payload": {},
+  "enabled": true
+}

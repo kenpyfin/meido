@@ -1,0 +1,39 @@
+---
+description: Document implementations in docs/development-journal.md; read it when planning or changing code; periodically condense old entries
+alwaysApply: true
+---
+
+# Development journal
+
+The canonical development journal is **`docs/development-journal.md`**.
+
+## When to read it
+
+Before **planning**, **adding features**, **refactoring**, or **non-trivial fixes**, read recent entries (and any section relevant to the area you are touching). Use it to align with prior decisions, avoid repeating mistakes, and know where related code lives.
+
+## When to update it
+
+After completing work that is **user-visible**, **architectural**, or **hard to infer from code alone**, append an entry at the **top** of the journal (newest first), using the template in that file. Include enough **file paths** and **symbols** that the next change does not require archaeology.
+
+Skip journal entries for purely mechanical edits (typos, formatting, one-line renames with no behavior change) unless they clarify a recurring convention.
+
+## Periodic condense of old entries
+
+The journal is a working log, not an unbounded archive. **Periodically condense older material** so recent full entries stay scannable.
+
+Do this when any of the following is true:
+
+- The file is growing unwieldy (roughly **> ~800–1000 lines**, or **> ~60–80 full entries** in Recent)
+- Several weeks of full entries have piled up after the last condense
+- The user asks to condense, or work is touching the journal structure
+
+How to condense:
+
+1. **Keep Recent in full** — newest entries stay as template blocks (Area / Summary / files). Aim to keep roughly the last **2–4 weeks** (or the current active feature cluster) as full entries.
+2. **One-line the previous era** — titles plus a single-sentence outcome; drop rationale, notes, and follow-ups unless they are still load-bearing.
+3. **Digest older months** — thematic bullets (engines, hooks, channels, web, safety) instead of day-by-day write-ups.
+4. **Do not duplicate specialized docs.** If the change is already in `docs/lessons-learned.md`, `docs/cursor-engine-integration.md`, `docs/hooks-architecture.md`, `docs/deterministic-workflows.md`, `docs/multimodel-local-tiers.md`, `docs/memory-framework.md`, `docs/sops.md`, or similar, the journal should **point there**, not retell the incident or design.
+5. Preserve **titles, dates, and key file/symbol pointers** so a later reader can still find code. Do not invent history; collapsing is lossless on *what landed*, lossy on *narrative*.
+6. Keep the **template at the top** of the journal file. Newest-first order stays.
+
+Do **not** condense Recent just because you are adding a new entry. Condense as its own pass when the file needs it.

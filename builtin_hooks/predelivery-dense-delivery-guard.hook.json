@@ -1,0 +1,8 @@
+{
+  "name": "predelivery-dense-delivery-guard",
+  "event_name": "PreDelivery",
+  "matcher": null,
+  "action_type": "builtin_dense_delivery_guard",
+  "action_payload": {},
+  "enabled": true
+}

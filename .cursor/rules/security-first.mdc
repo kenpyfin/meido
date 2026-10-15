@@ -1,0 +1,35 @@
+---
+description: Security-first engineering for secrets, PII, and attacker-resistant changes
+alwaysApply: true
+---
+
+# Security first
+
+When making any code, config, logging, or tooling change, prioritize security before convenience.
+
+## Secrets and keys
+
+- Never hardcode API keys, tokens, passwords, private keys, or credentials in code, tests, docs, commits, or messages.
+- Load secrets from environment variables or approved secret stores.
+- Do not print or echo secret values in logs, traces, screenshots, or chat responses.
+- If a secret is exposed accidentally, rotate it immediately and remove it from tracked files.
+
+## PII and sensitive data
+
+- Treat personal data as sensitive by default and collect/store only what is strictly necessary.
+- Never log raw PII (email, phone, address, IDs, payment data, auth artifacts, user content with identifiers).
+- Mask, hash, tokenize, or redact sensitive fields in logs and telemetry.
+- Use data minimization, retention limits, and least-privilege access for any user data path.
+
+## Hacker-resistant implementation
+
+- Validate and sanitize all untrusted input; prefer allowlists, strict parsing, and typed boundaries.
+- Use parameterized queries and safe APIs; never build SQL or shell commands from raw user input.
+- Enforce authentication and authorization checks server-side for every protected action.
+- Prefer secure defaults: deny by default, explicit allow rules, minimal permissions, and fail closed.
+- Keep dependencies updated and avoid introducing known vulnerable packages.
+
+## Before finishing security-relevant work
+
+- Confirm no secrets or PII were added to code, logs, fixtures, or docs.
+- Note security assumptions and residual risks if full hardening is out of scope.

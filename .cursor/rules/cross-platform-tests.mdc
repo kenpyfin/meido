@@ -1,0 +1,25 @@
+---
+description: Write Windows/Linux-safe tests for paths and shell output
+alwaysApply: true
+---
+
+# Cross-platform test hygiene
+
+When changing tests (especially Rust), assume CI will run on Linux and Windows.
+
+## Path assertions
+
+- Do **not** assert path strings with hardcoded `/` separators.
+- Prefer `Path`/`PathBuf` comparisons:
+  - `path.ends_with(Path::new("workspace").join("runtime"))`
+  - `path.ends_with(Path::new("groups").join(chat_id).join("AGENTS.md"))`
+- Avoid borrowing a temporary string into `Path::new(&foo())`; bind first or use `PathBuf::from(foo())`.
+
+## Shell command tests
+
+- Commands must match the shell used by runtime:
+  - Unix: `/bin/sh -c ...`
+  - Windows: PowerShell (`-Command ...`)
+- For stderr tests, use shell-appropriate commands on each platform.
+- For cwd/path output assertions, normalize slashes and compare case-insensitively on Windows.
+- If using canonicalized Windows paths, strip the `\\?\` prefix before comparing to PowerShell output.

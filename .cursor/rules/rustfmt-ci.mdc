@@ -1,0 +1,44 @@
+---
+description: Run rustfmt and clippy on Rust changes; CI fails on fmt/clippy warnings
+alwaysApply: true
+---
+
+# Rust formatting and linting (CI)
+
+GitHub Actions runs both:
+
+- `cargo fmt --all --check`
+- `cargo clippy -- -D warnings`
+
+CI fails if either check fails.
+
+**After editing any `*.rs` file**, run:
+
+```sh
+cargo fmt --all
+```
+
+Before pushing or marking Rust work complete, verify:
+
+```sh
+cargo fmt --all --check
+cargo clippy -- -D warnings
+```
+
+Both commands must exit with status 0. This is separate from tests (`cargo test` is still avoided per project rules when tests are slow); `rustfmt` and clippy preflight are required for CI green.
+
+## Preventing `type_complexity` failures
+
+When clippy reports `type_complexity` (for example nested `Arc<Mutex<HashMap<...>>>` types), refactor complex signatures/fields with `type` aliases instead of suppressing the lint. Prefer:
+
+- `type` aliases near the top of the file for readability and reuse
+- descriptive alias names (`RunRegistry`, `RunCancel`, etc.)
+- keeping behavior unchanged while simplifying exposed type expressions
+
+## Preventing behavior-test drift
+
+When Rust changes alter a tool/input contract, update affected tests in the same change so CI does not fail on stale assumptions.
+
+- If attachment/tool behavior depends on `ToolAuthContext` (for example `caller_channel`), include `__finally_a_value_bot_auth` in tests that expect channel-specific code paths.
+- Keep error assertions aligned with the actual path under test (e.g. "config unavailable" vs. missing-auth errors).
+- For parser helpers (regex extraction, markdown/url parsing), assert exact token boundaries (exclude wrapping markdown punctuation like `[]()` when expecting raw URLs).

@@ -1,0 +1,29 @@
+---
+description: Maintain a running lessons-learned log for incidents and non-obvious fixes
+alwaysApply: true
+---
+
+# Lessons Learned Log
+
+Maintain [`docs/lessons-learned.md`](../../docs/lessons-learned.md) as a running record of incidents and their durable fixes.
+
+## When to add an entry
+
+After resolving any of the following, append an entry at the **top** (newest first):
+
+- A production/runtime incident (something broke or silently stopped working)
+- A bug with a non-obvious root cause or a misleading symptom
+- A fix that future work could easily undo or repeat
+
+Skip trivial changes (typos, formatting, obvious one-liners).
+
+## Entry format
+
+Use the template at the top of the doc: **Symptom, Root cause, Fix, Prevention, Files/refs**. Include enough paths, symbols, and log signatures that the next person avoids re-investigating.
+
+## Relationship to other docs
+
+- `docs/development-journal.md` = what was built/changed (features, architecture).
+- `docs/lessons-learned.md` = what went wrong and how to avoid it again.
+
+Cross-reference when relevant, but do not duplicate full content.
