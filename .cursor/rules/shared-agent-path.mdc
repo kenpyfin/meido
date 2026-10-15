@@ -1,5 +1,5 @@
 ---
-description: Shared agent path — all channels funnel through telegram::process_with_agent
+description: Shared agent path — all channels funnel through agent::process_with_agent
 alwaysApply: true
 ---
 
@@ -7,9 +7,11 @@ alwaysApply: true
 
 All channels (Telegram, web, Discord, WhatsApp, scheduler) use the **same agent entry point**. They do not implement separate orchestrator or sub-agent logic.
 
-- **Entry point:** `crate::telegram::process_with_agent` (and `process_with_agent_with_events`)
-- **Location:** `src/channels/telegram.rs`
+- **Entry point:** `crate::agent::process_with_agent` (and `process_with_agent_with_events`)
+- **Location:** `src/agent/mod.rs`
+- **Process host:** `crate::runtime::run_app` in `src/runtime.rs` starts the web UI first, then optional channels
+- **Telegram:** inbound handling and delivery live in `src/channels/telegram.rs`
 
 Web, Discord, WhatsApp, and the scheduler resolve their handles to a canonical `chat_id` and call this function. The orchestrator branch, main agent loop, and sub-agent invocation all live inside it.
 
-**Implication:** Changes to agent behavior, orchestrator flow, or sub-agent invocation (e.g. adding a `single_task` parameter) only need to be made **once** in `telegram.rs`. No separate updates are required for web chat, Discord, or WhatsApp—they all use the same code path.
+**Implication:** Changes to agent behavior, orchestrator flow, or sub-agent invocation (e.g. adding a `single_task` parameter) only need to be made **once** in `src/agent/mod.rs`. No separate updates are required for web chat, Discord, or WhatsApp—they all use the same code path.
