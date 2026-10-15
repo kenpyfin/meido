@@ -24,7 +24,9 @@ import { useConfirmDialog } from '../components/confirm-dialog'
 import { NewPersonaDialog } from '../components/new-persona-dialog'
 import { ErrorBanner } from '../components/error-banner'
 import { StatusRegion } from '../components/status-region'
+import { MobileTabBar } from '../components/mobile-tab-bar'
 import { MobileOpsSheet, ShortcutsDialog } from '../components/ops-ui'
+import { IconChevronDown } from '../components/icons'
 import { Toaster } from '../components/ui/sonner'
 import { TooltipProvider } from '../components/ui/tooltip'
 import {
@@ -94,6 +96,7 @@ type Appearance = 'dark' | 'light'
 
 type PendingRun = { runId: string; personaId: number }
 type UiTheme =
+  | 'linear'
   | 'green'
   | 'blue'
   | 'slate'
@@ -107,6 +110,7 @@ type UiTheme =
 
 
 const UI_THEME_OPTIONS: { key: UiTheme; label: string; color: string }[] = [
+  { key: 'linear', label: 'Linear', color: '#5e6ad2' },
   { key: 'green', label: 'Green', color: '#34d399' },
   { key: 'blue', label: 'Blue', color: '#60a5fa' },
   { key: 'slate', label: 'Slate', color: '#94a3b8' },
@@ -130,7 +134,7 @@ function saveAppearance(value: Appearance): void {
 
 function readUiTheme(): UiTheme {
   const saved = localStorage.getItem('finally-a-value-bot_ui_theme') as UiTheme | null
-  return UI_THEME_OPTIONS.some((t) => t.key === saved) ? (saved as UiTheme) : 'green'
+  return UI_THEME_OPTIONS.some((t) => t.key === saved) ? (saved as UiTheme) : 'linear'
 }
 
 function saveUiTheme(value: UiTheme): void {
@@ -332,6 +336,43 @@ type LoadHistoryFn = (
   },
 ) => Promise<void>
 
+
+const MOBILE_COCKPIT_OPEN_KEY = 'finally-a-value-bot_mobile_cockpit_open'
+
+function MobileFocusDisclosure({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(() => {
+    try {
+      return localStorage.getItem(MOBILE_COCKPIT_OPEN_KEY) === '1'
+    } catch {
+      return false
+    }
+  })
+
+  return (
+    <>
+      <button
+        type="button"
+        className="flex h-9 w-full items-center gap-2 px-1 text-xs text-[color:var(--mc-text-muted)] md:hidden"
+        aria-expanded={open}
+        onClick={() => {
+          setOpen((current) => {
+            const next = !current
+            try {
+              localStorage.setItem(MOBILE_COCKPIT_OPEN_KEY, next ? '1' : '0')
+            } catch {
+              /* private mode */
+            }
+            return next
+          })
+        }}
+      >
+        <IconChevronDown className={`size-3 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+        Focus and cockpit
+      </button>
+      <div className={open ? undefined : 'max-md:hidden'}>{children}</div>
+    </>
+  )
+}
 
 export function App({
   onAuthErrorRef,
@@ -2392,6 +2433,7 @@ export function App({
                     : 'hidden'
                 }
               >
+                <MobileFocusDisclosure>
                 <BulletinStrip bulletinFocus={bulletinFocus} hideCockpitLauncher />
                 <CockpitBar
                   appearance={appearance}
@@ -2411,6 +2453,7 @@ export function App({
                   onExpandedChange={setCockpitExpanded}
                   expanded={cockpitExpanded}
                 />
+                </MobileFocusDisclosure>
               </div>
               <div className="mx-auto w-full max-w-5xl px-2 pt-2 md:px-3">
                 <StatusRegion message={statusText} />
@@ -2706,6 +2749,37 @@ export function App({
               ) : null}
             </div>
           </main>
+          <MobileTabBar
+            active={
+              settingsDialogOpen
+                ? 'settings'
+                : mobileOpsOpen
+                  ? 'ops'
+                  : topicsSheetOpen
+                    ? 'topics'
+                    : 'chat'
+            }
+            onChat={() => {
+              setTopicsSheetOpen(false)
+              setMobileOpsOpen(false)
+              setSettingsDialogOpen(false)
+            }}
+            onTopics={() => {
+              setMobileOpsOpen(false)
+              setSettingsDialogOpen(false)
+              setTopicsSheetOpen(true)
+            }}
+            onOps={() => {
+              setTopicsSheetOpen(false)
+              setSettingsDialogOpen(false)
+              setMobileOpsOpen(true)
+            }}
+            onSettings={() => {
+              setTopicsSheetOpen(false)
+              setMobileOpsOpen(false)
+              handleOpenSettings()
+            }}
+          />
         </div>
 
       </div>

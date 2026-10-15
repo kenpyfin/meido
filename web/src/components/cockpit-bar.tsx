@@ -4,6 +4,7 @@ import { Select } from '@/components/ui/select'
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { EmptyState } from './empty-state'
 import { api } from '../api/client'
+import { useIsMobile } from '../hooks/use-mobile'
 import { MobileSheet } from './mobile-sheet'
 import { IconTrash } from './icons'
 import {
@@ -39,18 +40,6 @@ function isPointerOnRadixSelectOverlay(target: EventTarget | null): boolean {
     target.closest('[data-radix-popper-content-wrapper]') != null ||
     target.closest('[data-radix-select-viewport]') != null
   )
-}
-
-function useIsMobile(): boolean {
-  const [isMobile, setIsMobile] = useState(false)
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)')
-    const sync = () => setIsMobile(mq.matches)
-    sync()
-    mq.addEventListener('change', sync)
-    return () => mq.removeEventListener('change', sync)
-  }, [])
-  return isMobile
 }
 
 export type CockpitBarProps = {

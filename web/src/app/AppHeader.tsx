@@ -2,7 +2,7 @@ import { Button } from '@/components/ui/button'
 import React from 'react'
 import { SessionPicker } from '../components/session-picker'
 import { SideChatsPicker } from '../components/side-chats-picker'
-import { IconCockpit, IconInbox, IconListTree, IconOps, IconSettings, IconSidebar } from '../components/icons'
+import { IconCockpit, IconInbox, IconSidebar } from '../components/icons'
 import type { ChatSession, InstallationStatus, QueueLane, SideChatSummary } from '../types'
 
 type Appearance = 'dark' | 'light'
@@ -69,8 +69,6 @@ export const AppHeader = React.memo(function AppHeader({
   nav,
   session,
   toolbar,
-  onOpenMobileSettings,
-  onOpenMobileOps,
   moduleTitle = null,
 }: AppHeaderProps) {
   const personaModule = moduleTitle == null
@@ -108,7 +106,6 @@ export const AppHeader = React.memo(function AppHeader({
     onOpenArtifacts,
     onOpenMemory,
     onOpenAgentHistory,
-    onOpenTopics,
     onOpenTerminal,
     terminalAvailable = false,
     agentHistoryDisabled = false,
@@ -196,83 +193,6 @@ export const AppHeader = React.memo(function AppHeader({
               {moduleTitle ?? activePersonaName ?? 'Chat'}
             </h1>
             {renderSessionControls('max-md:!hidden')}
-            <div className="ml-auto flex shrink-0 items-center gap-1 md:hidden">
-              {personaModule ? (
-              <>
-              <button
-                type="button"
-                className="mc-cockpit-launch cursor-pointer"
-                data-active={cockpitExpanded ? 'true' : 'false'}
-                data-busy={cockpitBusyCount > 0 ? 'true' : 'false'}
-                aria-pressed={cockpitExpanded}
-                aria-label={
-                  cockpitBusyCount > 0 ? `Cockpit, ${cockpitBusyCount} active` : 'Cockpit'
-                }
-                title="Cockpit"
-                onClick={onToggleCockpit}
-              >
-                <IconCockpit className="size-4 shrink-0" />
-                <span className="mc-cockpit-launch-label">Cockpit</span>
-                {cockpitBusyCount > 0 ? (
-                  <span className="mc-badge-counter" aria-hidden>
-                    {cockpitBusyCount > 99 ? '99+' : cockpitBusyCount}
-                  </span>
-                ) : null}
-              </button>
-              <span className="mc-toolbar-divider" aria-hidden />
-              <Button
-                size="icon"
-                variant="outline"
-                type="button"
-                className="cursor-pointer min-h-10 min-w-10"
-                aria-label="Topics"
-                title="Topics"
-                onClick={onOpenTopics}
-              >
-                <IconListTree className="size-5 shrink-0" />
-              </Button>
-              </>
-              ) : null}
-              <button
-                type="button"
-                className="mc-inbox-launch mc-inbox-launch--icon cursor-pointer min-h-10 min-w-10"
-                data-has-items={inboxBadgeCount > 0 ? 'true' : 'false'}
-                aria-label={
-                  inboxBadgeCount > 0 ? `Inbox, ${inboxBadgeCount} items` : 'Inbox'
-                }
-                title="Inbox"
-                onClick={onOpenInbox}
-              >
-                <IconInbox className="size-5 shrink-0" />
-                {inboxBadgeCount > 0 ? (
-                  <span className="mc-inbox-launch__badge" aria-hidden>
-                    {inboxBadgeCount > 99 ? '99+' : inboxBadgeCount}
-                  </span>
-                ) : null}
-              </button>
-              <Button
-                size="icon"
-                variant="outline"
-                type="button"
-                className="cursor-pointer min-h-10 min-w-10"
-                aria-label="Settings"
-                title="Settings"
-                onClick={onOpenMobileSettings}
-              >
-                <IconSettings />
-              </Button>
-              <Button
-                size="icon"
-                variant="outline"
-                type="button"
-                className="cursor-pointer min-h-10 min-w-10"
-                aria-label="Operator tools"
-                title="Operator tools"
-                onClick={onOpenMobileOps}
-              >
-                <IconOps />
-              </Button>
-            </div>
           </div>
           {activePersonaId != null && personaModule ? (
             <div
