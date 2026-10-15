@@ -1,6 +1,6 @@
 //! Telegram channel: inbound handling and delivery.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -18,6 +18,63 @@ use crate::channel::{DeliveryScope, CHANNEL_PROCESSING_ACK};
 use crate::chat_queue::{QueueEnqueueMeta, QueueSource};
 use crate::db::{call_blocking, StoredMessage};
 use crate::slash_commands::{parse as parse_slash_command, SlashCommand};
+
+pub(crate) async fn spawn_dispatchers(
+    state: Arc<AppState>,
+    bots: HashMap<i64, Bot>,
+) -> anyhow::Result<()> {
+    const TELEGRAM_RETRY_DELAY_SECS: u64 = 10;
+    info!(
+        "Starting {} Telegram dispatcher(s): {:?}",
+        bots.len(),
+        bots.keys().collect::<Vec<_>>()
+    );
+    for (inst_id, bot) in bots.iter() {
+        let bot = bot.clone();
+        let inst_id = *inst_id;
+        let state_clone = state.clone();
+        info!("Telegram dispatcher starting for instance {inst_id}");
+        tokio::spawn(async move {
+            loop {
+                let bot_clone = bot.clone();
+                let state_inner = state_clone.clone();
+                let join_result = tokio::spawn(async move {
+                    let handler = dptree::entry()
+                        .branch(Update::filter_message().endpoint(crate::telegram::handle_message))
+                        .branch(
+                            Update::filter_callback_query()
+                                .endpoint(crate::telegram::handle_callback_query),
+                        );
+                    Dispatcher::builder(bot_clone, handler)
+                        .default_handler(|_| async {})
+                        .dependencies(dptree::deps![state_inner, inst_id])
+                        .enable_ctrlc_handler()
+                        .build()
+                        .dispatch()
+                        .await;
+                })
+                .await;
+
+                match join_result {
+                    Ok(()) => break,
+                    Err(e) => {
+                        error!(
+                            "Telegram dispatcher crashed (instance {}): {}. Retrying in {}s (other channels stay active).",
+                            inst_id,
+                            e,
+                            TELEGRAM_RETRY_DELAY_SECS
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(
+                            TELEGRAM_RETRY_DELAY_SECS,
+                        ))
+                        .await;
+                    }
+                }
+            }
+        });
+    }
+    Ok(())
+}
 
 async fn resolve_canonical_chat_id_for_telegram(
     state: Arc<AppState>,
