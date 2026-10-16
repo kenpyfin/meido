@@ -91,7 +91,7 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         provider_id: None,
         featured: true,
         supported: true,
-        used_by: "Cursor engine",
+        used_by: "Bridge agent",
     },
     ConnectionDef {
         id: "perplexity",

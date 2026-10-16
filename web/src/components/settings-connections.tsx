@@ -13,6 +13,8 @@ type ConnectionRow = {
   source?: 'env' | 'saved' | 'missing'
   url?: string | null
   model?: string | null
+  /** Fixed mask when a Cursor key exists. Never the key itself. */
+  masked_secret?: string | null
 }
 
 type ConnectionsResponse = {
@@ -32,6 +34,17 @@ function sourceLabel(source: ConnectionRow['source']): string {
   return 'Not set'
 }
 
+/** Matches `CURSOR_KEY_MASK` in `src/web.rs`. Not a secret. */
+const CURSOR_KEY_MASK = '••••••••••••••••'
+
+function cursorMask(rows: ConnectionRow[]): string {
+  const cursor = rows.find((row) => row.id === 'cursor')
+  if (!cursor) return ''
+  if (cursor.masked_secret) return cursor.masked_secret
+  if (cursor.source === 'env' || cursor.source === 'saved') return CURSOR_KEY_MASK
+  return ''
+}
+
 export function SettingsConnectionsPanel({ api, onError }: Props) {
   const [rows, setRows] = useState<ConnectionRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -45,6 +58,7 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
   const [testing, setTesting] = useState(false)
   const [testNotice, setTestNotice] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [reloading, setReloading] = useState(false)
 
   const applyRows = useCallback((next: ConnectionRow[]) => {
     setRows(next)
@@ -53,18 +67,37 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
     setLocalModel(local?.model ?? '')
   }, [])
 
+  const fetchConnections = useCallback(async () => {
+    const connections = await api<ConnectionsResponse>('/api/connections')
+    const next = connections.connections ?? []
+    applyRows(next)
+    setDrafts({ cursor: cursorMask(next) })
+  }, [api, applyRows])
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const connections = await api<ConnectionsResponse>('/api/connections')
-      applyRows(connections.connections ?? [])
+      await fetchConnections()
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
       setRows([])
     } finally {
       setLoading(false)
     }
-  }, [api, applyRows, onError])
+  }, [fetchConnections, onError])
+
+  async function reloadFromEnv() {
+    setReloading(true)
+    setNotice(null)
+    try {
+      await fetchConnections()
+      setNotice('Reloaded from .env.')
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setReloading(false)
+    }
+  }
 
   useEffect(() => {
     void load()
@@ -159,8 +192,12 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: row.id, secret: drafts[row.id] ?? '' }),
       })
-      applyRows(data.connections ?? [])
-      setDrafts((current) => ({ ...current, [row.id]: '' }))
+      const next = data.connections ?? []
+      applyRows(next)
+      setDrafts((current) => ({
+        ...current,
+        [row.id]: row.id === 'cursor' ? cursorMask(next) : '',
+      }))
       setNotice(data.message ?? 'Connection saved.')
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
@@ -178,9 +215,13 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: row.id, clear: true }),
       })
-      applyRows(data.connections ?? [])
-      setDrafts((current) => ({ ...current, [row.id]: '' }))
-      setNotice('Saved key removed.')
+      const next = data.connections ?? []
+      applyRows(next)
+      setDrafts((current) => ({
+        ...current,
+        [row.id]: row.id === 'cursor' ? cursorMask(next) : '',
+      }))
+      setNotice(data.message ?? 'Saved key removed.')
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -192,15 +233,64 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
     return <span className="text-sm text-muted-foreground">Loading connections…</span>
   }
 
-  const keys = rows.filter((row) => row.kind === 'secret')
+  const apiKeys = rows.filter((row) => row.kind === 'secret' && row.id !== 'cursor')
+  const cursor = rows.find((row) => row.id === 'cursor')
 
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-sm text-muted-foreground">
-        Connectors this install supports. The installer writes one starting key; the others are set here. A value in{' '}
-        <code className="text-xs">.env</code> is used when it is set. Otherwise a key saved here is used. Saved keys
-        stay on this machine and are not shown again.
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <p className="text-sm text-muted-foreground">
+          Connectors this install supports. The installer writes one starting key; the others are set here. A value in{' '}
+          <code className="text-xs">.env</code> is used when it is set. Otherwise a key saved here is used. Saved keys
+          stay on this machine and are not shown again. The Cursor bridge key can be replaced below even when it is
+          already in <code className="text-xs">.env</code>.
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={reloading}
+          onClick={() => void reloadFromEnv()}
+        >
+          {reloading ? 'Reloading…' : 'Reload from .env'}
+        </Button>
+      </div>
+
+      {apiKeys.length > 0 ? (
+        <section className="flex flex-col gap-3">
+          <span className="font-medium">API keys</span>
+          {apiKeys.map((row) => (
+            <KeyCard
+              key={row.id}
+              row={row}
+              draft={drafts[row.id] ?? ''}
+              busy={savingId === row.id}
+              onDraft={(value) => setDrafts((current) => ({ ...current, [row.id]: value }))}
+              onSave={() => void saveSecret(row)}
+              onClear={() => void clearSaved(row)}
+            />
+          ))}
+        </section>
+      ) : null}
+
+      {cursor ? (
+        <section className="flex flex-col gap-3">
+          <span className="font-medium">Bridge agent</span>
+          <span className="text-xs text-muted-foreground">
+            Cursor runs as the bridge agent. A key already in .env is shown masked. Replace it and save to override
+            that value. The sidecar uses the new key the next time it starts.
+          </span>
+          <KeyCard
+            row={cursor}
+            draft={drafts.cursor ?? ''}
+            busy={savingId === 'cursor'}
+            allowEnvOverride
+            onDraft={(value) => setDrafts((current) => ({ ...current, cursor: value }))}
+            onSave={() => void saveSecret(cursor)}
+            onClear={() => void clearSaved(cursor)}
+          />
+        </section>
+      ) : null}
 
       <section className="flex flex-col gap-2 rounded-md border p-3" style={{ borderColor: 'var(--gray-6)' }}>
         <span className="font-medium">Local model server</span>
@@ -266,36 +356,6 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
         ) : null}
       </section>
 
-      {keys.length > 0 ? (
-        <section className="flex flex-col gap-3">
-          <span className="font-medium">API keys</span>
-          {keys.map((row) => (
-            <div
-              key={row.id}
-              className="flex flex-col gap-2 rounded-md border p-3"
-              style={{ borderColor: 'var(--gray-6)' }}
-            >
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <span className="font-medium">{row.label}</span>
-                <span className="text-xs text-muted-foreground">{sourceLabel(row.source)}</span>
-              </div>
-              <span className="text-xs text-muted-foreground">
-                {row.used_by}
-                {row.env_var ? ` · ${row.env_var}` : ''}
-              </span>
-              <SecretFields
-                row={row}
-                draft={drafts[row.id] ?? ''}
-                busy={savingId === row.id}
-                onDraft={(value) => setDrafts((current) => ({ ...current, [row.id]: value }))}
-                onSave={() => void saveSecret(row)}
-                onClear={() => void clearSaved(row)}
-              />
-            </div>
-          ))}
-        </section>
-      ) : null}
-
       {notice ? (
         <p className="text-xs text-muted-foreground" role="status">
           {notice}
@@ -305,10 +365,11 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
   )
 }
 
-function SecretFields({
+function KeyCard({
   row,
   draft,
   busy,
+  allowEnvOverride = false,
   onDraft,
   onSave,
   onClear,
@@ -316,32 +377,82 @@ function SecretFields({
   row: ConnectionRow
   draft: string
   busy: boolean
+  allowEnvOverride?: boolean
   onDraft: (value: string) => void
   onSave: () => void
   onClear: () => void
 }) {
-  if (row.source === 'env') {
+  return (
+    <div className="flex flex-col gap-2 rounded-md border p-3" style={{ borderColor: 'var(--gray-6)' }}>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="font-medium">{row.label}</span>
+        <span className="text-xs text-muted-foreground">{sourceLabel(row.source)}</span>
+      </div>
+      <span className="text-xs text-muted-foreground">
+        {row.used_by}
+        {row.env_var ? ` · ${row.env_var}` : ''}
+      </span>
+      <SecretFields
+        row={row}
+        draft={draft}
+        busy={busy}
+        allowEnvOverride={allowEnvOverride}
+        onDraft={onDraft}
+        onSave={onSave}
+        onClear={onClear}
+      />
+    </div>
+  )
+}
+
+function SecretFields({
+  row,
+  draft,
+  busy,
+  allowEnvOverride = false,
+  onDraft,
+  onSave,
+  onClear,
+}: {
+  row: ConnectionRow
+  draft: string
+  busy: boolean
+  allowEnvOverride?: boolean
+  onDraft: (value: string) => void
+  onSave: () => void
+  onClear: () => void
+}) {
+  if (row.source === 'env' && !allowEnvOverride) {
     return (
       <span className="text-xs text-muted-foreground">
         This key is set in .env, so a key saved here would not be used.
       </span>
     )
   }
+  const unchangedMask =
+    (Boolean(row.masked_secret) && draft === row.masked_secret) ||
+    (allowEnvOverride &&
+      draft === CURSOR_KEY_MASK &&
+      (row.source === 'env' || row.source === 'saved'))
+  const canRemove = row.source === 'saved' || (allowEnvOverride && row.source === 'env')
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Input
         type="password"
         value={draft}
-        placeholder={row.source === 'saved' ? 'Key saved — enter a new one to replace it' : 'API key'}
+        placeholder={row.source === 'saved' && !draft ? 'Key saved — enter a new one to replace it' : 'API key'}
         autoComplete="off"
+        onFocus={(e) => {
+          if (unchangedMask) e.currentTarget.select()
+        }}
         onChange={(e) => onDraft(e.target.value)}
         className="min-w-[220px] flex-1"
         aria-label={`${row.label} API key`}
       />
-      <Button size="sm" type="button" disabled={busy || !draft.trim()} onClick={onSave}>
+      <Button size="sm" type="button" disabled={busy || !draft.trim() || unchangedMask} onClick={onSave}>
         {busy ? 'Saving…' : 'Save'}
       </Button>
-      {row.source === 'saved' ? (
+      {canRemove ? (
         <Button size="sm" variant="outline" type="button" disabled={busy} onClick={onClear}>
           Remove
         </Button>
