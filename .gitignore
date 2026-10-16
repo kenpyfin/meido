@@ -61,3 +61,6 @@ _query_bg_jobs.py
 list_tasks.py
 add_indexing_task.py
 web/tsconfig.tsbuildinfo
+# Meido workspace and vault (installer)
+./workspace/
+./workspace/shared/vault_db/
