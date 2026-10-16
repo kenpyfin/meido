@@ -6,7 +6,7 @@ import type { EnvConfigResponse } from '@/types'
 
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>
 
-const STEPS = ['Workspace', 'Web access', 'Vault', 'System LLM', 'Cursor', 'Optional tools', 'Finish']
+const STEPS = ['Workspace', 'Web access', 'Vault', 'System LLM', 'Cursor', 'MemPalace and Steel', 'Finish']
 
 export function SetupWizardDialog({
   api,
@@ -51,22 +51,46 @@ export function SetupWizardDialog({
   }
 
   async function save(keys: string[]) {
+    const connectionIds: Record<string, string> = {
+      ANTHROPIC_API_KEY: 'anthropic',
+      OPENAI_API_KEY: 'openai',
+      GEMINI_API_KEY: 'google',
+      XAI_API_KEY: 'xai',
+      OPENROUTER_API_KEY: 'openrouter',
+      DEEPSEEK_API_KEY: 'deepseek',
+      CURSOR_API_KEY: 'cursor',
+    }
     const values: Record<string, string> = {}
+    const connections: Array<{ id: string; secret: string }> = []
     for (const key of keys) {
-      const field = data?.fields.find((item) => item.key === key)
       const next = drafts[key] ?? ''
+      const connectionId = connectionIds[key]
+      if (connectionId) {
+        if (next.trim()) connections.push({ id: connectionId, secret: next.trim() })
+        continue
+      }
+      const field = data?.fields.find((item) => item.key === key)
       if (field?.secret && next === '') continue
       values[key] = next
     }
     setBusy(true)
     setError('')
     try {
-      const next = await api<EnvConfigResponse>('/api/env-config', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ values }),
-      })
-      setData(next)
+      if (Object.keys(values).length > 0) {
+        const next = await api<EnvConfigResponse>('/api/env-config', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ values }),
+        })
+        setData(next)
+      }
+      for (const connection of connections) {
+        await api('/api/connections', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(connection),
+        })
+      }
       return true
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -83,12 +107,16 @@ export function SetupWizardDialog({
       ['VAULT_ORIGIN_VAULT_PATH', 'VAULT_VECTOR_DB_PATH', 'VAULT_VECTOR_DB_COLLECTION', 'VAULT_PRINCIPLES_PATH', 'VAULT_EMBEDDING_SERVER_URL', 'VAULT_ORIGIN_VAULT_REPO'],
       ['SYSTEM_LLM_PROVIDER', 'SYSTEM_LLM_MODEL', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'XAI_API_KEY', 'OPENROUTER_API_KEY', 'DEEPSEEK_API_KEY'],
       ['CURSOR_API_KEY'],
-      ['BROWSER_MANAGED', 'TAVILY_API_KEY', 'SEARXNG_URL'],
+      ['TAVILY_API_KEY', 'SEARXNG_URL'],
       [],
     ]
     if (keysByStep[step].length > 0) {
       const ok = await save(keysByStep[step])
       if (!ok) return
+    }
+    if (step === 5 && (!data?.probes.mempalace_installed || !data?.probes.steel_installed)) {
+      setError('MemPalace and Steel Browser are required. Install them before continuing.')
+      return
     }
     setStep((current) => Math.min(current + 1, STEPS.length - 1))
   }
@@ -103,6 +131,8 @@ export function SetupWizardDialog({
         body: JSON.stringify({ action: name }),
       })
       setMessage(result.message || 'Done.')
+      const next = await api<EnvConfigResponse>('/api/env-config')
+      setData(next)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -156,6 +186,7 @@ export function SetupWizardDialog({
           <div className="space-y-2">
             <Field label="Provider (anthropic, openai, gemini, xai, openrouter, deepseek)" value={drafts.SYSTEM_LLM_PROVIDER ?? ''} onChange={(value) => setField('SYSTEM_LLM_PROVIDER', value)} />
             <Field label="Model" value={drafts.SYSTEM_LLM_MODEL ?? ''} onChange={(value) => setField('SYSTEM_LLM_MODEL', value)} />
+            <p className="text-xs text-muted-foreground">Provider keys are saved under Settings → Connections.</p>
             <Field label="Anthropic key" secret value={drafts.ANTHROPIC_API_KEY ?? ''} onChange={(value) => setField('ANTHROPIC_API_KEY', value)} />
             <Field label="OpenAI key" secret value={drafts.OPENAI_API_KEY ?? ''} onChange={(value) => setField('OPENAI_API_KEY', value)} />
             <Field label="Gemini key" secret value={drafts.GEMINI_API_KEY ?? ''} onChange={(value) => setField('GEMINI_API_KEY', value)} />
@@ -169,22 +200,37 @@ export function SetupWizardDialog({
             <p className="text-xs text-muted-foreground">
               Cursor engine needs Node.js. node {data?.probes.node_available ? 'is installed' : 'is missing'}. npm {data?.probes.npm_available ? 'is installed' : 'is missing'}.
             </p>
+            <p className="text-xs text-muted-foreground">The Cursor key is saved under Settings → Connections.</p>
             <Field label="Cursor API key" secret value={drafts.CURSOR_API_KEY ?? ''} onChange={(value) => setField('CURSOR_API_KEY', value)} />
           </div>
         ) : null}
         {step === 5 ? (
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">
-              python {data?.probes.python_available ? 'yes' : 'no'} · docker {data?.probes.docker_available ? 'yes' : 'no'} · tmux {data?.probes.tmux_available ? 'yes' : 'no'}
+              MemPalace and Steel Browser are required. An install that is already present is left as it is.
             </p>
-            <Field label="Managed browser (true or false)" value={drafts.BROWSER_MANAGED ?? ''} onChange={(value) => setField('BROWSER_MANAGED', value)} />
+            <p className="text-xs">
+              MemPalace: {data?.probes.mempalace_installed ? 'installed' : 'not installed'}
+            </p>
+            <p className="text-xs">
+              Steel Browser: {data?.probes.steel_installed ? 'installed' : 'not installed'}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              python {data?.probes.python_available ? 'yes' : 'no'} · docker {data?.probes.docker_available ? 'yes' : 'no'}
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              disabled={busy || (data?.probes.mempalace_installed && data?.probes.steel_installed)}
+              onClick={() => void action('install_mempalace_and_steel')}
+            >
+              {data?.probes.mempalace_installed && data?.probes.steel_installed
+                ? 'MemPalace and Steel are installed'
+                : 'Install MemPalace and Steel'}
+            </Button>
             <Field label="Tavily key" secret value={drafts.TAVILY_API_KEY ?? ''} onChange={(value) => setField('TAVILY_API_KEY', value)} />
             <Field label="SearXNG URL" value={drafts.SEARXNG_URL ?? ''} onChange={(value) => setField('SEARXNG_URL', value)} />
-            <div className="flex flex-wrap gap-2">
-              <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void action('install_mempalace')}>Install MemPalace</Button>
-              <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void action('setup_steel')}>Set up Steel</Button>
-              <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void action('install_gateway')}>Install login service</Button>
-            </div>
+            <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void action('install_gateway')}>Install login service</Button>
           </div>
         ) : null}
         {step === 6 ? (

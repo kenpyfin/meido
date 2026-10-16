@@ -609,6 +609,7 @@ pub struct ReadinessExtras {
     pub provider_key_saved: bool,
     pub local_model_ready: bool,
     pub mempalace_ready: bool,
+    pub steel_installed: bool,
 }
 
 pub fn initializer_status(
@@ -634,10 +635,13 @@ pub fn initializer_status(
                 && file_value(values, key).is_some()
         });
     let cursor_configured = file_value(values, "CURSOR_API_KEY").is_some();
-    let steel_configured = file_value(values, "BROWSER_MANAGED")
-        .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes"));
-    let needs_initialization =
-        !(workspace_configured && vault_configured && system_llm_configured && llm_configured);
+    let steel_configured = extras.steel_installed;
+    let needs_initialization = !(workspace_configured
+        && vault_configured
+        && system_llm_configured
+        && llm_configured
+        && extras.mempalace_ready
+        && extras.steel_installed);
     InitializerStatus {
         needs_initialization,
         workspace_configured,
@@ -844,11 +848,12 @@ mod tests {
         let mut values = HashMap::new();
         values.insert("WORKSPACE_DIR".into(), "./workspace".into());
         values.insert("TIMEZONE".into(), "UTC".into());
-        let extras = ReadinessExtras {
+        let mut extras = ReadinessExtras {
             system_llm_saved: false,
             provider_key_saved: false,
             local_model_ready: false,
             mempalace_ready: false,
+            steel_installed: false,
         };
         assert!(initializer_status(&values, &extras).needs_initialization);
         values.insert("VAULT_ORIGIN_VAULT_PATH".into(), "shared/ORIGIN".into());
@@ -856,6 +861,9 @@ mod tests {
         values.insert("GEMINI_API_KEY".into(), "key".into());
         values.insert("SYSTEM_LLM_PROVIDER".into(), "google".into());
         values.insert("SYSTEM_LLM_MODEL".into(), "gemini".into());
+        assert!(initializer_status(&values, &extras).needs_initialization);
+        extras.mempalace_ready = true;
+        extras.steel_installed = true;
         assert!(!initializer_status(&values, &extras).needs_initialization);
     }
 }

@@ -21,18 +21,6 @@ const GROUPS: { title: string; keys: string[] }[] = [
   },
   { title: 'System LLM', keys: ['SYSTEM_LLM_PROVIDER', 'SYSTEM_LLM_MODEL'] },
   {
-    title: 'Provider keys',
-    keys: [
-      'ANTHROPIC_API_KEY',
-      'OPENAI_API_KEY',
-      'GEMINI_API_KEY',
-      'XAI_API_KEY',
-      'OPENROUTER_API_KEY',
-      'DEEPSEEK_API_KEY',
-      'CURSOR_API_KEY',
-    ],
-  },
-  {
     title: 'Integrations',
     keys: [
       'BROWSER_MANAGED',
@@ -168,16 +156,28 @@ export function SettingsEnvironmentPanel({
           })}
         </section>
       ))}
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void runAction('install_mempalace')}>
-          Install MemPalace
-        </Button>
-        <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void runAction('setup_steel')}>
-          Set up Steel browser
-        </Button>
-        <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void runAction('install_gateway')}>
-          Install login service
-        </Button>
+      <div className="space-y-2">
+        <p className="text-xs">
+          MemPalace: {data?.probes.mempalace_installed ? 'installed' : 'not installed'}
+          {' · '}
+          Steel Browser: {data?.probes.steel_installed ? 'installed' : 'not installed'}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy || (data?.probes.mempalace_installed && data?.probes.steel_installed)}
+            onClick={() => void runAction('install_mempalace_and_steel')}
+          >
+            {data?.probes.mempalace_installed && data?.probes.steel_installed
+              ? 'MemPalace and Steel are installed'
+              : 'Install MemPalace and Steel'}
+          </Button>
+          <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void runAction('install_gateway')}>
+            Install login service
+          </Button>
+        </div>
       </div>
       {message ? <p className="text-xs text-muted-foreground">{message}</p> : null}
       {error ? <p className="text-xs text-destructive">{error}</p> : null}

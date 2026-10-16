@@ -8703,7 +8703,7 @@ async fn api_llm_get(
         "catalog": catalog,
         "providers": providers,
         "catalog_source": "static_curated",
-        "cost_reference_note": "Approximate USD per 1M tokens for curated ids — verify on your provider billing page. Model lists are loaded live from the provider (GET /api/llm/models); this payload is the curated fallback. Put API keys in repo-root .env only.",
+        "cost_reference_note": "Approximate USD per 1M tokens for curated ids — verify on your provider billing page. Model lists are loaded live from the provider (GET /api/llm/models); this payload is the curated fallback. Add provider keys under Settings → Connections.",
         "custom_model_allowed": true,
         "thinking_enabled": state.app_state.llm.thinking_enabled(),
         "thinking_source": if thinking_source {

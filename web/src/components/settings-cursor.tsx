@@ -153,7 +153,7 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
     if (engineReady) return 'Cursor SDK is ready (sidecar auto-started with the bot).'
     if (!config.sidecar_reachable) return 'Sidecar not reachable yet — check bot logs on startup.'
     if (!config.api_key_configured) {
-      return 'Add CURSOR_API_KEY to repo-root .env and restart the bot.'
+      return 'Add the Cursor key under Settings → Connections.'
     }
     return 'Sidecar is up; waiting for health verification.'
   }, [config, engineReady])
@@ -166,7 +166,7 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
             onError('Sidecar is not reachable. Restart the bot and check logs.')
           } else {
             onError(
-              'CURSOR_API_KEY is not set on the sidecar host. Add it to repo-root .env and restart the bot.',
+              'CURSOR_API_KEY is not set on the sidecar host. Add the Cursor key under Settings → Connections.',
             )
           }
         }
@@ -307,7 +307,7 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
           Sidecar: {config.sidecar_reachable ? 'reachable' : 'down'}
         </span>
         <span>
-          CURSOR_API_KEY: {config.api_key_configured ? 'set' : 'missing in .env'}
+          CURSOR_API_KEY: {config.api_key_configured ? 'set' : 'missing — add it under Connections'}
         </span>
         <span>
           Runner: {config.sdk_runner_url ?? '—'}
@@ -328,7 +328,7 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
           shared. The sidecar starts automatically when the bot starts. The bot installs{' '}
           <code>@cursor/sdk</code> into a runtime Node prefix on first boot (no{' '}
           <code>cursor-sdk-bridge</code> subprocess). The only required setup is{' '}
-          <code>CURSOR_API_KEY</code> in repo-root <code>.env</code> (never commit the value).
+          the Cursor key under Settings → Connections (never commit the value).
           Node 20+ and npm must be on PATH.
         </span>
         <div className="flex flex-col gap-2">
@@ -416,8 +416,8 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
           ) : null}
           {!canLoadModels ? (
             <span>
-              Model list requires a reachable sidecar and <code>CURSOR_API_KEY</code> in{' '}
-              <code>.env</code>. Without the key, the sidecar returns HTTP 503.
+              Model list requires a reachable sidecar and the Cursor key under Settings → Connections.
+              Without the key, the sidecar returns HTTP 503.
             </span>
           ) : modelsNotice ? (
             <span role="status">

@@ -53,11 +53,9 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
       <DialogContent className="max-w-[920px]">
         <DialogTitle>Web UI configuration</DialogTitle>
         <DialogDescription className="mb-3">
-          Shared setup for every persona. Model and engine API keys can live in repo-root{' '}
-          <code className="text-xs">.env</code>, or under Connections when they are not in{' '}
-          <code className="text-xs">.env</code>. A persona’s engine, hooks, skills, and secrets are on
-          the Persona page. Configure Telegram, Discord, and WhatsApp under Integrations. Restart
-          Meido after changing channel tokens.
+          Shared setup for every persona. Provider API keys are under Connections. A persona’s
+          engine, hooks, skills, and secrets are on the Persona page. Configure Telegram, Discord,
+          and WhatsApp under Integrations. Restart Meido after changing channel tokens.
         </DialogDescription>
         {settingsError ? (
           <div role="status" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive mb-2">{settingsError}</div>

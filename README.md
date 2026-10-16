@@ -48,7 +48,7 @@ Bootstrap variables stay in `.env` (repo root): workspace path, config path over
 meido start
 ```
 
-`meido start` returns immediately and leaves Meido running. Stop that process with `meido stop`. Add `--foreground` to keep it attached to the terminal. Then open **http://127.0.0.1:10961**. The setup wizard opens when workspace, vault, a provider key, or the system LLM is missing. **Settings → Environment** shows the same `.env` values and writes them back. Secrets stay masked. Editing `.env` by hand shows up the next time Settings loads. Workspace, web bind, and vault path changes need **Restart Meido**. API keys and runtime toggles apply without a restart. MemPalace, Steel, and the login service are buttons in the wizard.
+`meido start` returns immediately and leaves Meido running. Stop that process with `meido stop`. Add `--foreground` to keep it attached to the terminal. Then open **http://127.0.0.1:10961**. The setup wizard opens when workspace, vault, a provider key, the system LLM, MemPalace, or Steel Browser is missing. **Settings → Environment** shows the same `.env` values and writes them back. Secrets stay masked. Editing `.env` by hand shows up the next time Settings loads. Workspace, web bind, and vault path changes need **Restart Meido**. API keys and runtime toggles apply without a restart. MemPalace and Steel Browser install from one button, and that button skips anything already installed. The login service stays optional.
 
 To open the UI on a DNS name such as `pp.local`, set `WEB_HOST=pp.local` and `WEB_AUTH_TOKEN` in `.env`. The process listens on every interface. Meido does not register the name; point it at this machine's LAN IP:
 
@@ -65,7 +65,7 @@ meido help        # all commands
 **Minimum configuration**
 
 - **Web UI:** sufficient on its own. Messaging channels (Telegram, Discord, WhatsApp, WeCom) are optional.
-- **LLM:** at least one provider API key in `.env` (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`); choose provider and model in **Web UI → Settings → LLM**. Local providers (`ollama`, `llama`, `llamacpp`) may omit API keys.
+- **LLM:** at least one provider API key under **Web UI → Settings → Connections** (Anthropic, OpenAI, Gemini, and the other listed connectors). Choose provider and model on the Persona page. Local providers (`ollama`, `llama`, `llamacpp`) may omit API keys.
 
 See [.env.example](.env.example) for the full list (web UI, scheduler, vault, safety, etc.).
 

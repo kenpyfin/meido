@@ -44,6 +44,18 @@ pub fn apply_managed_mempalace(config: &mut Config) {
     }
 }
 
+/// True when recall can use MemPalace without installing it again.
+///
+/// An operator command or endpoint counts as installed. The managed venv counts
+/// when its `mempalace` package is already on disk.
+pub fn is_installed(config: &Config) -> bool {
+    if !config.mempalace.endpoint.trim().is_empty() || !config.mempalace.command.trim().is_empty() {
+        return true;
+    }
+    let venv = venv_dir(config);
+    venv_python(&venv).is_file() && venv_package_present(&venv, "mempalace")
+}
+
 /// Command and args recall should use when `.env` does not set a command or endpoint.
 pub fn resolved_stdio(config: &Config) -> Option<(String, Vec<String>)> {
     if !config.mempalace.endpoint.trim().is_empty() {
@@ -119,6 +131,18 @@ fn venv_dir(config: &Config) -> PathBuf {
 
 fn palace_dir(config: &Config) -> PathBuf {
     PathBuf::from(config.runtime_data_dir()).join(PALACE_DIR_NAME)
+}
+
+fn venv_package_present(venv: &Path, name: &str) -> bool {
+    if cfg!(windows) {
+        return venv.join("Lib").join("site-packages").join(name).is_dir();
+    }
+    let Ok(entries) = std::fs::read_dir(venv.join("lib")) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .any(|entry| entry.path().join("site-packages").join(name).is_dir())
 }
 
 fn venv_python(venv: &Path) -> PathBuf {

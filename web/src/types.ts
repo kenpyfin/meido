@@ -93,6 +93,8 @@ export type EnvConfigResponse = {
     tmux_available: boolean
     lan_ipv4: string | null
     gateway_installed: boolean
+    mempalace_installed: boolean
+    steel_installed: boolean
   }
 }
 
