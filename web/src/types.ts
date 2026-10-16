@@ -69,8 +69,31 @@ export type InstallationStatus = {
   /** @deprecated use requires_restart_for_env_changes */
   requires_restart_to_apply_runtime_settings?: boolean
   requires_restart_for_env_changes?: boolean
+  needs_initialization?: boolean
   runtime_env_merge_from_app_settings?: boolean
   llm_model_from_app_settings?: boolean
+}
+
+export type EnvConfigField = {
+  key: string
+  value: string | null
+  secret: boolean
+  set: boolean
+}
+
+export type EnvConfigResponse = {
+  fields: EnvConfigField[]
+  requires_restart_for_env_changes: boolean
+  initializer: { needs_initialization: boolean }
+  probes: {
+    node_available: boolean
+    npm_available: boolean
+    python_available: boolean
+    docker_available: boolean
+    tmux_available: boolean
+    lan_ipv4: string | null
+    gateway_installed: boolean
+  }
 }
 
 export type LlmCatalogModel = {

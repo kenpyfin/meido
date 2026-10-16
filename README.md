@@ -23,9 +23,9 @@ Meido is its own app. The command is `meido`. It does not replace or share a ser
 curl -fsSL https://raw.githubusercontent.com/kenpyfin/meido/main/install.sh | bash
 ```
 
-That installs the binary and prints the built-in setup steps. From a checkout, `bash install.sh` in a terminal walks through them: LLM API key, Cursor `CURSOR_API_KEY`, MemPalace, and Steel (`BROWSER_MANAGED` plus the Docker image and skill venv). **Windows** — [`install.ps1`](install.ps1) asks the same questions.
+That installs the binary. From a checkout, `bash install.sh` builds it. **Windows** — [`install.ps1`](install.ps1) installs the binary the same way. Neither script asks setup questions.
 
-A new workspace gets [`defaults/AGENTS.md`](defaults/AGENTS.md) as `AGENTS.md` at the workspace root (or at `VAULT_PRINCIPLES_PATH` when that is set). Install writes it when the file is missing, and the first `meido start` does the same. An existing principles file is left as-is.
+A new workspace gets [`defaults/AGENTS.md`](defaults/AGENTS.md) as `AGENTS.md` at the workspace root (or at `VAULT_PRINCIPLES_PATH` when that is set). The first `meido start` writes it when the file is missing, and saving vault paths from the web UI does the same. An existing principles file is left as-is.
 
 Build from source: `cargo build --release` and `cd web && npm ci && npm run build`.
 
@@ -48,7 +48,7 @@ Bootstrap variables stay in `.env` (repo root): workspace path, config path over
 meido start
 ```
 
-`meido start` returns immediately and leaves Meido running. Stop that process with `meido stop`. Add `--foreground` to keep it attached to the terminal. Then open **http://127.0.0.1:10961**. Put LLM API keys in repo-root `.env` (see `.env.example`). Use **Settings** for provider/model, Integrations (channels), personas, and Agent engine. Gateway installs can restart from the UI on Linux/macOS. Changes to `.env` require a process restart.
+`meido start` returns immediately and leaves Meido running. Stop that process with `meido stop`. Add `--foreground` to keep it attached to the terminal. Then open **http://127.0.0.1:10961**. The setup wizard opens when workspace, vault, a provider key, or the system LLM is missing. **Settings → Environment** shows the same `.env` values and writes them back. Secrets stay masked. Editing `.env` by hand shows up the next time Settings loads. Workspace, web bind, and vault path changes need **Restart Meido**. API keys and runtime toggles apply without a restart. MemPalace, Steel, and the login service are buttons in the wizard.
 
 To open the UI on a DNS name such as `pp.local`, set `WEB_HOST=pp.local` and `WEB_AUTH_TOKEN` in `.env`. The process listens on every interface. Meido does not register the name; point it at this machine's LAN IP:
 

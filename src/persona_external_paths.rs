@@ -6,8 +6,6 @@
 //! and updates the in-memory map so the next run sees it.
 
 use std::collections::HashMap;
-use std::fs;
-use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, RwLock};
 
@@ -111,95 +109,12 @@ pub fn encode_external_paths(paths: &[PathBuf]) -> String {
     serde_json::to_string(&values).unwrap_or_else(|_| "[]".to_string())
 }
 
-fn quote_env_value(value: &str) -> String {
-    if value
-        .chars()
-        .any(|c| c.is_whitespace() || matches!(c, '"' | '\'' | '#' | '\\' | '$' | '`'))
-    {
-        let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-        format!("\"{escaped}\"")
-    } else {
-        value.to_string()
-    }
-}
-
-fn newline_of(content: &str) -> &str {
-    if content.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    }
-}
-
-fn assignment_key(line: &str) -> Option<&str> {
-    let trimmed = line.trim().strip_prefix("export ").unwrap_or(line.trim());
-    let (key, _) = trimmed.split_once('=')?;
-    Some(key.trim())
-}
-
 pub fn upsert_env_line(content: &str, name: &str, value: &str) -> String {
-    let newline = newline_of(content);
-    let line = format!("{name}={}", quote_env_value(value));
-    let mut out = Vec::new();
-    let mut replaced = false;
-    for raw in content.lines() {
-        if assignment_key(raw) == Some(name) {
-            out.push(line.clone());
-            replaced = true;
-        } else {
-            out.push(raw.to_string());
-        }
-    }
-    if !replaced {
-        out.push(line);
-    }
-    let mut joined = out.join(newline);
-    if !joined.ends_with(newline) {
-        joined.push_str(newline);
-    }
-    joined
+    crate::dotenv_sync::upsert_env_line(content, name, value)
 }
 
 pub fn remove_env_line(content: &str, name: &str) -> String {
-    let newline = newline_of(content);
-    let out: Vec<&str> = content
-        .lines()
-        .filter(|raw| assignment_key(raw) != Some(name))
-        .collect();
-    if out.is_empty() {
-        return String::new();
-    }
-    let mut joined = out.join(newline);
-    if content.ends_with('\n') {
-        joined.push_str(newline);
-    }
-    joined
-}
-
-fn atomic_replace(path: &Path, content: &str) -> Result<(), String> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let tmp = parent.join(format!(
-        ".{}.persona-paths.tmp",
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("env")
-    ));
-    let permissions = fs::metadata(path).ok().map(|meta| meta.permissions());
-    {
-        let mut file = fs::File::create(&tmp).map_err(|e| format!("Could not write .env: {e}"))?;
-        file.write_all(content.as_bytes())
-            .map_err(|e| format!("Could not write .env: {e}"))?;
-        file.sync_all()
-            .map_err(|e| format!("Could not write .env: {e}"))?;
-    }
-    if let Some(permissions) = permissions {
-        let _ = fs::set_permissions(&tmp, permissions);
-    }
-    if fs::rename(&tmp, path).is_err() {
-        let _ = fs::remove_file(path);
-        fs::rename(&tmp, path).map_err(|e| format!("Could not replace .env: {e}"))?;
-    }
-    Ok(())
+    crate::dotenv_sync::remove_env_line(content, name)
 }
 
 /// Live allowlist. File writes and the map stay together so a UI save applies
@@ -248,6 +163,16 @@ impl PersonaExternalPaths {
         }
     }
 
+    /// Replace the in-memory map from the process environment after `.env` is re-read.
+    pub fn reload_from_process_env(&self) {
+        let fresh = Self::load(None);
+        let map = fresh
+            .paths
+            .into_inner()
+            .unwrap_or_else(|err| err.into_inner());
+        *self.paths.write().unwrap_or_else(|err| err.into_inner()) = map;
+    }
+
     pub fn paths_for(&self, persona_id: i64) -> Vec<PathBuf> {
         self.paths
             .read()
@@ -293,14 +218,14 @@ impl PersonaExternalPaths {
                 env_file.display()
             ));
         }
-        let contents = fs::read_to_string(&env_file)
-            .map_err(|e| format!("Could not read {}: {e}", env_file.display()))?;
-        let next = if paths.is_empty() {
-            remove_env_line(&contents, key)
-        } else {
-            upsert_env_line(&contents, key, &encode_external_paths(paths))
-        };
-        atomic_replace(&env_file, &next)?;
+        let encoded = encode_external_paths(paths);
+        crate::dotenv_sync::mutate_file(&env_file, |contents| {
+            Ok(if paths.is_empty() {
+                remove_env_line(contents, key)
+            } else {
+                upsert_env_line(contents, key, &encoded)
+            })
+        })?;
         let mut map = self.paths.write().unwrap_or_else(|err| err.into_inner());
         if paths.is_empty() {
             map.remove(&persona_id);

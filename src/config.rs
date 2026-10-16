@@ -1123,6 +1123,11 @@ impl Config {
 
     /// Load config from environment (.env file + process env). Load .env from `MEIDO_CONFIG` path or `./`.
     pub fn load() -> Result<Self, FinallyAValueBotError> {
+        if Self::resolve_config_path()?.is_none() {
+            crate::dotenv_sync::seed_env_file(std::path::Path::new("./.env")).map_err(|e| {
+                FinallyAValueBotError::Config(format!("Could not create .env: {e}"))
+            })?;
+        }
         let env_path = Self::resolve_config_path()?;
         let load_path = env_path
             .as_deref()

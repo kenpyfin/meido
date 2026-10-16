@@ -31,8 +31,11 @@ const SettingsCursorPanel = React.lazy(() =>
 const SettingsGeminiAdkPanel = React.lazy(() =>
   import('../../components/settings-gemini-adk').then((m) => ({ default: m.SettingsGeminiAdkPanel })),
 )
+const SettingsEnvironmentPanel = React.lazy(() =>
+  import('../../components/settings-environment').then((m) => ({ default: m.SettingsEnvironmentPanel })),
+)
 
-export function SettingsDialog({ appearance, api, activePersonaId, personas, settings }: SettingsDialogProps) {
+export function SettingsDialog({ appearance, api, activePersonaId, personas, settings, onRunSetupWizard }: SettingsDialogProps) {
   const settingsDialogOpen = settings.open
   const setSettingsDialogOpen = settings.onOpenChange
   const settingsError = settings.error
@@ -65,6 +68,7 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
         <Tabs defaultValue="overview">
           <TabsList className="mc-settings-tabs-sticky mb-3 h-auto flex-wrap">
             <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="environment">Environment</TabsTrigger>
             <TabsTrigger value="engine">Engine</TabsTrigger>
             <TabsTrigger value="system-llm">System LLM</TabsTrigger>
             <TabsTrigger value="connections">Connections</TabsTrigger>
@@ -72,6 +76,13 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
             <TabsTrigger value="channels">Channels</TabsTrigger>
           </TabsList>
           <React.Suspense fallback={<SettingsPanelSkeleton />}>
+          <TabsContent value="environment">
+            <SettingsEnvironmentPanel
+              api={api}
+              onRunWizard={() => onRunSetupWizard?.()}
+              onChanged={() => void reloadInstallationStatus()}
+            />
+          </TabsContent>
           <TabsContent value="overview">
             {installationStatus ? (
               <div className="flex flex-col gap-2 mb-2">
@@ -92,6 +103,9 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
                       {installationStatus.local_delegate_ready ? 'verified' : 'not verified'}
                     </span>
                   ) : null}
+                  {installationStatus.needs_initialization ? (
+                    <span>Setup wizard: open</span>
+                  ) : null}
                   <span>
                     Env restart needed:{' '}
                     {(installationStatus.requires_restart_for_env_changes ??
@@ -103,7 +117,14 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
                 <span>
                   Stop requests between LLM/tool iterations (cooperative cancel). Use Queue for FIFO visibility.
                 </span>
-                <div>
+                <div className="flex gap-2 flex-wrap">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => onRunSetupWizard?.()}
+                  >
+                    Run Setup Wizard
+                  </Button>
                   <Button
                     size="sm"
                     variant="default"
