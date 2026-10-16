@@ -298,8 +298,7 @@ export function SettingsLlmPanel({
   return (
     <div className="flex flex-col gap-3">
       <span>
-        Put API keys in repo-root <code className="text-xs">.env</code> only (never in this UI).
-        Provider and model are saved for{' '}
+        Add provider keys under Settings → Connections. Provider and model are saved for{' '}
         {activePersonaId != null && activePersonaId > 0 ? (
           <>
             this persona
@@ -319,10 +318,7 @@ export function SettingsLlmPanel({
         </span>
         {(llm.providers ?? []).length === 0 ? (
           <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100">
-              No provider API keys found in <code className="text-xs">.env</code>. Add keys such as{' '}
-              <code className="text-xs">ANTHROPIC_API_KEY</code>,{' '}
-              <code className="text-xs">OPENAI_API_KEY</code>, or{' '}
-              <code className="text-xs">XAI_API_KEY</code>, then reload this page.
+              No provider API keys yet. Add one under Settings → Connections, then reload this page.
             </div>
         ) : (
           <>
@@ -343,7 +339,7 @@ export function SettingsLlmPanel({
                 </span>
               ) : (
                 <span>
-                  API key found in .env ({activeProviderEntry.api_key_env_hints.join(' or ')})
+                  API key is set ({activeProviderEntry.api_key_env_hints.join(' or ')}). Add or replace it under Settings → Connections.
                 </span>
               )
             ) : null}

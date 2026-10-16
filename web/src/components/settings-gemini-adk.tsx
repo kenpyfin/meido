@@ -157,8 +157,8 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 
     <div className="flex flex-col gap-4">
       {engine && !engine.api_key_configured ? (
         <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100">
-            GEMINI_API_KEY / GOOGLE_API_KEY is not set in .env. The Gemini ADK engine cannot run
-            until a key is configured.
+            The Gemini key is not set. Add it under Settings → Connections. The Gemini ADK engine
+            cannot run until a key is configured.
           </div>
       ) : null}
 

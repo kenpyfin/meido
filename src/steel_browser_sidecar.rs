@@ -228,6 +228,102 @@ async fn ensure_steel_container(config: &Config) -> Result<bool, String> {
     }
 }
 
+pub fn skill_venv_dir(workspace: &str) -> std::path::PathBuf {
+    Path::new(workspace).join("shared").join(".venv-steel")
+}
+
+/// True when the Steel skill venv already contains the `steel` package.
+pub fn skill_venv_installed(workspace: &str) -> bool {
+    venv_package_present(&skill_venv_dir(workspace), "steel")
+}
+
+/// True when this machine already has the Steel image. Does not pull.
+pub fn image_present(image: &str) -> bool {
+    let image = image.trim();
+    if image.is_empty() {
+        return false;
+    }
+    std::process::Command::new("docker")
+        .args(["image", "inspect", image])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+/// Managed mode, a local image, and the skill venv are all present.
+pub fn runtime_installed(workspace: &str, image: &str, managed: bool) -> bool {
+    managed && image_present(image) && skill_venv_installed(workspace)
+}
+
+/// Create the Steel skill venv and install its requirements only when the package is missing.
+pub fn ensure_skill_venv(workspace: &str) -> Result<(), String> {
+    if skill_venv_installed(workspace) {
+        return Ok(());
+    }
+    let venv = skill_venv_dir(workspace);
+    let python = steel_venv_python(&venv);
+    if !python.is_file() {
+        let base = if cfg!(windows) { "python" } else { "python3" };
+        let status = std::process::Command::new(base)
+            .args(["-m", "venv", &venv.to_string_lossy()])
+            .status()
+            .map_err(|err| format!("Could not create the Steel venv: {err}"))?;
+        if !status.success() {
+            return Err("Could not create the Steel venv.".into());
+        }
+    }
+    if !python.is_file() {
+        return Err(format!(
+            "Steel venv python not found at {}",
+            python.display()
+        ));
+    }
+    let requirements = Path::new("builtin_skills/steel-browser/requirements.txt");
+    if !requirements.is_file() {
+        return Err("Steel requirements.txt was not found.".into());
+    }
+    let status = std::process::Command::new(&python)
+        .args([
+            "-m",
+            "pip",
+            "install",
+            "--quiet",
+            "-r",
+            &requirements.to_string_lossy(),
+        ])
+        .status()
+        .map_err(|err| format!("Could not install Steel Python packages: {err}"))?;
+    if !status.success() {
+        return Err("Could not install Steel Python packages.".into());
+    }
+    if !skill_venv_installed(workspace) {
+        return Err("Steel packages installed but the steel module is not in the venv.".into());
+    }
+    Ok(())
+}
+
+fn steel_venv_python(venv: &Path) -> std::path::PathBuf {
+    if cfg!(windows) {
+        venv.join("Scripts").join("python.exe")
+    } else {
+        venv.join("bin").join("python")
+    }
+}
+
+fn venv_package_present(venv: &Path, name: &str) -> bool {
+    if cfg!(windows) {
+        return venv.join("Lib").join("site-packages").join(name).is_dir();
+    }
+    let Ok(entries) = std::fs::read_dir(venv.join("lib")) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .any(|entry| entry.path().join("site-packages").join(name).is_dir())
+}
+
 /// Start (or attach to) the local Steel browser container when managed mode is enabled.
 pub async fn bootstrap(config: &Config) -> Arc<SteelBrowserHandle> {
     let api_url = configured_api_url(config);

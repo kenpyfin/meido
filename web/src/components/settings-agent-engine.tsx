@@ -263,8 +263,8 @@ export function SettingsAgentEnginePanel({
         {selectedEngine === 'gemini_adk' && geminiStatus && !geminiStatus.engine_ready ? (
           <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100">
               Gemini ADK is active but not ready (API key{' '}
-              {geminiStatus.api_key_configured ? 'ok' : 'missing'}). Set GEMINI_API_KEY in .env and
-              finish setup in the Gemini ADK panel below.
+              {geminiStatus.api_key_configured ? 'ok' : 'missing'}). Add the Gemini key under
+              Settings → Connections, then finish setup in the Gemini ADK panel below.
             </div>
         ) : null}
       </div>

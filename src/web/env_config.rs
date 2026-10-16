@@ -157,14 +157,145 @@ async fn readiness(state: &WebState, values: &HashMap<String, String>) -> Readin
         })
     });
     let local = state.app_state.llm.local_delegate_config();
-    let mempalace = crate::mempalace_setup::resolved_stdio(&state.app_state.config).is_some();
+    let mempalace = crate::mempalace_setup::is_installed(&state.app_state.config);
+    let workspace = steel_workspace(state);
+    let image = steel_image_name(state);
+    let managed = browser_managed_now(state);
+    let steel_installed = tokio::task::spawn_blocking(move || {
+        crate::steel_browser_sidecar::runtime_installed(&workspace, &image, managed)
+    })
+    .await
+    .unwrap_or(false);
     ReadinessExtras {
         system_llm_saved,
         provider_key_saved,
         local_model_ready: !local.local_base_url.trim().is_empty()
             && !local.local_model.trim().is_empty(),
         mempalace_ready: mempalace,
+        steel_installed,
     }
+}
+
+fn steel_workspace(state: &WebState) -> String {
+    std::env::var("WORKSPACE_DIR")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| state.app_state.config.workspace_dir.clone())
+}
+
+fn steel_image_name(state: &WebState) -> String {
+    std::env::var("STEEL_DOCKER_IMAGE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| state.app_state.config.steel_docker_image.clone())
+}
+
+fn browser_managed_now(state: &WebState) -> bool {
+    std::env::var("BROWSER_MANAGED")
+        .ok()
+        .map(|value| crate::config::parse_bool_setting(&value))
+        .unwrap_or(state.app_state.config.browser_managed)
+}
+
+fn persist_steel_defaults() -> Result<(), String> {
+    let mut pairs = vec![("BROWSER_MANAGED", Some("true"))];
+    let fill = |key: &'static str| {
+        std::env::var(key)
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty())
+    };
+    if !fill("STEEL_API_PORT") {
+        pairs.push(("STEEL_API_PORT", Some("13920")));
+    }
+    if !fill("STEEL_CDP_PORT") {
+        pairs.push(("STEEL_CDP_PORT", Some("13923")));
+    }
+    if !fill("STEEL_API_URL") {
+        pairs.push(("STEEL_API_URL", Some("http://127.0.0.1:13920")));
+    }
+    if !fill("STEEL_DOCKER_IMAGE") {
+        pairs.push((
+            "STEEL_DOCKER_IMAGE",
+            Some("ghcr.io/steel-dev/steel-browser:latest"),
+        ));
+    }
+    if !fill("STEEL_DOCKER_CONTAINER_NAME") {
+        pairs.push(("STEEL_DOCKER_CONTAINER_NAME", Some("meido-steel")));
+    }
+    persist_pairs(&pairs)
+}
+
+async fn install_mempalace_if_missing(
+    config: crate::config::Config,
+) -> Result<&'static str, ApiError> {
+    let check = config.clone();
+    let already = tokio::task::spawn_blocking(move || crate::mempalace_setup::is_installed(&check))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if already {
+        return Ok("MemPalace is already installed.");
+    }
+    tokio::task::spawn_blocking(move || crate::mempalace_setup::ensure_managed_mempalace(&config))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok("MemPalace was installed. Restart Meido so recall uses it.")
+}
+
+async fn install_steel_if_missing(state: &WebState) -> Result<String, ApiError> {
+    let managed_before = browser_managed_now(state);
+    persist_steel_defaults().map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let workspace = steel_workspace(state);
+    let image = steel_image_name(state);
+    let workspace_check = workspace.clone();
+    let image_check = image.clone();
+    let (image_ready, venv_ready) = tokio::task::spawn_blocking(move || {
+        (
+            crate::steel_browser_sidecar::image_present(&image_check),
+            crate::steel_browser_sidecar::skill_venv_installed(&workspace_check),
+        )
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let mut notes = Vec::new();
+    if image_ready {
+        notes.push("Steel image is already present.".to_string());
+    } else {
+        let image_pull = image;
+        tokio::task::spawn_blocking(move || {
+            std::process::Command::new("docker")
+                .args(["pull", image_pull.as_str()])
+                .status()
+                .map_err(|e| format!("docker pull failed: {e}"))
+                .and_then(|status| {
+                    if status.success() {
+                        Ok(())
+                    } else {
+                        Err("docker pull failed. Check that the Docker daemon is running.".into())
+                    }
+                })
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+        notes.push("Steel image was pulled.".to_string());
+    }
+    if venv_ready {
+        notes.push("Steel skill environment is already installed.".to_string());
+    } else {
+        let workspace_install = workspace;
+        tokio::task::spawn_blocking(move || {
+            crate::steel_browser_sidecar::ensure_skill_venv(&workspace_install)
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+        notes.push("Steel skill environment was installed.".to_string());
+    }
+    if !image_ready || !venv_ready || !managed_before {
+        notes.push("Restart Meido to start the browser.".to_string());
+    }
+    Ok(notes.join(" "))
 }
 
 fn field_json(values: &HashMap<String, String>, key: &str) -> serde_json::Value {
@@ -201,14 +332,6 @@ fn env_view(
         "VAULT_ORIGIN_VAULT_REPO",
         "SYSTEM_LLM_PROVIDER",
         "SYSTEM_LLM_MODEL",
-        "ANTHROPIC_API_KEY",
-        "OPENAI_API_KEY",
-        "GEMINI_API_KEY",
-        "XAI_API_KEY",
-        "OPENROUTER_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "CURSOR_API_KEY",
-        "PERPLEXITY_API_KEY",
         "TAVILY_API_KEY",
         "MEMPALACE_RECALL_MODE",
         "BROWSER_MANAGED",
@@ -235,6 +358,8 @@ fn env_view(
             "tmux_available": dotenv_sync::command_available("tmux"),
             "lan_ipv4": dotenv_sync::lan_ipv4(),
             "gateway_installed": crate::gateway::user_gateway_service_installed(),
+            "mempalace_installed": extras.mempalace_ready,
+            "steel_installed": extras.steel_installed,
         },
     })
 }
@@ -278,6 +403,19 @@ pub(super) async fn api_env_config_patch(
             });
         }
     }
+    if let Some(key) = updates.iter().find_map(|update| {
+        crate::engine_connections::CONNECTIONS
+            .iter()
+            .find_map(|def| {
+                def.secret_name
+                    .filter(|name| name.eq_ignore_ascii_case(&update.key))
+            })
+    }) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("Save {key} under Settings → Connections."),
+        ));
+    }
     persist_env(updates).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     if let (Ok(provider), Ok(model)) = (
         std::env::var("SYSTEM_LLM_PROVIDER"),
@@ -306,73 +444,21 @@ pub(super) async fn api_setup_action_post(
     require_auth(&headers, state.auth_token.as_deref())?;
     let action = body.action.trim().to_string();
     let message = match action.as_str() {
-        "install_mempalace" => {
+        "install_mempalace" => install_mempalace_if_missing(state.app_state.config.clone()).await?,
+        "setup_steel" | "install_mempalace_and_steel" => {
             let config = state.app_state.config.clone();
-            tokio::task::spawn_blocking(move || {
-                crate::mempalace_setup::ensure_managed_mempalace(&config)
-            })
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-            "MemPalace is installed in the workspace runtime. Restart Meido so recall uses it."
-        }
-        "setup_steel" => {
-            let mut pairs = vec![("BROWSER_MANAGED", Some("true"))];
-            let fill = |key: &'static str| {
-                std::env::var(key)
-                    .ok()
-                    .is_some_and(|value| !value.trim().is_empty())
+            let mempalace = if action == "setup_steel" {
+                ""
+            } else {
+                install_mempalace_if_missing(config).await?
             };
-            if !fill("STEEL_API_PORT") {
-                pairs.push(("STEEL_API_PORT", Some("13920")));
-            }
-            if !fill("STEEL_CDP_PORT") {
-                pairs.push(("STEEL_CDP_PORT", Some("13923")));
-            }
-            if !fill("STEEL_API_URL") {
-                pairs.push(("STEEL_API_URL", Some("http://127.0.0.1:13920")));
-            }
-            if !fill("STEEL_DOCKER_IMAGE") {
-                pairs.push((
-                    "STEEL_DOCKER_IMAGE",
-                    Some("ghcr.io/steel-dev/steel-browser:latest"),
-                ));
-            }
-            if !fill("STEEL_DOCKER_CONTAINER_NAME") {
-                pairs.push(("STEEL_DOCKER_CONTAINER_NAME", Some("meido-steel")));
-            }
-            persist_pairs(&pairs).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-            tokio::task::spawn_blocking(|| {
-                std::process::Command::new("docker")
-                    .args(["pull", "ghcr.io/steel-dev/steel-browser:latest"])
-                    .status()
-                    .map_err(|e| format!("docker pull failed: {e}"))
-                    .and_then(|status| {
-                        if status.success() {
-                            Ok(())
-                        } else {
-                            Err(
-                                "docker pull failed. Check that the Docker daemon is running."
-                                    .into(),
-                            )
-                        }
-                    })
-            })
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-            let script = std::path::Path::new("builtin_skills/steel-browser/setup_steel_env.sh");
-            if script.is_file() {
-                let workspace = state.app_state.config.workspace_dir.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    std::process::Command::new("bash")
-                        .arg("builtin_skills/steel-browser/setup_steel_env.sh")
-                        .env("WORKSPACE_DIR", workspace)
-                        .status()
-                })
-                .await;
-            }
-            "Steel settings were written to .env and the image pull finished. Restart Meido to start the browser."
+            let steel = install_steel_if_missing(&state).await?;
+            let message = if mempalace.is_empty() {
+                steel
+            } else {
+                format!("{mempalace} {steel}")
+            };
+            return Ok(Json(json!({ "ok": true, "message": message })));
         }
         "install_gateway" => {
             tokio::task::spawn_blocking(crate::gateway::install_login_service)
