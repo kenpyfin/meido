@@ -7627,10 +7627,24 @@ struct ConnectionsPatch {
     clear: bool,
 }
 
+/// Shown in the Cursor field when a key already exists. Not a secret.
+const CURSOR_KEY_MASK: &str = "••••••••••••••••";
+
 fn env_var_present(name: &str) -> bool {
     std::env::var(name)
         .ok()
         .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn cursor_key_mask(data_dir: &str) -> Option<&'static str> {
+    let present = env_var_present("CURSOR_API_KEY")
+        || crate::engine_connections::secret_is_saved(data_dir, "CURSOR_API_KEY");
+    present.then_some(CURSOR_KEY_MASK)
+}
+
+fn is_key_mask_placeholder(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty() && trimmed.chars().all(|c| c == '•')
 }
 
 fn connection_secret_from_env(
@@ -7729,6 +7743,11 @@ fn connections_json(state: &crate::agent::AppState) -> serde_json::Value {
                 } else {
                     None
                 },
+                "masked_secret": if def.id == "cursor" {
+                    cursor_key_mask(&data_dir)
+                } else {
+                    None
+                },
             })
         })
         .collect();
@@ -7743,6 +7762,8 @@ async fn api_connections_get(
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     require_auth(&headers, state.auth_token.as_deref())?;
+    // Same disk refresh as GET /api/env-config, so Reload from .env sees hand edits.
+    env_config::load_env(&state).await?;
     Ok(Json(connections_json(&state.app_state)))
 }
 
@@ -7814,6 +7835,12 @@ async fn api_connections_patch(
                     .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
             } else {
                 let secret = body.secret.unwrap_or_default();
+                if is_key_mask_placeholder(&secret) {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        "Enter a new API key to replace the current one.".into(),
+                    ));
+                }
                 crate::engine_connections::write_secret(&data_dir, name, &secret)
                     .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
                 env_config::persist_pairs(&[(name, Some(secret.trim()))])
@@ -7836,9 +7863,14 @@ async fn api_connections_patch(
         }
     }
     let mut payload = connections_json(&state.app_state);
-    payload["message"] = json!(
-        "Connection saved in .env. A key already in .env is the one Meido uses. Cursor uses a saved key the next time its sidecar starts."
-    );
+    let message = if def.id == "cursor" && !body.clear {
+        "Cursor key saved. It replaces CURSOR_API_KEY in .env. The bridge sidecar uses it the next time it starts."
+    } else if body.clear {
+        "Saved key removed."
+    } else {
+        "Connection saved in .env. A key already in .env is the one Meido uses."
+    };
+    payload["message"] = json!(message);
     Ok(Json(payload))
 }
 
