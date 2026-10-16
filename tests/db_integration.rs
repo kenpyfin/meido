@@ -3,13 +3,10 @@
 //! Tests full lifecycle operations across multiple tables,
 //! verifying cross-table consistency and complex query patterns.
 
-use finally_a_value_bot::db::{message_origin_interactive, Database, StoredMessage};
+use meido::db::{message_origin_interactive, Database, StoredMessage};
 
 fn test_db() -> (Database, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!(
-        "finally_a_value_bot_integ_{}",
-        uuid::Uuid::new_v4()
-    ));
+    let dir = std::env::temp_dir().join(format!("meido_integ_{}", uuid::Uuid::new_v4()));
     let db = Database::new(dir.to_str().unwrap()).unwrap();
     (db, dir)
 }
@@ -42,6 +39,7 @@ fn test_message_full_lifecycle() {
             is_from_bot: false,
             timestamp: format!("2024-01-01T00:00:{:02}Z", i),
             origin: message_origin_interactive(),
+            speaker_persona_id: None,
         })
         .unwrap();
     }
@@ -56,6 +54,7 @@ fn test_message_full_lifecycle() {
             is_from_bot: false,
             timestamp: format!("2024-01-01T00:00:{:02}Z", i),
             origin: message_origin_interactive(),
+            speaker_persona_id: None,
         })
         .unwrap();
     }
@@ -329,6 +328,7 @@ fn test_catch_up_query_complex() {
             is_from_bot: *is_bot,
             timestamp: ts.to_string(),
             origin: message_origin_interactive(),
+            speaker_persona_id: None,
         })
         .unwrap();
     }
@@ -369,6 +369,7 @@ fn test_new_user_messages_since() {
             is_from_bot: *is_bot,
             timestamp: ts.to_string(),
             origin: message_origin_interactive(),
+            speaker_persona_id: None,
         })
         .unwrap();
     }
@@ -404,6 +405,7 @@ fn test_chat_and_messages_together() {
         is_from_bot: false,
         timestamp: "2024-01-01T00:00:00Z".into(),
         origin: message_origin_interactive(),
+        speaker_persona_id: None,
     })
     .unwrap();
 

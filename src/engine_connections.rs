@@ -1,5 +1,11 @@
 //! Gateway API connections that are not in `.env`.
 //!
+//! `supported` is the set Settings → Connections lists. That set matches the
+//! installer (Anthropic, OpenAI, Gemini, xAI, OpenRouter, DeepSeek) plus the
+//! local model server, Cursor, and Perplexity. The installer writes one of
+//! those keys as the starting provider. Other catalog providers stay in
+//! `CONNECTIONS` so a saved key can still be resolved, and they are not listed.
+//!
 //! Values live in `runtime/secrets/connections.env` (owner-only). `.env` wins when
 //! the same variable is set. Responses never include the stored value.
 
@@ -21,6 +27,8 @@ pub struct ConnectionDef {
     pub secret_name: Option<&'static str>,
     pub provider_id: Option<&'static str>,
     pub featured: bool,
+    /// Listed on Settings → Connections. The installer offers one of these as the starting key.
+    pub supported: bool,
     pub used_by: &'static str,
 }
 
@@ -32,7 +40,8 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: None,
         provider_id: None,
         featured: true,
-        used_by: "Topic titles and Classic · Cost routing",
+        supported: true,
+        used_by: "System LLM and Classic · Cost routing",
     },
     ConnectionDef {
         id: "anthropic",
@@ -41,7 +50,8 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: Some("ANTHROPIC_API_KEY"),
         provider_id: Some("anthropic"),
         featured: true,
-        used_by: "Single turn chat model",
+        supported: true,
+        used_by: "Channel chat and system LLM",
     },
     ConnectionDef {
         id: "openai",
@@ -50,7 +60,8 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: Some("OPENAI_API_KEY"),
         provider_id: Some("openai"),
         featured: true,
-        used_by: "Single turn chat model",
+        supported: true,
+        used_by: "Channel chat and system LLM",
     },
     ConnectionDef {
         id: "google",
@@ -59,7 +70,8 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: Some("GEMINI_API_KEY"),
         provider_id: Some("google"),
         featured: true,
-        used_by: "Chat model and Gemini ADK",
+        supported: true,
+        used_by: "Channel chat, system LLM, and Gemini ADK",
     },
     ConnectionDef {
         id: "xai",
@@ -68,7 +80,8 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: Some("XAI_API_KEY"),
         provider_id: Some("xai"),
         featured: true,
-        used_by: "Single turn chat model",
+        supported: true,
+        used_by: "Channel chat and system LLM",
     },
     ConnectionDef {
         id: "cursor",
@@ -77,6 +90,7 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: Some("CURSOR_API_KEY"),
         provider_id: None,
         featured: true,
+        supported: true,
         used_by: "Cursor engine",
     },
     ConnectionDef {
@@ -86,6 +100,7 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: Some("PERPLEXITY_API_KEY"),
         provider_id: None,
         featured: true,
+        supported: true,
         used_by: "Quality checks when no local model is configured",
     },
     ConnectionDef {
@@ -95,7 +110,8 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: Some("OPENROUTER_API_KEY"),
         provider_id: Some("openrouter"),
         featured: false,
-        used_by: "Single turn chat model",
+        supported: true,
+        used_by: "Channel chat and system LLM",
     },
     ConnectionDef {
         id: "deepseek",
@@ -104,7 +120,8 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: Some("DEEPSEEK_API_KEY"),
         provider_id: Some("deepseek"),
         featured: false,
-        used_by: "Single turn chat model",
+        supported: true,
+        used_by: "Channel chat and system LLM",
     },
     ConnectionDef {
         id: "mistral",
@@ -113,7 +130,8 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: Some("MISTRAL_API_KEY"),
         provider_id: Some("mistral"),
         featured: false,
-        used_by: "Single turn chat model",
+        supported: false,
+        used_by: "Channel chat and system LLM",
     },
     ConnectionDef {
         id: "cohere",
@@ -122,7 +140,8 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: Some("COHERE_API_KEY"),
         provider_id: Some("cohere"),
         featured: false,
-        used_by: "Single turn chat model",
+        supported: false,
+        used_by: "Channel chat and system LLM",
     },
     ConnectionDef {
         id: "huggingface",
@@ -131,7 +150,8 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: Some("HF_TOKEN"),
         provider_id: Some("huggingface"),
         featured: false,
-        used_by: "Single turn chat model",
+        supported: false,
+        used_by: "Channel chat and system LLM",
     },
     ConnectionDef {
         id: "together",
@@ -140,7 +160,8 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: Some("TOGETHER_API_KEY"),
         provider_id: Some("together"),
         featured: false,
-        used_by: "Single turn chat model",
+        supported: false,
+        used_by: "Channel chat and system LLM",
     },
     ConnectionDef {
         id: "moonshot",
@@ -149,7 +170,8 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: Some("MOONSHOT_API_KEY"),
         provider_id: Some("moonshot"),
         featured: false,
-        used_by: "Single turn chat model",
+        supported: false,
+        used_by: "Channel chat and system LLM",
     },
     ConnectionDef {
         id: "alibaba",
@@ -158,7 +180,8 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: Some("DASHSCOPE_API_KEY"),
         provider_id: Some("alibaba"),
         featured: false,
-        used_by: "Single turn chat model",
+        supported: false,
+        used_by: "Channel chat and system LLM",
     },
     ConnectionDef {
         id: "minimax",
@@ -167,7 +190,8 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: Some("MINIMAX_API_KEY"),
         provider_id: Some("minimax"),
         featured: false,
-        used_by: "Single turn chat model",
+        supported: false,
+        used_by: "Channel chat and system LLM",
     },
     ConnectionDef {
         id: "zhipu",
@@ -176,7 +200,8 @@ pub const CONNECTIONS: &[ConnectionDef] = &[
         secret_name: Some("ZHIPU_API_KEY"),
         provider_id: Some("zhipu"),
         featured: false,
-        used_by: "Single turn chat model",
+        supported: false,
+        used_by: "Channel chat and system LLM",
     },
 ];
 

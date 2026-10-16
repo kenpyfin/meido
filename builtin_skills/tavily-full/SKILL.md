@@ -31,7 +31,7 @@ python3 workspace/skills/tavily-full/tavily_tool.py usage
 python3 builtin_skills/tavily-full/tavily_tool.py usage
 ```
 
-If `builtin_skills/` is not next to your `workspace/` data root, set **`FINALLY_A_VALUE_BOT_BUILTIN_SKILLS`** to the absolute directory that contains `tavily-full/`, then point `python3` at `…/tavily-full/tavily_tool.py` there.
+If `builtin_skills/` is not next to your `workspace/` data root, set **`MEIDO_BUILTIN_SKILLS`** to the absolute directory that contains `tavily-full/`, then point `python3` at `…/tavily-full/tavily_tool.py` there.
 
 ### Commands
 

@@ -602,10 +602,7 @@ Instructions.
 
     #[test]
     fn test_build_skills_catalog_empty() {
-        let dir = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_skills_test_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("meido_skills_test_{}", uuid::Uuid::new_v4()));
         let sm = SkillManager::new(dir.to_str().unwrap());
         let catalog = sm.build_skills_catalog();
         assert!(catalog.is_empty());
@@ -615,7 +612,7 @@ Instructions.
     #[test]
     fn test_build_skills_catalog_excludes_body() {
         let dir = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_skills_catalog_body_{}",
+            "meido_skills_catalog_body_{}",
             uuid::Uuid::new_v4()
         ));
         std::fs::create_dir_all(dir.join("demo")).unwrap();
@@ -635,10 +632,8 @@ Instructions.
 
     #[test]
     fn test_build_skills_catalog_compact_omits_when_to_use() {
-        let dir = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_skills_compact_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("meido_skills_compact_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(dir.join("tiny")).unwrap();
         let md = "---\nname: tiny\ndescription: Short desc\nwhen_to_use: |\n  HIDDEN_WHEN_TO_USE_LINE\n---\nbody\n";
         std::fs::write(dir.join("tiny").join("SKILL.md"), md).unwrap();
@@ -652,10 +647,8 @@ Instructions.
 
     #[test]
     fn test_build_skills_catalog_truncates_long_when_to_use() {
-        let dir = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_skills_when_long_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("meido_skills_when_long_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(dir.join("long")).unwrap();
         let long = "a".repeat(900);
         let md = format!("---\nname: long\ndescription: x\nwhen_to_use: \"{long}\"\n---\nb\n");

@@ -11,19 +11,28 @@ use super::{schema_object, Tool, ToolResult};
 
 pub struct EditFileTool {
     working_dir: PathBuf,
+    origin_vault: PathBuf,
     env_redactor: Option<Arc<EnvSecretRedactor>>,
 }
 
 impl EditFileTool {
     pub fn new(working_dir: &str) -> Self {
+        let working_dir = PathBuf::from(working_dir);
+        let origin_vault = working_dir.join("shared").join("ORIGIN");
         Self {
-            working_dir: PathBuf::from(working_dir),
+            working_dir,
+            origin_vault,
             env_redactor: None,
         }
     }
 
     pub fn with_redactor(mut self, redactor: Arc<EnvSecretRedactor>) -> Self {
         self.env_redactor = Some(redactor);
+        self
+    }
+
+    pub fn with_origin_vault(mut self, origin_vault: PathBuf) -> Self {
+        self.origin_vault = origin_vault;
         self
     }
 }
@@ -66,7 +75,13 @@ impl Tool for EditFileTool {
         let auth = super::auth_context_from_input(&input);
         let working_dir =
             super::resolve_tool_working_dir_for_auth(&self.working_dir, auth.as_ref());
-        let resolved_path = super::resolve_tool_path(&self.working_dir, &working_dir, path);
+        let resolved_path = super::resolve_tool_path_with_origin(
+            &self.working_dir,
+            &working_dir,
+            path,
+            &self.origin_vault,
+            auth.as_ref().and_then(|a| a.vector_db_root.as_deref()),
+        );
         let resolved_path_str = resolved_path.to_string_lossy().to_string();
 
         if let Err(msg) = crate::tools::path_guard::check_path(&resolved_path_str) {
@@ -77,11 +92,12 @@ impl Tool for EditFileTool {
         {
             return ToolResult::error(msg);
         }
-        if let Err(msg) = super::assert_persona_tool_path_allowed(
+        if let Err(msg) = super::assert_persona_tool_path_allowed_with_origin(
             &self.working_dir,
             &resolved_path,
             auth.as_ref(),
             true,
+            &self.origin_vault,
         ) {
             return ToolResult::error(msg);
         }
@@ -133,8 +149,7 @@ mod tests {
     use serde_json::json;
 
     fn setup_file(content: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-        let dir =
-            std::env::temp_dir().join(format!("finally_a_value_bot_ef_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("meido_ef_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("edit_me.txt");
         std::fs::write(&file, content).unwrap();
@@ -217,8 +232,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_edit_file_resolves_relative_to_working_dir() {
-        let root =
-            std::env::temp_dir().join(format!("finally_a_value_bot_ef2_{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("meido_ef2_{}", uuid::Uuid::new_v4()));
         let work = root.join("workspace");
         let shared = work.join("shared");
         std::fs::create_dir_all(&shared).unwrap();

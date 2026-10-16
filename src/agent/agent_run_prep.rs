@@ -198,11 +198,15 @@ pub async fn prepare_agent_run(
         control_chat_ids: state.config.control_chat_ids.clone(),
         is_scheduled_task: context.is_scheduled_task,
         session_id: context.session_id.clone(),
+        vector_db_root: state.config.vector_db_root(),
+        external_roots: state.external_roots_for_persona(persona_id),
     };
-    let locate_registry = crate::tools::locate::build_registry(
+    let origin_vault = state.config.origin_vault_root();
+    let locate_registry = crate::tools::locate::build_registry_with_origin(
         &state.config.workspace_root_absolute(),
         Some(&locate_auth),
         persona_memory_state.as_ref(),
+        &origin_vault,
     );
     let locate_roots_section = crate::tools::locate::format_registry_for_prompt(&locate_registry);
     let system_prompt = build_system_prompt(
@@ -357,6 +361,8 @@ pub async fn prepare_agent_run(
         control_chat_ids: state.config.control_chat_ids.clone(),
         is_scheduled_task: context.is_scheduled_task,
         session_id: context.session_id.clone(),
+        vector_db_root: state.config.vector_db_root(),
+        external_roots: state.external_roots_for_persona(persona_id),
     };
 
     let mut tool_defs = state.tools.definitions();
@@ -500,7 +506,7 @@ fn build_config_env_summary(state: &AppState) -> String {
         Err(_) => std::env::current_dir()
             .map(|d| {
                 format!(
-                    "{} — config path resolution failed; check FINALLY_A_VALUE_BOT_CONFIG",
+                    "{} — config path resolution failed; check MEIDO_CONFIG",
                     d.display()
                 )
             })

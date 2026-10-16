@@ -2,6 +2,7 @@ import React from 'react'
 import type { AppDialogsProps } from './dialogs/types'
 export type {
   AppDialogsSettingsProps,
+  AppDialogsPersonaProps,
   AppDialogsQueueProps,
   AppDialogsSchedulesProps,
   AppDialogsInboxProps,
@@ -15,6 +16,7 @@ export type {
   Appearance,
 } from './dialogs/types'
 import { SettingsDialog } from './dialogs/settings-dialog'
+import { PersonaDialog } from './dialogs/persona-dialog'
 import { QueueDialog } from './dialogs/queue-dialog'
 import { InboxDialog } from './dialogs/inbox-dialog'
 import { SchedulesDialog } from './dialogs/schedules-dialog'
@@ -33,6 +35,7 @@ export function AppDialogs(props: AppDialogsProps) {
     activePersonaId,
     personas,
     settings,
+    persona,
     queue,
     schedules,
     inbox,
@@ -53,6 +56,12 @@ export function AppDialogs(props: AppDialogsProps) {
         activePersonaId={activePersonaId}
         personas={personas}
         settings={settings}
+      />
+      <PersonaDialog
+        api={api}
+        activePersonaId={activePersonaId}
+        personas={personas}
+        persona={persona}
       />
       <QueueDialog appearance={appearance} queue={queue} />
       <InboxDialog appearance={appearance} personas={personas} inbox={inbox} />

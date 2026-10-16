@@ -12,7 +12,7 @@ recycle_cursor_sidecar() {
   local port="${CURSOR_SDK_RUNNER_PORT:-3848}"
   local url="${CURSOR_SDK_RUNNER_URL:-http://127.0.0.1:${port}}"
   url="${url%/}"
-  local runtime_dir="${FINALLY_A_VALUE_BOT_RUNTIME_DATA:-${repo_root}/workspace/runtime}"
+  local runtime_dir="${MEIDO_RUNTIME_DATA:-${FINALLY_A_VALUE_BOT_RUNTIME_DATA:-${repo_root}/workspace/runtime}}"
   local pid_file="${runtime_dir}/cursor-sdk-sidecar.pid"
   local soft_wait_secs="${CURSOR_SIDECAR_RELOAD_SOFT_WAIT_SECS:-60}"
   local i=0

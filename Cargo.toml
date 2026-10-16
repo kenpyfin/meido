@@ -1,10 +1,14 @@
 [package]
-name = "finally-a-value-bot"
-version = "0.0.37"
+name = "meido"
+version = "1.2.2"
 edition = "2021"
-description = "Meido - finally a helpful one. Web-first agentic assistant."
+description = "Meido - finally a helpful one. Web-first agentic assistant with multi-channel support."
 repository = "https://github.com/kenpyfin/meido"
 license-file = "LICENSE"
+
+[[bin]]
+name = "meido"
+path = "src/main.rs"
 
 [lints.clippy]
 too_many_arguments = "allow"
@@ -24,6 +28,8 @@ single_char_add_str = "allow"
 unnecessary_lazy_evaluations = "allow"
 ptr_arg = "allow"
 unnecessary_cast = "allow"
+# async_trait and async_recursion attach must_use to futures that are already must_use.
+double_must_use = "allow"
 
 [dependencies]
 teloxide = { version = "0.17", features = ["macros"] }

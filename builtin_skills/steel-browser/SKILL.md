@@ -26,10 +26,10 @@ Steel provides isolated cloud (or self-hosted) Chrome sessions with a **session 
 
 ```bash
 docker run -d \
-  --name finally-a-value-bot-steel \
+  --name meido-steel \
   -p 13920:3000 -p 13923:9223 \
-  -v finally-a-value-bot-steel-cache:/app/.cache \
-  -v finally-a-value-bot-steel-profile:/app/api/user-data-dir \
+  -v meido-steel-cache:/app/.cache \
+  -v meido-steel-profile:/app/api/user-data-dir \
   -e DOMAIN=127.0.0.1:13920 \
   -e CDP_DOMAIN=127.0.0.1:13923 \
   ghcr.io/steel-dev/steel-browser:latest
@@ -104,7 +104,7 @@ Or system Python when `steel-sdk` and `playwright` are installed globally.
 
 Steel Cloud uses **Profiles** (`--persist-profile`, `STEEL_PROFILE_ID`). Self-hosted Steel uses a mounted Chrome user-data directory instead:
 
-1. Mount `finally-a-value-bot-steel-profile:/app/api/user-data-dir` on the container (included when `BROWSER_MANAGED=true`).
+1. Mount `meido-steel-profile:/app/api/user-data-dir` on the container (included when `BROWSER_MANAGED=true`).
 2. Set `STEEL_PERSIST=true` in this skill's `.env`.
 3. `session create --persist` → log in once via session viewer → `session release`.
 4. Future `session create --persist` calls reopen the same Instagram login, even after `docker restart`.

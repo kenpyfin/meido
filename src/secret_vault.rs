@@ -434,7 +434,7 @@ fn mask_secret_fields(value: &Value) -> Value {
             for (k, v) in map {
                 if k == "value" {
                     out.insert(k.clone(), Value::String("[REDACTED_SECRET]".into()));
-                } else if k == "__finally_a_value_bot_auth" {
+                } else if k == "__meido_auth" {
                     out.insert(k.clone(), v.clone());
                 } else {
                     out.insert(k.clone(), mask_secret_fields(v));
@@ -608,7 +608,9 @@ pub fn secrets_command_reply(
                 if also_skill {
                     format!("Forgot {name} from this chat's vault and its skill .env.")
                 } else {
-                    format!("Forgot {name} from this chat's vault. The skill .env copy was left in place.")
+                    format!(
+                        "Forgot {name} from this chat's vault. The skill .env copy was left in place."
+                    )
                 }
             }
             Err(e) => e,

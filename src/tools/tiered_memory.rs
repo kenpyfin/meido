@@ -276,7 +276,7 @@ impl Tool for ReadTieredMemoryTool {
             None => {
                 return ToolResult::success(
                     "No canonical memory state found (not yet created).".into(),
-                )
+                );
             }
         };
         let state_path = self.memory.persona_memory_state_path(chat_id, persona_id);
@@ -310,6 +310,11 @@ impl WriteTieredMemoryTool {
         WriteTieredMemoryTool {
             memory: MemoryManager::new(data_dir, data_dir),
         }
+    }
+
+    pub fn with_origin_vault(mut self, root: std::path::PathBuf) -> Self {
+        self.memory = self.memory.with_origin_vault_root(root);
+        self
     }
 }
 
@@ -368,7 +373,7 @@ impl Tool for WriteTieredMemoryTool {
         {
             Some(n) => n as u8,
             None => {
-                return ToolResult::error("Missing or invalid 'tier' (must be 1, 2, or 3)".into())
+                return ToolResult::error("Missing or invalid 'tier' (must be 1, 2, or 3)".into());
             }
         };
         let content = input.get("content").and_then(|v| v.as_str()).unwrap_or("");

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BIN_NAME="finally-a-value-bot"
+BIN_NAME="meido"
 
 log_info() { printf "\x1b[34m[INFO]\x1b[0m %s\n" "$*"; }
 log_success() { printf "\x1b[32m[SUCCESS]\x1b[0m %s\n" "$*"; }
@@ -26,7 +26,9 @@ detect_os() {
 resolve_targets() {
   local out=()
 
-  if [ -n "${FINALLY_A_VALUE_BOT_INSTALL_DIR:-}" ]; then
+  if [ -n "${MEIDO_INSTALL_DIR:-}" ]; then
+    out+=("${MEIDO_INSTALL_DIR%/}/$BIN_NAME")
+  elif [ -n "${FINALLY_A_VALUE_BOT_INSTALL_DIR:-}" ]; then
     out+=("${FINALLY_A_VALUE_BOT_INSTALL_DIR%/}/$BIN_NAME")
   fi
 
@@ -70,7 +72,7 @@ remove_file() {
 
 remove_gateway_service() {
   local candidates=(
-    "${FINALLY_A_VALUE_BOT_INSTALL_DIR:-}/$BIN_NAME"
+    "${MEIDO_INSTALL_DIR:-${FINALLY_A_VALUE_BOT_INSTALL_DIR:-}}/$BIN_NAME"
     "$(command -v "$BIN_NAME" 2>/dev/null || true)"
     "/usr/local/bin/$BIN_NAME"
     "$HOME/.local/bin/$BIN_NAME"
@@ -88,11 +90,11 @@ remove_gateway_service() {
     return 0
   fi
 
-  log_info "Uninstalling gateway service via CLI..."
+  log_info "Uninstalling the login service (meido gateway)..."
   if "$cmd" gateway uninstall >/dev/null 2>&1; then
-    log_success "Gateway service uninstalled."
+    log_success "Login service uninstalled. meido start still serves the web UI."
   else
-    log_warn "Gateway uninstall skipped or failed (service may not be installed)."
+    log_warn "Login service uninstall skipped or failed (it may not be installed)."
   fi
 }
 
@@ -131,9 +133,7 @@ main() {
   printf "\n"
   log_success "$BIN_NAME has been removed."
   log_info "Optional cleanup (not removed automatically):"
-  log_info "  rm -rf ./finally-a-value-bot.data/runtime"
-  log_info "  rm -f ./finally-a-value-bot.config.yaml ./finally-a-value-bot.config.yml"
-  log_info "  rm -rf ./workspace"
+  log_info "  Meido state is under WORKSPACE_DIR (default ./workspace), not a Finally a Value Bot data directory."
 }
 
 main "$@"

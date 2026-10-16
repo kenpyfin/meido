@@ -84,13 +84,13 @@ impl Tool for ActivateSkillTool {
                     return ToolResult::error(format!(
                         "Skill '{skill_name}' is not allowed for persona {}.",
                         auth.caller_persona_id
-                    ))
+                    ));
                 }
                 Ok(true) => {}
                 Err(e) => {
                     return ToolResult::error(format!(
                         "Failed to evaluate skill policy for '{skill_name}': {e}"
-                    ))
+                    ));
                 }
             }
         }
@@ -144,7 +144,7 @@ mod tests {
 
     fn test_dir() -> PathBuf {
         std::env::temp_dir().join(format!(
-            "finally_a_value_bot_activate_skill_test_{}",
+            "meido_activate_skill_test_{}",
             uuid::Uuid::new_v4()
         ))
     }

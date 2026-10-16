@@ -18,7 +18,7 @@ const CONVERSATION_MEMORY_HEADING: &str = "## Conversation Memory";
 const AGENT_SKILLS_HEADING: &str = "# Agent Skills";
 
 const MCP_TOOLS_DELEGATION_SECTION: &str = r#"## Tool groups (MCP delegation)
-Bot tools are exposed via MCP server `finally-a-value-bot` (loopback). Tool names and parameter schemas come from MCP `tools/list` — do not rely on prose catalogs here.
+Bot tools are exposed via MCP server `meido` (loopback). Tool names and parameter schemas come from MCP `tools/list` — do not rely on prose catalogs here.
 - **Prefer MCP** for persona-scoped files (`read_file`, `write_file`, `grep`, …), recall (`recall`) and known vault paths (`read_file`, `locate_file`), scheduler, bulletin (`update_bulletin_focus`), operator todos (`add_todo` / `list_todos` / `complete_todo`), channel delivery, and skills (`activate_skill`, `run_skill_script`).
 - Cursor built-ins (shell, search) exist; use MCP file tools for paths under the persona cwd and for vault/scheduler/bulletin/todo workflows.
 - **Skills:** metadata in the Agent Skills section below is routing only; call `activate_skill` before following procedural skill steps.
@@ -41,10 +41,9 @@ const TIER1_HEADING: &str = "# Identity and long-term memory (Tier 1)";
 const MAX_TIER1_ANCHOR_CHARS: usize = 4_096;
 const GIT_DISCIPLINE_LINE: &str = "Git discipline: persona cwd is not the project git root. \
 For commit/push/merge, cd to the Tier 1 project repo path first (`Repo: …` — fully allowed). \
-Never use git against the finally-a-value-bot install/source checkout.\n";
+Never use git against the Meido install/source checkout.\n";
 
-const SELF_REPO_BAN_LINE: &str =
-    "Self-repo ban: never treat the finally-a-value-bot source/install \
+const SELF_REPO_BAN_LINE: &str = "Self-repo ban: never treat the Meido source/install \
 git checkout as a development project (no branch deletes, force-push, reset, or edits there). \
 Persona Tier-1 target repos (`Repo: /absolute/path`) are fully allowed.\n";
 

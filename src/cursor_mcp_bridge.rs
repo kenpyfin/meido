@@ -25,8 +25,8 @@ use crate::tool_hook_dispatch::{
 use crate::tools::tool_cancel::{request_cancel, scope_tool_cancel};
 use crate::tools::{ToolAuthContext, ToolResult};
 
-pub const MCP_SERVER_NAME: &str = "finally-a-value-bot";
-const AUTH_CONTEXT_KEY: &str = "__finally_a_value_bot_auth";
+pub const MCP_SERVER_NAME: &str = "meido";
+const AUTH_CONTEXT_KEY: &str = "__meido_auth";
 const RUN_TTL_SECS: u64 = 3600;
 /// Official MCP protocol versions we speak (newest first).
 /// Note: `2025-11-05` is **not** a real MCP version (common mix-up of `2024-11-05` + `2025-11-25`).
@@ -497,7 +497,7 @@ pub async fn handle_cursor_mcp(
                         "tools": {}
                     },
                     "serverInfo": {
-                        "name": "finally_a_value_bot",
+                        "name": env!("CARGO_PKG_NAME"),
                         "version": env!("CARGO_PKG_VERSION")
                     }
                 }),

@@ -230,10 +230,8 @@ fn map_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScheduledRunRow> {
     })
 }
 
-const RUN_LIST_COLS: &str =
-    "id, task_id, chat_id, persona_id, started_at, finished_at, status, preview, NULL, NULL, error, read_at";
-const RUN_FULL_COLS: &str =
-    "id, task_id, chat_id, persona_id, started_at, finished_at, status, preview, output, output_path, error, read_at";
+const RUN_LIST_COLS: &str = "id, task_id, chat_id, persona_id, started_at, finished_at, status, preview, NULL, NULL, error, read_at";
+const RUN_FULL_COLS: &str = "id, task_id, chat_id, persona_id, started_at, finished_at, status, preview, output, output_path, error, read_at";
 
 impl Database {
     pub fn insert_scheduled_run(
@@ -1106,10 +1104,9 @@ fn attachment_ref(content: &str) -> Option<(&'static str, i64)> {
     let rest = content.trim_start();
     let (kind, rest) = if let Some(rest) = rest.strip_prefix("[[scheduled_run:") {
         ("run", rest)
-    } else if let Some(rest) = rest.strip_prefix("[[scheduled_task:") {
-        ("task", rest)
     } else {
-        return None;
+        let rest = rest.strip_prefix("[[scheduled_task:")?;
+        ("task", rest)
     };
     let id_txt = rest.split(']').next()?;
     let id = id_txt.parse().ok()?;

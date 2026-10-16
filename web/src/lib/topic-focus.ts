@@ -6,7 +6,7 @@ import {
 } from './conversation-topics'
 import { stripDocumentNoteLines } from './user-attachment-notes'
 
-export const THREAD_SURFACE_KEY = 'finally-a-value-bot_thread_surface'
+export const THREAD_SURFACE_KEY = 'meido_thread_surface'
 export const TOPIC_DOSSIER_LIMIT = 20
 
 export type ThreadSurface = 'focus' | 'transcript'

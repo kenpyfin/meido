@@ -135,7 +135,7 @@ impl Tool for ValidateMemoryStateTool {
                 None => {
                     return ToolResult::success(
                         "No memory state found; nothing to validate yet.".into(),
-                    )
+                    );
                 }
             }
         };
@@ -156,6 +156,11 @@ impl WriteMemoryStateTool {
         Self {
             memory: MemoryManager::new(data_dir, working_dir),
         }
+    }
+
+    pub fn with_origin_vault(mut self, root: std::path::PathBuf) -> Self {
+        self.memory = self.memory.with_origin_vault_root(root);
+        self
     }
 }
 
@@ -251,6 +256,11 @@ impl PatchMemoryStateTool {
         Self {
             memory: MemoryManager::new(data_dir, working_dir),
         }
+    }
+
+    pub fn with_origin_vault(mut self, root: std::path::PathBuf) -> Self {
+        self.memory = self.memory.with_origin_vault_root(root);
+        self
     }
 }
 

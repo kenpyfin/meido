@@ -22,7 +22,7 @@ pub struct CursorAgentTool {
 }
 
 fn in_docker() -> bool {
-    std::env::var("FINALLY_A_VALUE_BOT_IN_DOCKER").as_deref() == Ok("1")
+    crate::meido_env::is_flag_one(crate::meido_env::IN_DOCKER)
         || std::path::Path::new("/.dockerenv").exists()
 }
 
@@ -195,7 +195,7 @@ impl CursorAgentTool {
         }
         let prefix = self.config.cursor_agent_tmux_session_prefix.trim();
         let prefix = if prefix.is_empty() {
-            "finally_a_value_bot-cursor"
+            "meido-cursor"
         } else {
             prefix
         };
@@ -679,7 +679,7 @@ impl Tool for CursorAgentSendTool {
                 json!({
                     "tmux_session": {
                         "type": "string",
-                        "description": "The tmux session name (e.g. finally_a_value_bot-cursor-1234567890). Use list_cursor_agent_runs to see running sessions."
+                        "description": "The tmux session name (e.g. meido-cursor-1234567890). Use list_cursor_agent_runs to see running sessions."
                     },
                     "keys": {
                         "type": "string",
@@ -703,7 +703,7 @@ impl Tool for CursorAgentSendTool {
         }
         let prefix = self.config.cursor_agent_tmux_session_prefix.trim();
         let prefix = if prefix.is_empty() {
-            "finally_a_value_bot-cursor"
+            "meido-cursor"
         } else {
             prefix
         };
@@ -834,8 +834,8 @@ Put any credentials or config (e.g. .env, API keys) inside the skill folder {}/{
         let cursor_tool = CursorAgentTool::new(&self.config, self.db.clone());
         let mut cursor_input = serde_json::json!({ "prompt": prompt });
         cursor_input["detach"] = serde_json::json!(true);
-        if let Some(auth) = input.get("__finally_a_value_bot_auth") {
-            cursor_input["__finally_a_value_bot_auth"] = auth.clone();
+        if let Some(auth) = input.get("__meido_auth") {
+            cursor_input["__meido_auth"] = auth.clone();
         }
         let result = cursor_tool.execute(cursor_input).await;
 

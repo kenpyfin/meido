@@ -461,7 +461,10 @@ pub fn spawn_background_job(
                     "Background job: format pass failed: {e}"
                 );
                 let fallback = if raw_success {
-                    format!("Your background task completed, but I had trouble generating a summary. Here is the raw result:\n\n{}", raw_output)
+                    format!(
+                        "Your background task completed, but I had trouble generating a summary. Here is the raw result:\n\n{}",
+                        raw_output
+                    )
                 } else {
                     format!("Your background task failed: {}", raw_output)
                 };

@@ -68,10 +68,8 @@ impl Tool for SpawnBackgroundCommandTool {
         let auth = match auth_context_from_input(&input) {
             Some(a) => a,
             None => {
-                return ToolResult::error(
-                    "Missing auth context (__finally_a_value_bot_auth)".into(),
-                )
-                .with_error_type("auth_required");
+                return ToolResult::error("Missing auth context (__meido_auth)".into())
+                    .with_error_type("auth_required");
             }
         };
 
@@ -96,17 +94,30 @@ impl Tool for SpawnBackgroundCommandTool {
         }
 
         let workspace_root = PathBuf::from(self.config.working_dir());
+        let origin_vault = self.config.origin_vault_root();
         let tool_working_dir =
             super::resolve_tool_working_dir_for_auth(&workspace_root, Some(&auth));
         let workdir = input
             .get("workdir")
             .and_then(|v| v.as_str())
             .filter(|s| !s.trim().is_empty())
-            .map(|p| super::resolve_tool_path(&workspace_root, &tool_working_dir, p))
+            .map(|p| {
+                super::resolve_tool_path_with_origin(
+                    &workspace_root,
+                    &tool_working_dir,
+                    p,
+                    &origin_vault,
+                    auth.vector_db_root.as_deref(),
+                )
+            })
             .unwrap_or(tool_working_dir);
-        if let Err(msg) =
-            super::assert_persona_tool_path_allowed(&workspace_root, &workdir, Some(&auth), true)
-        {
+        if let Err(msg) = super::assert_persona_tool_path_allowed_with_origin(
+            &workspace_root,
+            &workdir,
+            Some(&auth),
+            true,
+            &origin_vault,
+        ) {
             return ToolResult::error(msg);
         }
 

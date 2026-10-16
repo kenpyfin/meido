@@ -40,4 +40,4 @@ Shipped manifests must use `action_type` values starting with `builtin_`.
 
 ## Resolution
 
-The bot locates this directory via `FINALLY_A_VALUE_BOT_BUILTIN_HOOKS`, sibling of `WORKSPACE_DIR`, cwd, executable parent, or `CARGO_MANIFEST_DIR/builtin_hooks` (see `src/builtin_hooks.rs`).
+The bot locates this directory via `MEIDO_BUILTIN_HOOKS` (legacy `FINALLY_A_VALUE_BOT_BUILTIN_HOOKS` still works), sibling of `WORKSPACE_DIR`, cwd, executable parent, or `CARGO_MANIFEST_DIR/builtin_hooks` (see `src/builtin_hooks.rs`).

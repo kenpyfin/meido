@@ -19,8 +19,65 @@ use crate::db::{
 };
 use crate::error::FinallyAValueBotError;
 
-pub const APP_SETTING_TOPICS_MODEL_SOURCE: &str = "TOPICS_MODEL_SOURCE";
-pub const APP_SETTING_TOPICS_MODEL: &str = "TOPICS_MODEL";
+pub const APP_SETTING_SYSTEM_LLM_PROVIDER: &str = "SYSTEM_LLM_PROVIDER";
+pub const APP_SETTING_SYSTEM_LLM_MODEL: &str = "SYSTEM_LLM_MODEL";
+const LEGACY_APP_SETTING_SYSTEM_LLM_PROVIDER: &str = "TOPICS_MODEL_SOURCE";
+const LEGACY_APP_SETTING_SYSTEM_LLM_MODEL: &str = "TOPICS_MODEL";
+
+fn nonempty_setting(value: Option<String>) -> Option<String> {
+    value.filter(|item| !item.trim().is_empty())
+}
+
+fn env_setting(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn save_system_llm_settings(
+    db: &crate::db::Database,
+    provider: &str,
+    model: &str,
+) -> Result<(), crate::error::FinallyAValueBotError> {
+    db.set_app_setting(APP_SETTING_SYSTEM_LLM_PROVIDER, provider)?;
+    db.set_app_setting(APP_SETTING_SYSTEM_LLM_MODEL, model)?;
+    db.set_app_setting(LEGACY_APP_SETTING_SYSTEM_LLM_PROVIDER, "")?;
+    db.set_app_setting(LEGACY_APP_SETTING_SYSTEM_LLM_MODEL, "")?;
+    Ok(())
+}
+
+pub(crate) fn read_system_llm_settings(
+    db: &crate::db::Database,
+) -> Result<(Option<String>, Option<String>), crate::error::FinallyAValueBotError> {
+    let provider = nonempty_setting(db.get_app_setting(APP_SETTING_SYSTEM_LLM_PROVIDER)?).or(
+        nonempty_setting(db.get_app_setting(LEGACY_APP_SETTING_SYSTEM_LLM_PROVIDER)?),
+    );
+    let model = nonempty_setting(db.get_app_setting(APP_SETTING_SYSTEM_LLM_MODEL)?).or(
+        nonempty_setting(db.get_app_setting(LEGACY_APP_SETTING_SYSTEM_LLM_MODEL)?),
+    );
+    Ok((provider, model))
+}
+
+/// Apply installer system-LLM settings when the database does not have them yet.
+///
+/// `SYSTEM_LLM_*` wins. Older installs that only set `TOPICS_MODEL_*` still seed.
+pub fn seed_system_llm_from_env(
+    db: &crate::db::Database,
+) -> Result<(), crate::error::FinallyAValueBotError> {
+    let source = env_setting("SYSTEM_LLM_PROVIDER").or_else(|| env_setting("TOPICS_MODEL_SOURCE"));
+    let Some(source) = source else {
+        return Ok(());
+    };
+    if read_system_llm_settings(db)?.0.is_some() {
+        return Ok(());
+    }
+    db.set_app_setting(APP_SETTING_SYSTEM_LLM_PROVIDER, &source)?;
+    if let Some(model) = env_setting("SYSTEM_LLM_MODEL").or_else(|| env_setting("TOPICS_MODEL")) {
+        db.set_app_setting(APP_SETTING_SYSTEM_LLM_MODEL, &model)?;
+    }
+    Ok(())
+}
 
 const WINDOW_LIMIT: usize = 40;
 const BATCHES_PER_RUN: usize = 3;
@@ -462,7 +519,7 @@ fn drafts_match_open(window: &LoadedWindow, drafts: &[ConversationTopicDraft]) -
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TopicModelChoice {
+pub enum SystemLlmChoice {
     /// OpenAI-compatible server from Settings → Connections.
     Local { base_url: String, model: String },
     /// A catalog provider and model, called directly. Not the cost-routing strategy tier.
@@ -471,7 +528,7 @@ pub enum TopicModelChoice {
     Strategy,
 }
 
-pub struct TopicModelInputs<'a> {
+pub struct SystemLlmInputs<'a> {
     pub saved_source: Option<&'a str>,
     pub saved_model: Option<&'a str>,
     pub prefer_tier2: bool,
@@ -484,7 +541,7 @@ pub struct TopicModelInputs<'a> {
 
 /// Saved Settings override `TOPICS_PREFER_TIER2`. With no saved choice, a verified
 /// Tier 2 endpoint is used when that flag is on.
-pub fn resolve_topic_model_choice(input: TopicModelInputs<'_>) -> TopicModelChoice {
+pub fn resolve_system_llm_choice(input: SystemLlmInputs<'_>) -> SystemLlmChoice {
     let saved_source = input
         .saved_source
         .map(str::trim)
@@ -493,7 +550,7 @@ pub fn resolve_topic_model_choice(input: TopicModelInputs<'_>) -> TopicModelChoi
     let local_base = first_nonempty(input.tier2_base_url, input.local_base_url);
     let default_local_model = first_nonempty(input.tier2_model, input.local_model);
     match saved_source.as_deref() {
-        Some("strategy") => TopicModelChoice::Strategy,
+        Some("strategy") => SystemLlmChoice::Strategy,
         Some("local") => local_choice(
             local_base.as_deref().unwrap_or(""),
             input
@@ -513,7 +570,7 @@ pub fn resolve_topic_model_choice(input: TopicModelInputs<'_>) -> TopicModelChoi
             if input.prefer_tier2 && input.tier2_tools_ok {
                 local_choice(input.tier2_base_url.trim(), input.tier2_model.trim())
             } else {
-                TopicModelChoice::Strategy
+                SystemLlmChoice::Strategy
             }
         }
     }
@@ -524,10 +581,10 @@ fn catalog_choice(
     saved_model: Option<&str>,
     local_base_url: &str,
     default_local_model: &str,
-) -> TopicModelChoice {
+) -> SystemLlmChoice {
     let provider_id = crate::llm_catalog::resolve_catalog_provider_id(provider);
     if crate::llm_catalog::find_provider(&provider_id).is_none() {
-        return TopicModelChoice::Strategy;
+        return SystemLlmChoice::Strategy;
     }
     let saved_model = saved_model.map(str::trim).filter(|s| !s.is_empty());
     if crate::llm_catalog::is_local_provider(&provider_id) {
@@ -536,19 +593,19 @@ fn catalog_choice(
     let model =
         saved_model.unwrap_or_else(|| crate::llm_catalog::default_model_for_provider(&provider_id));
     if model.is_empty() {
-        return TopicModelChoice::Strategy;
+        return SystemLlmChoice::Strategy;
     }
-    TopicModelChoice::Provider {
+    SystemLlmChoice::Provider {
         provider_id,
         model: model.to_string(),
     }
 }
 
-fn local_choice(base_url: &str, model: &str) -> TopicModelChoice {
+fn local_choice(base_url: &str, model: &str) -> SystemLlmChoice {
     if base_url.is_empty() || model.is_empty() {
-        TopicModelChoice::Strategy
+        SystemLlmChoice::Strategy
     } else {
-        TopicModelChoice::Local {
+        SystemLlmChoice::Local {
             base_url: base_url.to_string(),
             model: model.to_string(),
         }
@@ -568,24 +625,18 @@ fn first_nonempty(primary: &str, fallback: &str) -> Option<String> {
     }
 }
 
-pub(crate) async fn load_topic_model_choice(state: &AppState) -> TopicModelChoice {
+pub(crate) async fn load_system_llm_choice(state: &AppState) -> SystemLlmChoice {
     let db = state.db.clone();
-    let saved = call_blocking(db, |db| {
-        Ok((
-            db.get_app_setting(APP_SETTING_TOPICS_MODEL_SOURCE)?,
-            db.get_app_setting(APP_SETTING_TOPICS_MODEL)?,
-        ))
-    })
-    .await;
+    let saved = call_blocking(db, read_system_llm_settings).await;
     let (saved_source, saved_model) = match saved {
         Ok(pair) => pair,
         Err(_) => {
-            warn!("topic model setting could not be read");
+            warn!("system LLM setting could not be read");
             (None, None)
         }
     };
     let mm = state.llm.local_delegate_config();
-    resolve_topic_model_choice(TopicModelInputs {
+    resolve_system_llm_choice(SystemLlmInputs {
         saved_source: saved_source.as_deref(),
         saved_model: saved_model.as_deref(),
         prefer_tier2: state.config.topics_prefer_tier2,
@@ -621,10 +672,11 @@ If the window is a single topic, boundaries is empty. Do not invent ids.";
         role: "user".to_string(),
         content: MessageContent::Text(body),
     }];
-    let (provider_id, model, local_base_url) = match load_topic_model_choice(state).await {
-        TopicModelChoice::Local { base_url, model } => ("llama".to_string(), model, Some(base_url)),
-        TopicModelChoice::Provider { provider_id, model } => (provider_id, model, None),
-        TopicModelChoice::Strategy => {
+    let (provider_id, model, local_base_url) = match load_system_llm_choice(state).await {
+        choice @ (SystemLlmChoice::Local { .. } | SystemLlmChoice::Provider { .. }) => {
+            system_llm_direct(choice).expect("saved system LLM is a direct endpoint")
+        }
+        SystemLlmChoice::Strategy => {
             let db = state.db.clone();
             let persona_id = scope.persona_id;
             let persona = call_blocking(db, move |db| db.get_persona(persona_id))
@@ -634,25 +686,39 @@ If the window is a single topic, boundaries is empty. Do not invent ids.";
             (strategy.provider_id, strategy.model, strategy.base_url)
         }
     };
-    let response = send_topic_prompt(
+    let response = send_direct_llm(
         state,
         &provider_id,
         &model,
         local_base_url.as_deref(),
         system,
         chat_messages,
+        None,
+        crate::llm::LlmSendOptions::default(),
     )
     .await?;
     parse_segment_response(&response_text(&response))
 }
 
-pub(crate) async fn send_topic_prompt(
+pub(crate) fn system_llm_direct(
+    choice: SystemLlmChoice,
+) -> Option<(String, String, Option<String>)> {
+    match choice {
+        SystemLlmChoice::Local { base_url, model } => Some(("llama".into(), model, Some(base_url))),
+        SystemLlmChoice::Provider { provider_id, model } => Some((provider_id, model, None)),
+        SystemLlmChoice::Strategy => None,
+    }
+}
+
+pub(crate) async fn send_direct_llm(
     state: &AppState,
     provider_id: &str,
     model: &str,
     local_base_url: Option<&str>,
     system: &str,
     messages: Vec<Message>,
+    tools: Option<Vec<crate::claude::ToolDefinition>>,
+    options: crate::llm::LlmSendOptions,
 ) -> Result<MessagesResponse, String> {
     let mut cfg = state.config.clone();
     cfg.apply_llm_provider_switch(provider_id, model, local_base_url);
@@ -664,9 +730,30 @@ pub(crate) async fn send_topic_prompt(
     }
     let provider = crate::llm::create_provider(&cfg);
     provider
-        .send_message(system, messages, None)
+        .send_message_with_options(system, messages, tools, options)
         .await
-        .map_err(|_| "topic model request failed".to_string())
+        .map_err(|err| err.to_string())
+}
+
+pub(crate) async fn send_topic_prompt(
+    state: &AppState,
+    provider_id: &str,
+    model: &str,
+    local_base_url: Option<&str>,
+    system: &str,
+    messages: Vec<Message>,
+) -> Result<MessagesResponse, String> {
+    send_direct_llm(
+        state,
+        provider_id,
+        model,
+        local_base_url,
+        system,
+        messages,
+        None,
+        crate::llm::LlmSendOptions::default(),
+    )
+    .await
 }
 
 pub(crate) fn response_text(response: &MessagesResponse) -> String {
@@ -1007,7 +1094,7 @@ mod tests {
 
     #[test]
     fn topic_model_defaults_to_verified_tier2() {
-        let choice = resolve_topic_model_choice(TopicModelInputs {
+        let choice = resolve_system_llm_choice(SystemLlmInputs {
             saved_source: None,
             saved_model: None,
             prefer_tier2: true,
@@ -1019,7 +1106,7 @@ mod tests {
         });
         assert_eq!(
             choice,
-            TopicModelChoice::Local {
+            SystemLlmChoice::Local {
                 base_url: "http://127.0.0.1:8080/v1".into(),
                 model: "qwen2.5-coder:14b".into(),
             }
@@ -1028,7 +1115,7 @@ mod tests {
 
     #[test]
     fn saved_topic_model_overrides_the_env_default() {
-        let strategy = resolve_topic_model_choice(TopicModelInputs {
+        let strategy = resolve_system_llm_choice(SystemLlmInputs {
             saved_source: Some("strategy"),
             saved_model: None,
             prefer_tier2: true,
@@ -1038,9 +1125,9 @@ mod tests {
             local_base_url: "",
             local_model: "",
         });
-        assert_eq!(strategy, TopicModelChoice::Strategy);
+        assert_eq!(strategy, SystemLlmChoice::Strategy);
 
-        let picked = resolve_topic_model_choice(TopicModelInputs {
+        let picked = resolve_system_llm_choice(SystemLlmInputs {
             saved_source: Some("local"),
             saved_model: Some("qwen3-32b"),
             prefer_tier2: false,
@@ -1052,13 +1139,13 @@ mod tests {
         });
         assert_eq!(
             picked,
-            TopicModelChoice::Local {
+            SystemLlmChoice::Local {
                 base_url: "http://127.0.0.1:8080/v1".into(),
                 model: "qwen3-32b".into(),
             }
         );
 
-        let named = resolve_topic_model_choice(TopicModelInputs {
+        let named = resolve_system_llm_choice(SystemLlmInputs {
             saved_source: Some("anthropic"),
             saved_model: Some("claude-sonnet-4-5"),
             prefer_tier2: true,
@@ -1070,7 +1157,7 @@ mod tests {
         });
         assert_eq!(
             named,
-            TopicModelChoice::Provider {
+            SystemLlmChoice::Provider {
                 provider_id: "anthropic".into(),
                 model: "claude-sonnet-4-5".into(),
             }

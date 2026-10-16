@@ -13,15 +13,49 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 load_dotenv(SCRIPT_DIR / ".env")
 
 
-def _default_vault_db_path() -> str:
-    root = os.environ.get("WORKSPACE_DIR") or os.environ.get("FINALLY_A_VALUE_BOT_WORKSPACE_DIR") or os.getcwd()
-    return os.path.abspath(os.path.join(root, "shared", "vault_db"))
+def _checkout_root() -> Path | None:
+    for parent in (SCRIPT_DIR, *SCRIPT_DIR.parents):
+        if (parent / "Cargo.toml").is_file() and (parent / "builtin_skills").is_dir():
+            return parent
+    return None
 
 
-def _default_vault_path() -> str:
-    root = os.environ.get("WORKSPACE_DIR") or os.environ.get("FINALLY_A_VALUE_BOT_WORKSPACE_DIR") or os.getcwd()
-    rel = os.environ.get("VAULT_ORIGIN_VAULT_PATH", "shared/ORIGIN")
-    return os.path.abspath(os.path.join(root, rel))
+def _workspace_root() -> Path:
+    """Workspace directory. A relative WORKSPACE_DIR is anchored at the checkout, not cwd."""
+    raw = (
+        os.environ.get("MEIDO_WORKSPACE_DIR")
+        or os.environ.get("WORKSPACE_DIR")
+        or os.environ.get("FINALLY_A_VALUE_BOT_WORKSPACE_DIR")
+        or ""
+    ).strip()
+    if raw:
+        candidate = Path(raw).expanduser()
+        if candidate.is_absolute():
+            return candidate
+        checkout = _checkout_root()
+        if checkout is not None:
+            return (checkout / candidate).resolve()
+        for parent in (SCRIPT_DIR, *SCRIPT_DIR.parents):
+            resolved = (parent / candidate).resolve()
+            if resolved.is_dir():
+                return resolved
+        return (Path.cwd() / candidate).resolve()
+    for parent in (SCRIPT_DIR, *SCRIPT_DIR.parents):
+        if parent.name == "workspace" and (parent / "shared").is_dir():
+            return parent
+        nested = parent / "workspace"
+        if (nested / "shared").is_dir():
+            return nested
+    return Path.cwd()
+
+
+def _resolve_under_workspace(configured: str | None, default_rel: str) -> str:
+    """Absolute path. Relative values are joined onto the workspace root."""
+    raw = (configured or "").strip() or default_rel
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        return str(path)
+    return str((_workspace_root() / path).resolve())
 
 
 def _require_embed_openai_base() -> str:
@@ -36,9 +70,15 @@ def _require_embed_openai_base() -> str:
     return url.rstrip("/") + "/v1" if not url.endswith("/v1") else url
 
 
-DB_PATH = os.environ.get("VAULT_VECTOR_DB_PATH") or os.environ.get("VAULT_DB_PATH") or _default_vault_db_path()
+DB_PATH = _resolve_under_workspace(
+    os.environ.get("VAULT_VECTOR_DB_PATH") or os.environ.get("VAULT_DB_PATH"),
+    os.path.join("shared", "vault_db"),
+)
 print(f"DEBUG: DB_PATH={DB_PATH}")
-VAULT_PATH = _default_vault_path()
+VAULT_PATH = _resolve_under_workspace(
+    os.environ.get("VAULT_ORIGIN_VAULT_PATH"),
+    os.path.join("shared", "ORIGIN"),
+)
 EMBED_URL = _require_embed_openai_base()
 COLLECTION = os.environ.get("VAULT_VECTOR_DB_COLLECTION", "origin_vault")
 

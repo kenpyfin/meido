@@ -830,7 +830,7 @@ async fn resolve_history_persona_id(
             return Err((
                 StatusCode::BAD_REQUEST,
                 "persona_id query parameter is required".into(),
-            ))
+            ));
         }
     };
     let exists = call_blocking(state.app_state.db.clone(), move |db| {
@@ -4672,7 +4672,7 @@ async fn api_hooks_post(
                     return Err((
                         StatusCode::BAD_REQUEST,
                         "scope=persona requires scoped_persona_ids".to_string(),
-                    ))
+                    ));
                 }
             },
             _ => None,
@@ -6663,17 +6663,17 @@ async fn api_persona_agent_history_optimize(
             return Err((
                 StatusCode::NOT_FOUND,
                 "no agent history for this persona".into(),
-            ))
+            ));
         }
         Ok(Some(r)) => r,
         Err(crate::agent_history::ReadLatestAgentHistoryError::FileTooLarge(_)) => {
             return Err((
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "agent history file too large".into(),
-            ))
+            ));
         }
         Err(crate::agent_history::ReadLatestAgentHistoryError::Io(e)) => {
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
         }
     };
 
@@ -6783,6 +6783,72 @@ async fn api_personas_create(
     })))
 }
 
+#[derive(Deserialize)]
+struct PersonaExternalPathsBody {
+    paths: Vec<String>,
+}
+
+fn persona_external_paths_json(persona_id: i64, paths: &[std::path::PathBuf]) -> serde_json::Value {
+    json!({
+        "persona_id": persona_id,
+        "env_key": crate::persona_external_paths::env_key(persona_id),
+        "paths": paths.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+    })
+}
+
+async fn api_persona_external_paths_get(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Path(path): Path<PersonaBookmarkPathParams>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_auth(&headers, state.auth_token.as_deref())?;
+    let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
+    ensure_web_binding_for_universal(&state, chat_id).await?;
+    let pid = path.persona_id;
+    let exists = call_blocking(state.app_state.db.clone(), move |db| {
+        db.persona_exists(chat_id, pid)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if !exists {
+        return Err((StatusCode::NOT_FOUND, "persona not found".into()));
+    }
+    let paths = state.app_state.persona_external_paths.paths_for(pid);
+    Ok(Json(persona_external_paths_json(pid, &paths)))
+}
+
+async fn api_persona_external_paths_put(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Path(path): Path<PersonaBookmarkPathParams>,
+    Json(body): Json<PersonaExternalPathsBody>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_auth(&headers, state.auth_token.as_deref())?;
+    let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
+    ensure_web_binding_for_universal(&state, chat_id).await?;
+    let pid = path.persona_id;
+    let exists = call_blocking(state.app_state.db.clone(), move |db| {
+        db.persona_exists(chat_id, pid)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if !exists {
+        return Err((StatusCode::NOT_FOUND, "persona not found".into()));
+    }
+    if body.paths.len() > 32 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "at most 32 external paths are allowed".into(),
+        ));
+    }
+    let saved = state
+        .app_state
+        .persona_external_paths
+        .set(pid, &body.paths)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(persona_external_paths_json(pid, &saved)))
+}
+
 async fn api_personas_delete(
     headers: HeaderMap,
     State(state): State<WebState>,
@@ -6798,6 +6864,11 @@ async fn api_personas_delete(
     })
     .await
     .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    if deleted {
+        if let Err(err) = state.app_state.persona_external_paths.clear(persona_id) {
+            tracing::warn!(persona_id, "Could not clear persona external paths: {err}");
+        }
+    }
 
     Ok(Json(json!({
         "ok": true,
@@ -6963,7 +7034,7 @@ async fn api_todos_list(
             return Err((
                 StatusCode::BAD_REQUEST,
                 format!("Invalid status '{other}'; use open, todo, doing, blocked, done, or all"),
-            ))
+            ));
         }
     };
 
@@ -7111,7 +7182,7 @@ async fn api_schedules_update(
             return Err((
                 StatusCode::BAD_REQUEST,
                 "status must be paused, active, or cancelled".into(),
-            ))
+            ));
         }
         None => None,
     };
@@ -7599,29 +7670,6 @@ fn connection_secret_from_env(
     }
 }
 
-fn connection_in_use(
-    def: &crate::engine_connections::ConnectionDef,
-    chat_provider: &str,
-    topic_provider: Option<&str>,
-    data_dir: &str,
-) -> bool {
-    if matches!(def.kind, crate::engine_connections::ConnectionKind::Url) {
-        return true;
-    }
-    if matches!(def.id, "cursor" | "perplexity" | "google") {
-        return true;
-    }
-    let provider_id = def.provider_id.unwrap_or("");
-    if !provider_id.is_empty()
-        && (provider_id.eq_ignore_ascii_case(chat_provider)
-            || topic_provider.is_some_and(|topic| provider_id.eq_ignore_ascii_case(topic)))
-    {
-        return true;
-    }
-    def.secret_name
-        .is_some_and(|name| crate::engine_connections::secret_is_saved(data_dir, name))
-}
-
 fn connections_json(state: &crate::agent::AppState) -> serde_json::Value {
     let data_dir = state.config.runtime_data_dir();
     let mm = state.llm.local_delegate_config();
@@ -7635,18 +7683,9 @@ fn connections_json(state: &crate::agent::AppState) -> serde_json::Value {
     } else {
         mm.local_model.clone()
     };
-    let chat_provider =
-        crate::llm_catalog::resolve_catalog_provider_id(&state.llm.current_provider());
-    let topic_provider = state
-        .db
-        .get_app_setting(crate::topics::APP_SETTING_TOPICS_MODEL_SOURCE)
-        .ok()
-        .flatten()
-        .map(|value| crate::llm_catalog::resolve_catalog_provider_id(value.trim()))
-        .filter(|value| !value.is_empty() && value != "strategy");
     let connections: Vec<serde_json::Value> = crate::engine_connections::CONNECTIONS
         .iter()
-        .filter(|def| connection_in_use(def, &chat_provider, topic_provider.as_deref(), &data_dir))
+        .filter(|def| def.supported)
         .map(|def| {
             let (source, url) = match def.kind {
                 crate::engine_connections::ConnectionKind::Url => {
@@ -7809,7 +7848,7 @@ struct TopicsModelPatch {
 }
 
 fn topics_model_json(
-    choice: &crate::topics::TopicModelChoice,
+    choice: &crate::topics::SystemLlmChoice,
     saved: bool,
     strategy_provider: &str,
     strategy_model: &str,
@@ -7817,19 +7856,19 @@ fn topics_model_json(
     message: Option<&str>,
 ) -> serde_json::Value {
     let (source, provider, model, base_url) = match choice {
-        crate::topics::TopicModelChoice::Local { base_url, model } => (
+        crate::topics::SystemLlmChoice::Local { base_url, model } => (
             "local",
             "llama",
             Some(model.as_str()),
             Some(base_url.as_str()),
         ),
-        crate::topics::TopicModelChoice::Provider { provider_id, model } => (
+        crate::topics::SystemLlmChoice::Provider { provider_id, model } => (
             provider_id.as_str(),
             provider_id.as_str(),
             Some(model.as_str()),
             None,
         ),
-        crate::topics::TopicModelChoice::Strategy => (
+        crate::topics::SystemLlmChoice::Strategy => (
             "strategy",
             strategy_provider,
             Some(strategy_model).filter(|model| !model.is_empty()),
@@ -7852,27 +7891,13 @@ fn topics_model_json(
 
 async fn read_topics_model(
     state: &crate::agent::AppState,
-) -> Result<
-    (
-        crate::topics::TopicModelChoice,
-        bool,
-        String,
-        String,
-        String,
-    ),
-    (StatusCode, String),
-> {
+) -> Result<(crate::topics::SystemLlmChoice, bool, String, String, String), (StatusCode, String)> {
     let db = state.db.clone();
-    let saved = call_blocking(db, |db| {
-        Ok((
-            db.get_app_setting(crate::topics::APP_SETTING_TOPICS_MODEL_SOURCE)?,
-            db.get_app_setting(crate::topics::APP_SETTING_TOPICS_MODEL)?,
-        ))
-    })
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let saved = call_blocking(db, crate::topics::read_system_llm_settings)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     let mm = state.llm.local_delegate_config();
-    let choice = crate::topics::resolve_topic_model_choice(crate::topics::TopicModelInputs {
+    let choice = crate::topics::resolve_system_llm_choice(crate::topics::SystemLlmInputs {
         saved_source: saved.0.as_deref(),
         saved_model: saved.1.as_deref(),
         prefer_tier2: state.config.topics_prefer_tier2,
@@ -7932,7 +7957,7 @@ async fn api_topics_model_patch(
     if source.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
-            "Choose a provider for topic titles.".into(),
+            "Choose a provider for the system LLM.".into(),
         ));
     }
     let stored_model = if source == "strategy" {
@@ -7941,14 +7966,14 @@ async fn api_topics_model_patch(
         if model.is_empty() {
             return Err((
                 StatusCode::BAD_REQUEST,
-                "Choose a model for topic titles.".into(),
+                "Choose a model for the system LLM.".into(),
             ));
         }
         let mm = state.app_state.llm.local_delegate_config();
         if mm.tier2_base_url.trim().is_empty() && mm.local_base_url.trim().is_empty() {
             return Err((
                 StatusCode::BAD_REQUEST,
-                "Set a local server URL under Settings → Connections before using a local model for topic titles.".into(),
+                "Set a local server URL under Settings → Connections before using a local model for the system LLM.".into(),
             ));
         }
         model
@@ -7956,24 +7981,19 @@ async fn api_topics_model_patch(
         if model.is_empty() {
             return Err((
                 StatusCode::BAD_REQUEST,
-                "Choose a model for topic titles.".into(),
+                "Choose a model for the system LLM.".into(),
             ));
         }
         model
     } else {
         return Err((
             StatusCode::BAD_REQUEST,
-            "Unknown topic title provider.".into(),
+            "Unknown system LLM provider.".into(),
         ));
     };
     let stored_source = source.clone();
     call_blocking(state.app_state.db.clone(), move |db| {
-        db.set_app_setting(
-            crate::topics::APP_SETTING_TOPICS_MODEL_SOURCE,
-            &stored_source,
-        )?;
-        db.set_app_setting(crate::topics::APP_SETTING_TOPICS_MODEL, &stored_model)?;
-        Ok(())
+        crate::topics::save_system_llm_settings(db, &stored_source, &stored_model)
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -7985,7 +8005,7 @@ async fn api_topics_model_patch(
         &provider,
         &strategy_model,
         &local_base_url,
-        Some("Topic model saved. The next segmentation pass uses it."),
+        Some("System LLM saved. Topic split, bulletin, and learning use it on the next pass."),
     )))
 }
 
@@ -9101,7 +9121,7 @@ async fn api_multimodel_test_post(
             return Err((
                 StatusCode::BAD_REQUEST,
                 format!("Unknown tier {:?}. Use 'local'.", other),
-            ))
+            ));
         }
     };
     let model = body.model.trim();
@@ -9707,39 +9727,20 @@ async fn api_settings_patch(
     ))
 }
 
-/// Restarts the user-level gateway service installed via `finally_a_value_bot gateway install` (systemd user unit or launchd).
+/// Restart the running Meido process. The page disconnects until the new process binds.
 async fn api_restart_post(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
     require_auth(&headers, state.auth_token.as_deref())?;
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        Err((
-            StatusCode::NOT_IMPLEMENTED,
-            "Gateway restart is only supported on Linux and macOS.".to_string(),
-        ))
-    }
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        if !crate::gateway::user_gateway_service_installed() {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "ok": false,
-                    "message": "Gateway service is not installed for this user. Run: finally_a_value_bot gateway install"
-                })),
-            ));
-        }
-        crate::gateway::schedule_user_gateway_restart();
-        Ok((
-            StatusCode::ACCEPTED,
-            Json(json!({
-                "ok": true,
-                "message": "Gateway restart scheduled. The page may disconnect briefly."
-            })),
-        ))
-    }
+    crate::daemon::schedule_app_restart();
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "ok": true,
+            "message": "Restart scheduled. The page may disconnect briefly."
+        })),
+    ))
 }
 
 fn json_channel_bot_instance_redacted(inst: &ChannelBotInstance) -> serde_json::Value {
@@ -10217,7 +10218,7 @@ async fn api_channel_persona_policy_upsert(
             return Err((
                 StatusCode::BAD_REQUEST,
                 "mode must be 'all' or 'single'".to_string(),
-            ))
+            ));
         }
     };
     let persona_id = body.persona_id.filter(|id| *id > 0);
@@ -10276,7 +10277,40 @@ async fn api_terminal_ws(ws: WebSocketUpgrade, State(state): State<WebState>) ->
     })
 }
 
-pub async fn start_web_server(state: Arc<AppState>) {
+/// Bind the web UI. When `port` is the default and it is in use, try the following ports.
+pub async fn bind_web_listener(
+    host: &str,
+    port: u16,
+) -> Result<(tokio::net::TcpListener, u16), std::io::Error> {
+    let walk = port == crate::config::default_web_port();
+    let mut candidate = port;
+    let bind_host = crate::config::web_bind_host(host);
+    if bind_host != host.trim() {
+        info!(
+            "WEB_HOST {host} is a DNS name; listening on {bind_host} so http://{host}:{port} can reach this machine"
+        );
+    }
+    loop {
+        let addr = format!("{bind_host}:{candidate}");
+        match tokio::net::TcpListener::bind(&addr).await {
+            Ok(listener) => return Ok((listener, candidate)),
+            Err(err)
+                if walk
+                    && err.kind() == std::io::ErrorKind::AddrInUse
+                    && candidate.saturating_sub(port) < crate::config::WEB_PORT_FALLBACK_SPAN =>
+            {
+                let Some(next) = candidate.checked_add(1) else {
+                    return Err(err);
+                };
+                warn!("Web port {candidate} is in use; trying {next}");
+                candidate = next;
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+pub async fn start_web_server(state: Arc<AppState>, listener: tokio::net::TcpListener) {
     let limits = WebLimits::from_config(&state.config);
     let web_state = WebState {
         auth_token: state.config.web_auth_token.clone(),
@@ -10291,16 +10325,22 @@ pub async fn start_web_server(state: Arc<AppState>) {
     artifacts_api::start_backfill(web_state.clone());
     let router = build_router(web_state);
 
-    let addr = format!("{}:{}", state.config.web_host, state.config.web_port);
-    let listener = match tokio::net::TcpListener::bind(&addr).await {
-        Ok(listener) => listener,
-        Err(e) => {
-            error!("Failed to bind web server at {}: {}", addr, e);
-            return;
-        }
-    };
-
-    info!("Web UI available at http://{addr}");
+    let bound_port = listener
+        .local_addr()
+        .map(|socket| socket.port())
+        .unwrap_or(state.config.web_port);
+    let public_host = state.config.web_host.trim();
+    let bind_host = crate::config::web_bind_host(public_host);
+    if bind_host != public_host {
+        info!("Web UI listening on {bind_host}:{bound_port}");
+        info!("Web UI available at http://{public_host}:{bound_port}");
+    } else {
+        let addr = listener
+            .local_addr()
+            .map(|socket| socket.to_string())
+            .unwrap_or_else(|_| format!("{public_host}:{bound_port}"));
+        info!("Web UI available at http://{addr}");
+    }
     if let Err(e) = axum::serve(
         listener,
         router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
@@ -10655,6 +10695,10 @@ fn build_router(web_state: WebState) -> Router {
             get(api_runtime_get).patch(api_runtime_patch),
         )
         .route(
+            "/api/system-llm",
+            get(api_topics_model_get).patch(api_topics_model_patch),
+        )
+        .route(
             "/api/topics/model",
             get(api_topics_model_get).patch(api_topics_model_patch),
         )
@@ -10763,6 +10807,10 @@ fn build_router(web_state: WebState) -> Router {
         .route(
             "/api/personas/:persona_id/bulletin",
             get(api_persona_bulletin_get).patch(api_persona_bulletin_patch),
+        )
+        .route(
+            "/api/personas/:persona_id/external-paths",
+            get(api_persona_external_paths_get).put(api_persona_external_paths_put),
         )
         .route(
             "/api/personas/:persona_id/policy",
@@ -11198,10 +11246,7 @@ mod tests {
         let mut cfg = crate::config::test_config();
         cfg.web_port = 3900;
         cfg.universal_chat_id = Some(997894126);
-        let dir = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_webtest_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("meido_webtest_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         cfg.workspace_dir = dir.to_string_lossy().to_string();
         let runtime_dir = cfg.runtime_data_dir();
@@ -11244,6 +11289,9 @@ mod tests {
             wecom: None,
             chat_queue: crate::chat_queue::ChatRunQueue::default(),
             background_job_control: crate::background_jobs::BackgroundJobControl::default(),
+            persona_external_paths: Arc::new(
+                crate::persona_external_paths::PersonaExternalPaths::empty(None),
+            ),
         };
         Arc::new(state)
     }

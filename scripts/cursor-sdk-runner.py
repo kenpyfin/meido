@@ -378,7 +378,11 @@ def _bridge_state_root(cwd: str, session_scope: str = "") -> str:
     pool_key = _bridge_pool_key(cwd, session_scope).replace(":", "-")
     root = os.environ.get("CURSOR_SDK_STATE_ROOT", "").strip()
     if not root:
-        runtime = os.environ.get("FINALLY_A_VALUE_BOT_RUNTIME_DATA", "").strip()
+        runtime = (
+            os.environ.get("MEIDO_RUNTIME_DATA")
+            or os.environ.get("FINALLY_A_VALUE_BOT_RUNTIME_DATA")
+            or ""
+        ).strip()
         if not runtime:
             runtime = os.path.join(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))),

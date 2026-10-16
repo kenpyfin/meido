@@ -197,14 +197,15 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
   return (
     <div className="flex flex-col gap-4">
       <p className="text-sm text-muted-foreground">
-        API keys and the local model server this bot calls. A value in <code className="text-xs">.env</code> is used
-        when it is set. Otherwise a key saved here is used. Saved keys stay on this machine and are not shown again.
+        Connectors this install supports. The installer writes one starting key; the others are set here. A value in{' '}
+        <code className="text-xs">.env</code> is used when it is set. Otherwise a key saved here is used. Saved keys
+        stay on this machine and are not shown again.
       </p>
 
       <section className="flex flex-col gap-2 rounded-md border p-3" style={{ borderColor: 'var(--gray-6)' }}>
         <span className="font-medium">Local model server</span>
         <span className="text-xs text-muted-foreground">
-          OpenAI-compatible server. Topic titles can use a model from this server. Cost routing uses it when that
+          OpenAI-compatible server. The system LLM can use a model from this server. Cost routing uses it when that
           engine is selected.
         </span>
         <Input

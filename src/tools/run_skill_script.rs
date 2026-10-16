@@ -551,7 +551,7 @@ mod tests {
 
     fn test_dir() -> PathBuf {
         std::env::temp_dir().join(format!(
-            "finally_a_value_bot_run_skill_script_test_{}",
+            "meido_run_skill_script_test_{}",
             uuid::Uuid::new_v4()
         ))
     }

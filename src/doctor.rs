@@ -95,7 +95,7 @@ pub fn run_cli(args: &[String]) -> anyhow::Result<()> {
     let json_output = args.iter().any(|a| a == "--json");
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "Usage: finally_a_value_bot doctor [--json]\n\nChecks PATH, shell/runtime dependencies, browser automation prerequisites, and MCP command dependencies."
+            "Usage: meido doctor [--json]\n\nChecks PATH, shell/runtime dependencies, browser automation prerequisites, and MCP command dependencies."
         );
         return Ok(());
     }
@@ -486,14 +486,14 @@ fn check_config(report: &mut DoctorReport) {
             "Config file",
             CheckStatus::Warn,
             ".env not found".to_string(),
-            Some("Run `finally_a_value_bot setup` or copy .env.example to .env.".to_string()),
+            Some("Copy .env.example to .env.".to_string()),
         ),
         Err(err) => report.push(
             "config.file",
             "Config file",
             CheckStatus::Fail,
             err.to_string(),
-            Some("Fix FINALLY_A_VALUE_BOT_CONFIG or create a valid config file.".to_string()),
+            Some("Fix MEIDO_CONFIG or create a valid config file.".to_string()),
         ),
     }
 }
@@ -756,21 +756,21 @@ fn check_path(report: &mut DoctorReport) {
                 ),
             );
         }
-    } else if command_exists("finally_a_value_bot") {
+    } else if command_exists("meido") {
         report.push(
-            "path.finally_a_value_bot",
-            "finally_a_value_bot in PATH",
+            "path.meido",
+            "meido in PATH",
             CheckStatus::Pass,
-            "finally_a_value_bot is discoverable in PATH".to_string(),
+            "meido is discoverable in PATH".to_string(),
             None,
         );
     } else {
         report.push(
-            "path.finally_a_value_bot",
-            "finally_a_value_bot in PATH",
+            "path.meido",
+            "meido in PATH",
             CheckStatus::Warn,
-            "finally_a_value_bot is not discoverable in PATH".to_string(),
-            Some("Add the finally_a_value_bot binary directory to PATH.".to_string()),
+            "meido is not discoverable in PATH".to_string(),
+            Some("Add the meido binary directory to PATH.".to_string()),
         );
     }
 }
@@ -946,7 +946,7 @@ fn check_node_and_browser(report: &mut DoctorReport) {
         } else {
             Some(
                 format!(
-                    "Run `bash builtin_skills/steel-browser/setup_steel_env.sh`, set `BROWSER_MANAGED=true` to auto-start Steel on bot boot, then start manually: `docker run -d --name finally-a-value-bot-steel -p {steel_api_port}:3000 -p {steel_cdp_port}:9223 -v finally-a-value-bot-steel-cache:/app/.cache -v finally-a-value-bot-steel-profile:/app/api/user-data-dir -e DOMAIN=127.0.0.1:{steel_api_port} -e CDP_DOMAIN=127.0.0.1:{steel_cdp_port} ghcr.io/steel-dev/steel-browser:latest`"
+                    "Run `bash builtin_skills/steel-browser/setup_steel_env.sh`, set `BROWSER_MANAGED=true` to auto-start Steel on bot boot, then start manually: `docker run -d --name meido-steel -p {steel_api_port}:3000 -p {steel_cdp_port}:9223 -v meido-steel-cache:/app/.cache -v meido-steel-profile:/app/api/user-data-dir -e DOMAIN=127.0.0.1:{steel_api_port} -e CDP_DOMAIN=127.0.0.1:{steel_cdp_port} ghcr.io/steel-dev/steel-browser:latest`"
                 ),
             )
         },
@@ -986,7 +986,7 @@ fn check_node_and_browser(report: &mut DoctorReport) {
 fn check_mcp_dependencies(report: &mut DoctorReport) {
     let data_root = match Config::load() {
         Ok(cfg) => cfg.data_root_dir(),
-        Err(_) => PathBuf::from("./finally_a_value_bot.data"),
+        Err(_) => PathBuf::from("./meido.data"),
     };
 
     let mcp_path = data_root.join("mcp.json");

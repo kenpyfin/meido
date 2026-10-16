@@ -9,13 +9,22 @@ use super::{schema_object, Tool, ToolResult};
 
 pub struct ReadFileTool {
     working_dir: PathBuf,
+    origin_vault: PathBuf,
 }
 
 impl ReadFileTool {
     pub fn new(working_dir: &str) -> Self {
+        let working_dir = PathBuf::from(working_dir);
+        let origin_vault = working_dir.join("shared").join("ORIGIN");
         Self {
-            working_dir: PathBuf::from(working_dir),
+            working_dir,
+            origin_vault,
         }
+    }
+
+    pub fn with_origin_vault(mut self, origin_vault: PathBuf) -> Self {
+        self.origin_vault = origin_vault;
+        self
     }
 }
 
@@ -69,17 +78,24 @@ impl Tool for ReadFileTool {
         let auth = super::auth_context_from_input(&input);
         let working_dir =
             super::resolve_tool_working_dir_for_auth(&self.working_dir, auth.as_ref());
-        let resolved_path = super::resolve_tool_path(&self.working_dir, &working_dir, path);
+        let resolved_path = super::resolve_tool_path_with_origin(
+            &self.working_dir,
+            &working_dir,
+            path,
+            &self.origin_vault,
+            auth.as_ref().and_then(|a| a.vector_db_root.as_deref()),
+        );
         let resolved_path_str = resolved_path.to_string_lossy().to_string();
 
         if let Err(msg) = crate::tools::path_guard::check_path(&resolved_path_str) {
             return ToolResult::error(msg);
         }
-        if let Err(msg) = super::assert_persona_tool_path_allowed(
+        if let Err(msg) = super::assert_persona_tool_path_allowed_with_origin(
             &self.working_dir,
             &resolved_path,
             auth.as_ref(),
             false,
+            &self.origin_vault,
         ) {
             return ToolResult::error(msg);
         }
@@ -198,8 +214,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_success() {
-        let dir =
-            std::env::temp_dir().join(format!("finally_a_value_bot_rf_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("meido_rf_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("test.txt");
         std::fs::write(&file, "line1\nline2\nline3\nline4\nline5").unwrap();
@@ -217,8 +232,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_with_offset_and_limit() {
-        let dir =
-            std::env::temp_dir().join(format!("finally_a_value_bot_rf2_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("meido_rf2_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("test.txt");
         std::fs::write(&file, "a\nb\nc\nd\ne").unwrap();
@@ -238,8 +252,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_with_center_line_window() {
-        let dir =
-            std::env::temp_dir().join(format!("finally_a_value_bot_rf4_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("meido_rf4_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("test.txt");
         std::fs::write(&file, "1\n2\n3\n4\n5\n6\n7").unwrap();
@@ -264,10 +277,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_rejects_png() {
-        let dir = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_rf_png_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("meido_rf_png_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("image.png");
         std::fs::write(&file, [137u8, 80, 78, 71]).unwrap();
@@ -298,8 +308,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_file_resolves_relative_to_working_dir() {
-        let root =
-            std::env::temp_dir().join(format!("finally_a_value_bot_rf3_{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("meido_rf3_{}", uuid::Uuid::new_v4()));
         let work = root.join("workspace");
         let shared = work.join("shared");
         std::fs::create_dir_all(&shared).unwrap();

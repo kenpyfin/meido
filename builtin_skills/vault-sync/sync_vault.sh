@@ -1,10 +1,37 @@
 #!/bin/bash
 # Sync script for ORIGIN vault with union merge strategy to keep both edits on conflict.
 
-VAULT_DIR="/home/ken/big_storage/projects/finally-a-value-bot/workspace/shared/ORIGIN"
+# Vault location, first match wins:
+#   1. ORIGIN_VAULT_PATH
+#   2. <MEIDO_WORKSPACE_DIR | WORKSPACE_DIR>/shared/ORIGIN
+#   3. relative to this script: <workspace>/skills/vault-sync -> <workspace>/shared/ORIGIN,
+#      or <repo>/builtin_skills/vault-sync -> <repo>/workspace/shared/ORIGIN
+resolve_vault_dir() {
+    if [ -n "${ORIGIN_VAULT_PATH:-}" ]; then
+        echo "$ORIGIN_VAULT_PATH"
+        return
+    fi
+    local ws="${MEIDO_WORKSPACE_DIR:-${WORKSPACE_DIR:-}}"
+    if [ -n "$ws" ]; then
+        echo "${ws%/}/shared/ORIGIN"
+        return
+    fi
+    local here
+    here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local candidate
+    for candidate in "$here/../../shared/ORIGIN" "$here/../../workspace/shared/ORIGIN"; do
+        if [ -d "$candidate" ]; then
+            (cd "$candidate" && pwd)
+            return
+        fi
+    done
+    echo "$here/../../shared/ORIGIN"
+}
+
+VAULT_DIR="$(resolve_vault_dir)"
 
 if [ ! -d "$VAULT_DIR" ]; then
-    echo "Error: Could not access vault directory $VAULT_DIR"
+    echo "Error: Could not access vault directory $VAULT_DIR (set ORIGIN_VAULT_PATH or WORKSPACE_DIR)"
     exit 1
 fi
 

@@ -1,5 +1,7 @@
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import { Button } from '@/components/ui/button'
+import { Textarea } from '@/components/ui/textarea'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { parsePersonaBulletinHistorySuffix } from '../lib/bulletin'
 import type { PersonaBulletinHistorySuffix, PersonaDenseDeliveryInfo } from '../types'
@@ -35,11 +37,17 @@ export function SettingsRunContextPanel({
   const [depthError, setDepthError] = useState('')
   const [deliveryError, setDeliveryError] = useState('')
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
+  const [externalPaths, setExternalPaths] = useState('')
+  const [externalEnvKey, setExternalEnvKey] = useState<string | null>(null)
+  const [externalBusy, setExternalBusy] = useState(false)
+  const [externalError, setExternalError] = useState('')
 
   const load = useCallback(async () => {
     if (activePersonaId == null) {
       setHistorySuffix(null)
       setDenseDelivery(null)
+      setExternalPaths('')
+      setExternalEnvKey(null)
       return
     }
     try {
@@ -59,10 +67,17 @@ export function SettingsRunContextPanel({
           summary_chars: 800,
         })
       }
+      const external = await api<{ paths?: string[]; env_key?: string | null }>(
+        `/api/personas/${activePersonaId}/external-paths`,
+      )
+      setExternalPaths((external.paths ?? []).join('\n'))
+      setExternalEnvKey(external.env_key ?? null)
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
       setHistorySuffix(null)
       setDenseDelivery(null)
+      setExternalPaths('')
+      setExternalEnvKey(null)
     }
   }, [activePersonaId, api, onError])
 
@@ -123,6 +138,38 @@ export function SettingsRunContextPanel({
     },
     [activePersonaId, api, load, onPersonaBulletinChanged],
   )
+
+  const saveExternalPaths = useCallback(async () => {
+    if (activePersonaId == null) return
+    setExternalBusy(true)
+    setExternalError('')
+    setSaveNotice(null)
+    const paths = externalPaths
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+    try {
+      const saved = await api<{ paths?: string[]; env_key?: string | null }>(
+        `/api/personas/${activePersonaId}/external-paths`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paths }),
+        },
+      )
+      setExternalPaths((saved.paths ?? []).join('\n'))
+      setExternalEnvKey(saved.env_key ?? null)
+      setSaveNotice(
+        paths.length === 0
+          ? 'Paths outside the workspace cleared.'
+          : 'Paths outside the workspace saved.',
+      )
+    } catch (e) {
+      setExternalError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setExternalBusy(false)
+    }
+  }, [activePersonaId, api, externalPaths])
 
   return (
     <div className="flex flex-col gap-3 mc-run-context">
@@ -223,6 +270,41 @@ export function SettingsRunContextPanel({
             disabled={disabled || deliveryBusy}
             onCheckedChange={(checked) => void applyDenseDelivery(checked)}
           />
+        </div>
+      </div>
+
+      <div className="mc-run-context-block">
+        <span className="font-medium">Paths outside the workspace</span>
+        <span className="mt-1 block leading-snug">
+          Absolute paths this persona may read and write. One path per line. Only listed paths
+          are reachable outside the workspace. Vault paths set for the process stay available.
+          The list is stored as{' '}
+          {externalEnvKey ? (
+            <code className="text-[11px]">{externalEnvKey}</code>
+          ) : (
+            <code className="text-[11px]">MEIDO_PERSONA_&lt;id&gt;_EXTERNAL_PATHS</code>
+          )}{' '}
+          in <code className="text-[11px]">.env</code> and applies on the next run.
+        </span>
+        <Textarea
+          className="mt-2 font-mono text-sm"
+          rows={4}
+          value={externalPaths}
+          disabled={disabled || externalBusy}
+          placeholder="/absolute/path"
+          spellCheck={false}
+          onChange={(event) => setExternalPaths(event.target.value)}
+        />
+        {externalError ? <span className="mt-1 block">{externalError}</span> : null}
+        <div className="mt-2">
+          <Button
+            type="button"
+            size="sm"
+            disabled={disabled || externalBusy}
+            onClick={() => void saveExternalPaths()}
+          >
+            {externalBusy ? 'Saving…' : 'Save paths'}
+          </Button>
         </div>
       </div>
     </div>

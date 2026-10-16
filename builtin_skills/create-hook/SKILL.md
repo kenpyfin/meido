@@ -22,7 +22,7 @@ Use this skill to create or update bot-native hooks stored in SQLite `hook_defin
 1. Prefer narrow matchers to avoid global side effects.
 2. For `command` hooks, `action_payload_json.command` must be a relative path under:
    - `WORKSPACE_DIR/hooks/`
-   - repository `builtin_hooks/` (or `FINALLY_A_VALUE_BOT_BUILTIN_HOOKS`)
+   - repository `builtin_hooks/` (or `MEIDO_BUILTIN_HOOKS`)
 3. Keep command hooks deterministic and return JSON only.
 4. Use `fail_closed` only for policy-critical hooks.
 5. Persona-specific behavior (for example PZ cleanup) should be enabled per persona via hook allowlists, not globally.

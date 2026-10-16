@@ -31,13 +31,22 @@ fn split_workspace_prefixed_pattern(
 
 pub struct GlobTool {
     working_dir: PathBuf,
+    origin_vault: PathBuf,
 }
 
 impl GlobTool {
     pub fn new(working_dir: &str) -> Self {
+        let working_dir = PathBuf::from(working_dir);
+        let origin_vault = working_dir.join("shared").join("ORIGIN");
         Self {
-            working_dir: PathBuf::from(working_dir),
+            working_dir,
+            origin_vault,
         }
+    }
+
+    pub fn with_origin_vault(mut self, origin_vault: PathBuf) -> Self {
+        self.origin_vault = origin_vault;
+        self
     }
 }
 
@@ -76,17 +85,24 @@ impl Tool for GlobTool {
         let auth = super::auth_context_from_input(&input);
         let working_dir =
             super::resolve_tool_working_dir_for_auth(&self.working_dir, auth.as_ref());
-        let resolved_base = super::resolve_tool_path(&self.working_dir, &working_dir, base);
+        let resolved_base = super::resolve_tool_path_with_origin(
+            &self.working_dir,
+            &working_dir,
+            base,
+            &self.origin_vault,
+            auth.as_ref().and_then(|a| a.vector_db_root.as_deref()),
+        );
         let resolved_base_str = resolved_base.to_string_lossy().to_string();
 
         if let Err(msg) = crate::tools::path_guard::check_path(&resolved_base_str) {
             return ToolResult::error(msg);
         }
-        if let Err(msg) = super::assert_persona_tool_path_allowed(
+        if let Err(msg) = super::assert_persona_tool_path_allowed_with_origin(
             &self.working_dir,
             &resolved_base,
             auth.as_ref(),
             false,
+            &self.origin_vault,
         ) {
             return ToolResult::error(msg);
         }
@@ -142,8 +158,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_finds_files() {
-        let dir =
-            std::env::temp_dir().join(format!("finally_a_value_bot_glob_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("meido_glob_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "").unwrap();
         std::fs::write(dir.join("b.txt"), "").unwrap();
@@ -163,10 +178,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_no_matches() {
-        let dir = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_glob2_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("meido_glob2_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
 
         let tool = GlobTool::new(".");
@@ -189,10 +201,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_defaults_to_working_dir() {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_glob3_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("meido_glob3_{}", uuid::Uuid::new_v4()));
         let work = root.join("workspace");
         let shared = work.join("shared");
         std::fs::create_dir_all(&shared).unwrap();
@@ -208,10 +217,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_glob_resolves_skills_prefix_from_persona_dir() {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_glob4_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("meido_glob4_{}", uuid::Uuid::new_v4()));
         let work = root.join("workspace");
         let skills_dir = work.join("skills").join("demo");
         let persona = work.join("shared").join("personas").join("1").join("1");

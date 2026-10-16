@@ -1,11 +1,12 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { IconListTree, IconOps, IconSettings } from './icons'
 
-export type MobileTab = 'chat' | 'topics' | 'ops' | 'settings'
+export type MobileTab = 'chat' | 'persona' | 'topics' | 'ops' | 'settings'
 
 type MobileTabBarProps = {
   active: MobileTab
   onChat: () => void
+  onPersona: () => void
   onTopics: () => void
   onOps: () => void
   onSettings: () => void
@@ -19,14 +20,24 @@ function ChatIcon() {
   )
 }
 
+function PersonaIcon() {
+  return (
+    <svg className="size-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </svg>
+  )
+}
+
 const TABS: { id: MobileTab; label: string; icon: ReactNode }[] = [
   { id: 'chat', label: 'Chat', icon: <ChatIcon /> },
+  { id: 'persona', label: 'Persona', icon: <PersonaIcon /> },
   { id: 'topics', label: 'Topics', icon: <IconListTree /> },
   { id: 'ops', label: 'Ops', icon: <IconOps /> },
   { id: 'settings', label: 'Settings', icon: <IconSettings /> },
 ]
 
-export function MobileTabBar({ active, onChat, onTopics, onOps, onSettings }: MobileTabBarProps) {
+export function MobileTabBar({ active, onChat, onPersona, onTopics, onOps, onSettings }: MobileTabBarProps) {
   const [keyboardOpen, setKeyboardOpen] = useState(false)
 
   useEffect(() => {
@@ -42,6 +53,7 @@ export function MobileTabBar({ active, onChat, onTopics, onOps, onSettings }: Mo
 
   const handlers: Record<MobileTab, () => void> = {
     chat: onChat,
+    persona: onPersona,
     topics: onTopics,
     ops: onOps,
     settings: onSettings,

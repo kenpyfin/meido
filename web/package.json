@@ -1,7 +1,7 @@
 {
   "name": "meido-web-ui",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.2.2",
   "type": "module",
   "scripts": {
     "build": "vite build",
@@ -32,7 +32,7 @@
     "react-resizable-panels": "^4.13.3",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
-    "shadcn": "^4.21.0",
+    "shadcn": "^4.21.5",
     "sonner": "^2.0.8",
     "streamdown": "^2.6.0",
     "tailwind-merge": "^3.4.0",

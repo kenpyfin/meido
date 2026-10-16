@@ -1,12 +1,11 @@
 //! Isolated end-to-end catalog smoke check. Never opens the operator's workspace.
 use anyhow::Result;
-use finally_a_value_bot::artifacts::{ingest_manifest, Catalog, Filter};
+use meido::artifacts::{ingest_manifest, Catalog, Filter};
 use std::{collections::HashSet, fs};
 #[tokio::main]
 async fn main() -> Result<()> {
     let uri = "/api/artifacts?chat_id=997894126&persona_id=25&limit=50&q=take%206&kind=video&status=active".parse()?;
-    let query =
-        axum::extract::Query::<finally_a_value_bot::artifact_http::ListQuery>::try_from_uri(&uri)?;
+    let query = axum::extract::Query::<meido::artifact_http::ListQuery>::try_from_uri(&uri)?;
     assert_eq!(query.chat_id, Some(997894126));
     assert_eq!(query.persona_id, Some(25));
     let filter = query.0.into_filter();
@@ -14,10 +13,7 @@ async fn main() -> Result<()> {
     assert_eq!(filter.q.as_deref(), Some("take 6"));
     let bad_uri = "/api/artifacts?limit=invalid".parse()?;
     assert!(
-        axum::extract::Query::<finally_a_value_bot::artifact_http::ListQuery>::try_from_uri(
-            &bad_uri
-        )
-        .is_err()
+        axum::extract::Query::<meido::artifact_http::ListQuery>::try_from_uri(&bad_uri).is_err()
     );
     let temp = tempfile::tempdir()?;
     let root = temp.path().canonicalize()?;
@@ -25,9 +21,7 @@ async fn main() -> Result<()> {
     fs::create_dir_all(&dir)?;
     let source = dir.join("take 5 (final).mp4");
     fs::write(&source, b"take-five")?;
-    use finally_a_value_bot::final_delivery_media::{
-        resolve_workspace_artifact_path, ArtifactResolveKind,
-    };
+    use meido::final_delivery_media::{resolve_workspace_artifact_path, ArtifactResolveKind};
     fs::write(dir.join("same.mp4"), b"persona")?;
     fs::write(root.join("shared/same.mp4"), b"unrelated")?;
     assert_eq!(
@@ -50,7 +44,7 @@ async fn main() -> Result<()> {
         ArtifactResolveKind::AnyFile
     )
     .is_none());
-    use finally_a_value_bot::final_delivery_media::materialize_web_delivery_file_links;
+    use meido::final_delivery_media::materialize_web_delivery_file_links;
     let deliverable = dir.join("cloth02_oneshot_r06.mp4");
     fs::write(&deliverable, b"exact-take-six")?;
     let delivered = materialize_web_delivery_file_links(
@@ -185,7 +179,7 @@ async fn main() -> Result<()> {
     assert!(other.exists());
     // Exercise real HTTP response generation, including video seeking and bounded text.
     use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
-    use finally_a_value_bot::artifact_http::{serve_file, ContentOptions};
+    use meido::artifact_http::{serve_file, ContentOptions};
     let mut headers = HeaderMap::new();
     headers.insert("range", HeaderValue::from_static("bytes=2-5"));
     let response = serve_file(
@@ -360,6 +354,9 @@ async fn main() -> Result<()> {
     }
     assert_eq!(seen.len(), 10000);
     assert_eq!(pages, 200);
-    println!("PASS: immutable delivery, repeat publication, persona isolation, manifests/checksums, provenance, pin/trash/restore/delete, shared blobs, legacy tombstones, restart, and 10,000-row pagination ({} ms)",started.elapsed().as_millis());
+    println!(
+        "PASS: immutable delivery, repeat publication, persona isolation, manifests/checksums, provenance, pin/trash/restore/delete, shared blobs, legacy tombstones, restart, and 10,000-row pagination ({} ms)",
+        started.elapsed().as_millis()
+    );
     Ok(())
 }

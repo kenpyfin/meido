@@ -12,7 +12,7 @@ use crate::chat_queue::{QueueEnqueueMeta, QueueSource};
 use crate::claude::{Message, MessageContent};
 use crate::db::call_blocking;
 use crate::db_collab::{GroupMember, GroupMessage};
-use crate::topics::{load_topic_model_choice, response_text, send_topic_prompt, TopicModelChoice};
+use crate::topics::{load_system_llm_choice, response_text, send_topic_prompt, system_llm_direct};
 
 use super::{GROUP_SUMMARY_EVERY, GROUP_TOOL_CAP, GROUP_WINDOW};
 
@@ -224,13 +224,7 @@ async fn resolve_choice(
     if !provider.trim().is_empty() && !model.trim().is_empty() {
         return Some((provider.to_string(), model.to_string(), None));
     }
-    match load_topic_model_choice(state).await {
-        TopicModelChoice::Local { base_url, model } => {
-            Some(("llama".into(), model, Some(base_url)))
-        }
-        TopicModelChoice::Provider { provider_id, model } => Some((provider_id, model, None)),
-        TopicModelChoice::Strategy => None,
-    }
+    system_llm_direct(load_system_llm_choice(state).await)
 }
 
 fn parse_speakers(raw: &str, members: &[GroupMember], max_speakers: usize) -> Option<Vec<i64>> {

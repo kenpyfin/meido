@@ -161,7 +161,7 @@ fn find_provider_preset(provider: &str) -> Option<&'static ProviderPreset> {
 }
 
 fn resolve_config_path() -> PathBuf {
-    if let Ok(custom) = std::env::var("FINALLY_A_VALUE_BOT_CONFIG") {
+    if let Some(custom) = crate::meido_env::get(crate::meido_env::CONFIG) {
         return PathBuf::from(custom);
     }
     if Path::new("./.env").exists() {
@@ -311,7 +311,9 @@ fn prompt_model(
             options = installed;
         } else {
             println!("No local Ollama models detected (or Ollama not reachable).");
-            println!("Tip: run `ollama pull llama3.2` then re-run `finally_a_value_bot config`.");
+            println!(
+                "Tip: run `ollama pull llama3.2` then pick the model again in Web UI → Settings → LLM."
+            );
         }
     }
 
@@ -502,8 +504,6 @@ fn default_config() -> Config {
         cursor_agent_timeout_secs: 3600,
         social: None,
         vault: None,
-        orchestrator_enabled: true,
-        orchestrator_model: String::new(),
         post_tool_evaluator_enabled: false,
         post_tool_evaluator_model: String::new(),
         response_quality_evaluator_enabled: false,
@@ -521,7 +521,7 @@ fn default_config() -> Config {
         symbol_edit_enabled: false,
         post_edit_validation_enabled: true,
         post_edit_validation_commands: None,
-        cursor_agent_tmux_session_prefix: "finally_a_value_bot-cursor".into(),
+        cursor_agent_tmux_session_prefix: "meido-cursor".into(),
         cursor_agent_tmux_enabled: true,
         cursor_agent_runner_url: None,
         cursor_sdk_runner_url: None,
@@ -548,7 +548,7 @@ fn default_config() -> Config {
         background_job_notify_chat_progress: false,
         tool_output_debug: false,
         background_shell_tmux_enabled: true,
-        background_shell_tmux_session_prefix: "finally_a_value_bot-bg".into(),
+        background_shell_tmux_session_prefix: "meido-bg".into(),
         background_shell_monitor_poll_secs: 8,
         background_shell_auto_retry_on_failure: true,
         background_shell_auto_retry_max: 1,

@@ -27,7 +27,7 @@ function SettingsAlert({ tone, children }: { tone: 'ok' | 'err'; children: React
 }
 
 /**
- * Settings → Overview: rename / delete the sidebar-selected persona.
+ * Persona page → Profile: rename / delete the sidebar-selected persona.
  * Create stays available here too so management is not buried in the list UI.
  */
 export function SettingsPersonaPanel({

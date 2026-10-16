@@ -436,8 +436,7 @@ async fn wait_for_sidecar_health(url: &str) -> SidecarHealth {
 }
 
 fn in_docker() -> bool {
-    std::env::var("FINALLY_A_VALUE_BOT_IN_DOCKER").as_deref() == Ok("1")
-        || Path::new("/.dockerenv").exists()
+    crate::meido_env::is_flag_one(crate::meido_env::IN_DOCKER) || Path::new("/.dockerenv").exists()
 }
 
 fn script_mtime_unix(script: &Path) -> Option<u64> {
@@ -821,7 +820,10 @@ async fn spawn_sidecar_process(
         .stderr(stderr_file);
 
     if !runtime_data_dir.trim().is_empty() {
-        cmd.env("FINALLY_A_VALUE_BOT_RUNTIME_DATA", runtime_data_dir.trim());
+        cmd.env(
+            crate::meido_env::RUNTIME_DATA.preferred,
+            runtime_data_dir.trim(),
+        );
     }
 
     let cursor_key = std::env::var("CURSOR_API_KEY")

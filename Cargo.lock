@@ -712,52 +712,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "finally-a-value-bot"
-version = "0.0.37"
-dependencies = [
- "aes",
- "anyhow",
- "async-recursion",
- "async-stream",
- "async-trait",
- "axum",
- "base64",
- "cbc",
- "chrono",
- "chrono-tz",
- "cipher",
- "cron",
- "crossterm",
- "dotenvy",
- "futures-util",
- "glob",
- "html-escape",
- "include_dir",
- "portable-pty",
- "process-wrap",
- "ratatui",
- "regex",
- "reqwest",
- "rusqlite",
- "serde",
- "serde_json",
- "serde_yaml",
- "serenity",
- "sha1",
- "sha2",
- "teloxide",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite 0.26.2",
- "tower",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
- "uuid",
-]
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1476,6 +1430,52 @@ name = "matchit"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
+
+[[package]]
+name = "meido"
+version = "1.2.2"
+dependencies = [
+ "aes",
+ "anyhow",
+ "async-recursion",
+ "async-stream",
+ "async-trait",
+ "axum",
+ "base64",
+ "cbc",
+ "chrono",
+ "chrono-tz",
+ "cipher",
+ "cron",
+ "crossterm",
+ "dotenvy",
+ "futures-util",
+ "glob",
+ "html-escape",
+ "include_dir",
+ "portable-pty",
+ "process-wrap",
+ "ratatui",
+ "regex",
+ "reqwest",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "serenity",
+ "sha1",
+ "sha2",
+ "teloxide",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite 0.26.2",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "uuid",
+]
 
 [[package]]
 name = "memchr"

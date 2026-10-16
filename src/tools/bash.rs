@@ -44,6 +44,7 @@ fn maybe_rewrite_leading_tool_path(
 
 pub struct BashTool {
     working_dir: PathBuf,
+    origin_vault: PathBuf,
     safety_execution_mode: String,
     safety_risky_categories: Vec<String>,
     runtime_toggles: Arc<RuntimeToggles>,
@@ -74,8 +75,11 @@ impl BashTool {
         runtime_toggles: Arc<RuntimeToggles>,
         env_redactor: Arc<EnvSecretRedactor>,
     ) -> Self {
+        let working_dir = PathBuf::from(working_dir);
+        let origin_vault = working_dir.join("shared").join("ORIGIN");
         Self {
-            working_dir: PathBuf::from(working_dir),
+            working_dir,
+            origin_vault,
             safety_execution_mode,
             safety_risky_categories,
             runtime_toggles,
@@ -86,6 +90,11 @@ impl BashTool {
 
     pub fn with_runtime_data_dir(mut self, runtime_data_dir: impl Into<String>) -> Self {
         self.runtime_data_dir = runtime_data_dir.into();
+        self
+    }
+
+    pub fn with_origin_vault(mut self, origin_vault: PathBuf) -> Self {
+        self.origin_vault = origin_vault;
         self
     }
 }
@@ -129,8 +138,12 @@ impl Tool for BashTool {
             &self.working_dir.join("runtime"),
             auth.as_ref(),
         );
-        let registry =
-            super::locate::build_registry(&self.working_dir, auth.as_ref(), memory.as_ref());
+        let registry = super::locate::build_registry_with_origin(
+            &self.working_dir,
+            auth.as_ref(),
+            memory.as_ref(),
+            &self.origin_vault,
+        );
         let allowed_roots = super::locate::allowed_search_root_paths(&registry);
         let root_hints: Vec<String> = super::locate::directory_roots(&registry)
             .iter()
@@ -341,8 +354,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_bash_uses_working_dir() {
-        let root =
-            std::env::temp_dir().join(format!("finally_a_value_bot_bash_{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("meido_bash_{}", uuid::Uuid::new_v4()));
         let work = root.join("workspace");
         std::fs::create_dir_all(&work).unwrap();
 
@@ -398,7 +410,7 @@ mod tests {
         let cmd = if cfg!(windows) {
             "CONFIRM_EXECUTE Write-Output 'rm -rf noop'"
         } else {
-            "CONFIRM_EXECUTE rm -rf /tmp/finally_a_value_bot_test_confirm"
+            "CONFIRM_EXECUTE rm -rf /tmp/meido_test_confirm"
         };
         let result = tool.execute(json!({"command": cmd})).await;
         assert!(!result.is_error);

@@ -123,7 +123,7 @@ mod tests {
     fn auth_input(chat_id: i64, persona_id: i64, content: &str) -> serde_json::Value {
         json!({
             "content": content,
-            "__finally_a_value_bot_auth": {
+            "__meido_auth": {
                 "caller_channel": "web",
                 "caller_chat_id": chat_id,
                 "caller_persona_id": persona_id,
@@ -135,8 +135,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_bulletin_focus_defaults_to_auth_context() {
-        let dir =
-            std::env::temp_dir().join(format!("finally_a_value_bot_test_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("meido_test_{}", uuid::Uuid::new_v4()));
         let db = Arc::new(Database::new(dir.to_str().unwrap()).unwrap());
         db.upsert_chat(42, None, "private").unwrap();
         let pid = db.get_or_create_default_persona(42).unwrap();
@@ -151,8 +150,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_bulletin_focus_blocks_cross_persona_without_control() {
-        let dir =
-            std::env::temp_dir().join(format!("finally_a_value_bot_test_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("meido_test_{}", uuid::Uuid::new_v4()));
         let db = Arc::new(Database::new(dir.to_str().unwrap()).unwrap());
         db.upsert_chat(42, None, "private").unwrap();
         let pid = db.get_or_create_default_persona(42).unwrap();

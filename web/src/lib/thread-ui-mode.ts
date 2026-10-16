@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react'
 
 export type ThreadUiMode = 'legacy' | 'next'
 
-export const THREAD_UI_STORAGE_KEY = 'finally-a-value-bot_thread_ui'
+export const THREAD_UI_STORAGE_KEY = 'meido_thread_ui'
 
 export function getThreadUiMode(): ThreadUiMode {
   if (typeof window === 'undefined') return 'next'

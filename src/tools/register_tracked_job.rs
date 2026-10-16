@@ -67,10 +67,8 @@ impl Tool for RegisterTrackedJobTool {
         let auth = match auth_context_from_input(&input) {
             Some(a) => a,
             None => {
-                return ToolResult::error(
-                    "Missing auth context (__finally_a_value_bot_auth)".into(),
-                )
-                .with_error_type("auth_required");
+                return ToolResult::error("Missing auth context (__meido_auth)".into())
+                    .with_error_type("auth_required");
             }
         };
 

@@ -377,7 +377,7 @@ impl McpServer {
                     return Err(format!(
                         "MCP server response timeout ({:?})",
                         self.request_timeout
-                    ))
+                    ));
                 }
                 Ok(Err(e)) => return Err(format!("Read error: {e}")),
                 Ok(Ok(0)) => return Err("MCP server closed connection".into()),
@@ -444,7 +444,7 @@ impl McpServer {
             "protocolVersion": self.requested_protocol,
             "capabilities": {},
             "clientInfo": {
-                "name": "finally_a_value_bot",
+                "name": env!("CARGO_PKG_NAME"),
                 "version": env!("CARGO_PKG_VERSION")
             }
         });
@@ -618,7 +618,7 @@ impl McpServer {
             "protocolVersion": self.requested_protocol,
             "capabilities": {},
             "clientInfo": {
-                "name": "finally_a_value_bot",
+                "name": env!("CARGO_PKG_NAME"),
                 "version": env!("CARGO_PKG_VERSION")
             }
         });

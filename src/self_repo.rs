@@ -1,24 +1,32 @@
-//! Identify and protect the finally-a-value-bot install/source checkout.
+//! Identify and protect the Meido install/source checkout.
 //!
 //! Persona Tier-1 target repos (e.g. `Repo: /home/.../sourdough`) remain fully allowed.
 //! Only this bot's own checkout is banned as a Cursor/agent git project.
 
 use std::path::{Path, PathBuf};
 
-/// Operator override: absolute path to the bot source/install git root.
-pub const ENV_SELF_REPO: &str = "FINALLY_A_VALUE_BOT_SELF_REPO";
+/// Operator override: absolute path to the bot source/install git root (`MEIDO_SELF_REPO`).
+pub const ENV_SELF_REPO: &str = crate::meido_env::SELF_REPO.preferred;
 
 /// Env var applied to agent shells so git does not walk into the bot checkout.
 pub const ENV_GIT_CEILING: &str = "GIT_CEILING_DIRECTORIES";
 
-const PACKAGE_NAME: &str = "finally-a-value-bot";
+/// Current Cargo package name (`env!("CARGO_PKG_NAME")` of this crate).
+const PACKAGE_NAME: &str = env!("CARGO_PKG_NAME");
+
+/// Package names that identify a Meido checkout. Older checkouts still carry the
+/// pre-rename name and must stay protected.
+const PACKAGE_NAMES: &[&str] = &[PACKAGE_NAME, "finally-a-value-bot"];
 
 /// True when `dir` looks like this crate's source/install root.
 pub fn looks_like_self_repo(dir: &Path) -> bool {
     let cargo = dir.join("Cargo.toml");
     if cargo.is_file() {
         if let Ok(text) = std::fs::read_to_string(&cargo) {
-            if cargo_toml_names_package(&text, PACKAGE_NAME) {
+            if PACKAGE_NAMES
+                .iter()
+                .any(|name| cargo_toml_names_package(&text, name))
+            {
                 return true;
             }
         }
@@ -29,7 +37,7 @@ pub fn looks_like_self_repo(dir: &Path) -> bool {
 }
 
 fn cargo_toml_names_package(toml: &str, name: &str) -> bool {
-    // Minimal parse: look for `name = "finally-a-value-bot"` near the package table.
+    // Minimal parse: look for `name = "<name>"` inside the `[package]` table.
     let mut in_package = false;
     for line in toml.lines() {
         let trimmed = line.trim();
@@ -57,7 +65,7 @@ fn canonicalize_best_effort(path: &Path) -> PathBuf {
 
 /// Resolve the bot's own git/source root, if detectable.
 pub fn resolve_self_repo_root(workspace_root: &Path) -> Option<PathBuf> {
-    if let Ok(raw) = std::env::var(ENV_SELF_REPO) {
+    if let Some(raw) = crate::meido_env::get(crate::meido_env::SELF_REPO) {
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
             let p = PathBuf::from(trimmed);
@@ -109,7 +117,7 @@ pub fn check_agent_cwd_allowed(workspace_root: &Path, cwd: &Path) -> Result<(), 
     if is_self_repo_source_path(workspace_root, cwd) {
         let self_repo = resolve_self_repo_root(workspace_root)
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "finally-a-value-bot".into());
+            .unwrap_or_else(|| PACKAGE_NAME.into());
         return Err(format!(
             "Blocked: Cursor/agent working directory '{}' is inside the bot's own checkout ({self_repo}). \
              Use the persona workspace under WORKSPACE_DIR, or cd to a Tier-1 target repo \
@@ -167,7 +175,7 @@ pub fn self_repo_ban_prompt_section(workspace_root: &Path) -> String {
         .unwrap_or_else(|| "(bot install/source checkout)".to_string());
     format!(
         "## Self-repo ban (mandatory)\n\
-         - **Never** treat the finally-a-value-bot install/source git checkout as a project repo.\n\
+         - **Never** treat the Meido install/source git checkout as a project repo.\n\
          - Banned root: `{self_path}` (and its `.git`). Do not `cd` there for development, \
            branch deletes, force-push, reset, or other git/destructive work.\n\
          - Persona **Tier-1 target repos** (`Repo: /absolute/path/...` in identity/memory) are \
@@ -235,12 +243,11 @@ fn command_mentions_self_repo_source(command: &str, self_str: &str) -> bool {
 
 /// Block message when bash tries to git the self-repo.
 pub fn self_repo_git_block_message(workspace_root: &Path) -> String {
-    let self_path =
-        self_repo_display(workspace_root).unwrap_or_else(|| "finally-a-value-bot".to_string());
+    let self_path = self_repo_display(workspace_root).unwrap_or_else(|| PACKAGE_NAME.to_string());
     format!(
         "Blocked: git against the bot's own checkout ({self_path}) is not allowed. \
          Persona Tier-1 target repos (`Repo: …` paths) are fully allowed — cd there first. \
-         Do not use the finally-a-value-bot source repo as a project."
+         Do not use the Meido source repo as a project."
     )
 }
 
@@ -260,10 +267,8 @@ mod tests {
     use std::fs;
 
     fn temp_tree(label: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_self_repo_{label}_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("meido_self_repo_{label}_{}", uuid::Uuid::new_v4()));
         let _ = fs::remove_dir_all(&root);
         root
     }
@@ -271,6 +276,19 @@ mod tests {
     #[test]
     fn detects_cargo_package_name() {
         let root = temp_tree("cargo");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"meido\"\nversion = \"0.0.1\"\n",
+        )
+        .unwrap();
+        assert!(looks_like_self_repo(&root));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn detects_legacy_cargo_package_name() {
+        let root = temp_tree("cargo_legacy");
         fs::create_dir_all(&root).unwrap();
         fs::write(
             root.join("Cargo.toml"),
@@ -282,15 +300,24 @@ mod tests {
     }
 
     #[test]
+    fn ignores_unrelated_cargo_package() {
+        let root = temp_tree("cargo_other");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"sourdough\"\nversion = \"0.0.1\"\n",
+        )
+        .unwrap();
+        assert!(!looks_like_self_repo(&root));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn workspace_paths_not_self_source() {
         let root = temp_tree("ws");
         let ws = root.join("workspace");
         fs::create_dir_all(ws.join("shared")).unwrap();
-        fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"finally-a-value-bot\"\n",
-        )
-        .unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"meido\"\n").unwrap();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src").join("lib.rs"), "").unwrap();
 
@@ -307,11 +334,7 @@ mod tests {
         let root = temp_tree("gitcmd");
         let ws = root.join("workspace");
         fs::create_dir_all(&ws).unwrap();
-        fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"finally-a-value-bot\"\n",
-        )
-        .unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"meido\"\n").unwrap();
         fs::create_dir_all(root.join("scripts")).unwrap();
         fs::write(root.join("scripts").join("cursor-sdk-runner.py"), "").unwrap();
         fs::create_dir_all(root.join("src")).unwrap();
@@ -337,11 +360,7 @@ mod tests {
         let ws = root.join("workspace");
         let persona = ws.join("shared").join("personas").join("1").join("2");
         fs::create_dir_all(&persona).unwrap();
-        fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"finally-a-value-bot\"\n",
-        )
-        .unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"meido\"\n").unwrap();
         assert!(check_agent_cwd_allowed(&ws, &persona).is_ok());
         assert!(check_agent_cwd_allowed(&ws, &root).is_err());
         let _ = fs::remove_dir_all(&root);

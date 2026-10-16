@@ -231,8 +231,7 @@ export function SettingsLocalDelegatePanel({ api, onError }: Props) {
 
       <span>
         Configure a local OpenAI-compatible server for Classic · Cost routing (read-only discovery
-        and delegated sub-jobs) and PTE/PDQE sidecars. Enable cost routing from Settings → Agent
-        engine (per persona, or the global inherit default).
+        and delegated sub-jobs) and PTE/PDQE sidecars. Turn on cost routing from the Persona page.
       </span>
 
       {!localToolsOk ? (
@@ -342,7 +341,7 @@ export function SettingsLocalDelegatePanel({ api, onError }: Props) {
           <span className="font-mono">
             {config.strategy_provider ?? 'anthropic'} / {config.strategy_model ?? 'claude-sonnet'}
           </span>{' '}
-          from Settings → Agent engine. Cost routing sends read-only tool chains to the local model above.
+          on the Persona page. Cost routing sends read-only tool chains to the local model above.
         </span>
       </div>
 

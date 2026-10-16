@@ -11,7 +11,7 @@ import {
   writeStoredPersonaId,
   writeStoredSessionForPersona,
 } from '../lib/persona-storage'
-import { engineLabel, type EngineId } from '../lib/agent-engine'
+import { type EngineId } from '../lib/agent-engine'
 import type { ChatSession, Persona } from '../types'
 import type { PendingConfirm } from '../components/confirm-dialog'
 
@@ -424,53 +424,6 @@ export function usePersonaSession({
     [chatId, loadPersonas, setError, setStatusText],
   )
 
-  const onSetPersonaEngine = useCallback(
-    async (engine: EngineId) => {
-      if (activePersonaId == null) {
-        throw new Error('Select a persona before choosing an agent engine')
-      }
-      const previous = personas.find((p) => p.id === activePersonaId)
-      setPersonas((prev) =>
-        prev.map((p) =>
-          p.id === activePersonaId
-            ? { ...p, agent_engine_override: engine, agent_engine_effective: engine }
-            : p,
-        ),
-      )
-      try {
-        await api(`/api/personas/${activePersonaId}/bulletin`, {
-          method: 'PATCH',
-          body: JSON.stringify({ agent_engine_override: engine }),
-        })
-        setPersonas((prev) =>
-          prev.map((p) =>
-            p.id === activePersonaId
-              ? { ...p, agent_engine_override: engine, agent_engine_effective: engine }
-              : p,
-          ),
-        )
-        setStatusText(`Agent engine set to ${engineLabel(engine)}`)
-        setError('')
-      } catch (e) {
-        setPersonas((prev) =>
-          prev.map((p) =>
-            p.id === activePersonaId
-              ? {
-                  ...p,
-                  agent_engine_override: previous?.agent_engine_override,
-                  agent_engine_effective: previous?.agent_engine_effective,
-                }
-              : p,
-          ),
-        )
-        const message = e instanceof Error ? e.message : String(e)
-        setError(message)
-        throw e
-      }
-    },
-    [activePersonaId, personas, setError, setPersonas, setStatusText],
-  )
-
   const onRenamePersona = useCallback(
     async (personaId: number, name: string) => {
       if (chatId == null) return
@@ -553,7 +506,6 @@ export function usePersonaSession({
     handleCreateSession,
     handleDeleteSession,
     onCreatePersona,
-    onSetPersonaEngine,
     onRenamePersona,
     onDeletePersona,
     newSchedulePersonaId,

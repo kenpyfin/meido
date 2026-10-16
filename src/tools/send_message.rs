@@ -695,10 +695,7 @@ mod tests {
     use serde_json::json;
 
     fn test_db() -> (Arc<Database>, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_sendmsg_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("meido_sendmsg_{}", uuid::Uuid::new_v4()));
         let db = Arc::new(Database::new(dir.to_str().unwrap()).unwrap());
         (db, dir)
     }
@@ -715,7 +712,7 @@ mod tests {
             .execute(json!({
                 "chat_id": 200,
                 "text": "hello",
-                "__finally_a_value_bot_auth": {
+                "__meido_auth": {
                     "caller_chat_id": 100,
                     "control_chat_ids": []
                 }
@@ -740,7 +737,7 @@ mod tests {
             .execute(json!({
                 "chat_id": chat_id,
                 "text": "from beta run",
-                "__finally_a_value_bot_auth": {
+                "__meido_auth": {
                     "caller_chat_id": chat_id,
                     "caller_persona_id": beta_id,
                     "control_chat_ids": []
@@ -770,7 +767,7 @@ mod tests {
             .execute(json!({
                 "chat_id": 999,
                 "text": "hello web",
-                "__finally_a_value_bot_auth": {
+                "__meido_auth": {
                     "caller_chat_id": 999,
                     "control_chat_ids": []
                 }
@@ -797,7 +794,7 @@ mod tests {
             .execute(json!({
                 "chat_id": 200,
                 "text": "hello",
-                "__finally_a_value_bot_auth": {
+                "__meido_auth": {
                     "caller_chat_id": 100,
                     "control_chat_ids": [100]
                 }
@@ -835,7 +832,7 @@ mod tests {
             .execute(json!({
                 "chat_id": 999,
                 "text": "scheduled update",
-                "__finally_a_value_bot_auth": {
+                "__meido_auth": {
                     "caller_chat_id": 999,
                     "caller_channel": "scheduler",
                     "is_scheduled_task": true,
@@ -864,7 +861,7 @@ mod tests {
                 "chat_id": 999,
                 "attachment_path": attachment.to_string_lossy(),
                 "caption": "test",
-                "__finally_a_value_bot_auth": {
+                "__meido_auth": {
                     "caller_chat_id": 999,
                     "caller_channel": "web",
                     "control_chat_ids": []
@@ -889,7 +886,7 @@ mod tests {
             .execute(json!({
                 "chat_id": 123,
                 "attachment_path": attachment.to_string_lossy(),
-                "__finally_a_value_bot_auth": {
+                "__meido_auth": {
                     "caller_chat_id": 123,
                     "caller_channel": "discord",
                     "control_chat_ids": []
@@ -915,7 +912,7 @@ mod tests {
             .execute(json!({
                 "chat_id": 861234567890i64,
                 "attachment_path": attachment.to_string_lossy(),
-                "__finally_a_value_bot_auth": {
+                "__meido_auth": {
                     "caller_chat_id": 861234567890i64,
                     "caller_channel": "whatsapp",
                     "control_chat_ids": []
@@ -960,7 +957,7 @@ mod tests {
             .execute(json!({
                 "chat_id": 999,
                 "attachment_path": attachment.to_string_lossy(),
-                "__finally_a_value_bot_auth": {
+                "__meido_auth": {
                     "caller_chat_id": 999,
                     "caller_channel": "scheduler",
                     "control_chat_ids": []
@@ -997,7 +994,7 @@ mod tests {
                 "chat_id": 999,
                 "attachment_path": attachment.to_string_lossy(),
                 "caption": "Generated PDF",
-                "__finally_a_value_bot_auth": {
+                "__meido_auth": {
                     "caller_chat_id": 999,
                     "caller_channel": "web",
                     "control_chat_ids": []

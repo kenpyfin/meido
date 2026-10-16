@@ -7,14 +7,14 @@ use std::path::PathBuf;
 /// Resolve the on-disk `builtin_skills/` directory used for skill discovery and bundled scripts.
 ///
 /// Precedence:
-/// 1. `FINALLY_A_VALUE_BOT_BUILTIN_SKILLS` if set and the path exists
+/// 1. `MEIDO_BUILTIN_SKILLS` (or legacy `FINALLY_A_VALUE_BOT_BUILTIN_SKILLS`) if set and the path exists
 /// 2. Parent of the workspace data root + `builtin_skills` (typical layout: repo contains `workspace/` and `builtin_skills/`)
 /// 3. Current working directory + `builtin_skills`
 /// 4. Parent of the current executable + `builtin_skills` (deployment: ship folder next to the binary)
 /// 5. Compile-time `CARGO_MANIFEST_DIR/builtin_skills` if it exists (e.g. `cargo run` from the crate root)
 pub fn resolve_builtin_skills_dir(config: &Config) -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("FINALLY_A_VALUE_BOT_BUILTIN_SKILLS") {
-        let pb = PathBuf::from(p.trim());
+    if let Some(p) = crate::meido_env::get(crate::meido_env::BUILTIN_SKILLS) {
+        let pb = PathBuf::from(p);
         if pb.is_dir() {
             return Some(pb);
         }

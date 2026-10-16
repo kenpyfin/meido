@@ -57,15 +57,13 @@ impl Tool for RecallTool {
         };
         let Some(auth) = auth_context_from_input(&input) else {
             return ToolResult::error(
-                "Missing auth context (__finally_a_value_bot_auth) with caller_persona_id for this chat"
-                    .into(),
+                "Missing auth context (__meido_auth) with caller_persona_id for this chat".into(),
             )
             .with_error_type("auth_required");
         };
         if auth.caller_persona_id <= 0 {
             return ToolResult::error(
-                "Missing auth context (__finally_a_value_bot_auth) with caller_persona_id for this chat"
-                    .into(),
+                "Missing auth context (__meido_auth) with caller_persona_id for this chat".into(),
             )
             .with_error_type("auth_required");
         }

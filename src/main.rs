@@ -1,11 +1,10 @@
-use finally_a_value_bot::claude::{Message, MessageContent};
-use finally_a_value_bot::config::Config;
-use finally_a_value_bot::error::FinallyAValueBotError;
-use finally_a_value_bot::{
-    builtin_skills, channel_integration_config, db, doctor, gateway, logging, mcp, memory, runtime,
+use meido::config::Config;
+use meido::error::FinallyAValueBotError;
+use meido::{
+    builtin_skills, channel_integration_config, daemon, db, gateway, logging, mcp, memory, runtime,
     skills,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::info;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -15,17 +14,23 @@ fn print_help() {
         r#"Meido v{VERSION} — Finally a helpful one. Web-first agentic assistant; Telegram, WhatsApp, Discord & WeCom are optional channels
 
 USAGE:
-    finally_a_value_bot <COMMAND>
+    meido <COMMAND>
 
 COMMANDS:
-    start       Start the bot (Telegram + optional WhatsApp/Discord/WeCom)
-    gateway     Manage gateway service (install/uninstall/start/stop/status/logs)
-    config      (retired) Use Web UI Settings instead
-    doctor      Run preflight diagnostics (cross-platform)
-    test-llm [--with-tools]   Test LLM connection (use --with-tools to send tools like Telegram)
-    setup       (retired) Use Web UI onboarding instead
-    version     Show version information
-    help        Show this help message
+    start [--foreground]  Start Meido and the web UI, then return
+                          (--foreground stays attached to this terminal)
+    stop                  Stop the process from `meido start`
+    gateway               Optional login service on macOS and Linux.
+                          Not required for the web UI. See `meido gateway help`.
+    version               Show version information
+    help                  Show this help message
+
+WEB UI AND LOGIN SERVICE:
+    `meido start` serves the web UI. It returns immediately and stays up until
+    `meido stop` or a reboot.
+    `meido gateway` is optional. It is a user service (systemd on Linux, launchd
+    on macOS) that runs that same start at login and restarts Meido if the
+    process exits. Windows has no gateway; use `meido start`.
 
 FEATURES:
     - Agentic tool use (bash, files, search, memory)
@@ -47,15 +52,15 @@ FEATURES:
 
 SETUP:
     1. Copy .env.example to .env and set bootstrap values:
-       FINALLY_A_VALUE_BOT_WORKSPACE_DIR (or WORKSPACE_DIR), WEB_HOST/WEB_PORT, WEB_AUTH_TOKEN when exposing non-local.
-    2. Start the app: finally_a_value_bot start
+       MEIDO_WORKSPACE_DIR (or WORKSPACE_DIR), WEB_HOST/WEB_PORT, WEB_AUTH_TOKEN when exposing non-local.
+    2. Start the app: meido start
     3. Open Web UI: http://127.0.0.1:10961 and finish runtime settings there.
 
        Runtime channel/LLM settings are now managed from Web UI and persisted in SQLite.
 
 CONFIG FILE (.env):
     Meido reads configuration from .env in the current directory.
-    Copy .env.example to .env and fill in values. Override path with FINALLY_A_VALUE_BOT_CONFIG.
+    Copy .env.example to .env and fill in values. Override path with MEIDO_CONFIG.
 
     Core fields:
       llm_provider           Provider preset (default: anthropic)
@@ -81,125 +86,75 @@ MCP (optional):
     See https://modelcontextprotocol.io for details.
 
 EXAMPLES:
-    finally_a_value_bot start               Start the bot
-    finally_a_value_bot gateway install     Install and enable gateway service
-    finally_a_value_bot gateway status      Show gateway service status
-    finally_a_value_bot gateway logs 100    Show last 100 lines of gateway logs
-    finally_a_value_bot config              Retired; use Web UI Settings
-    finally_a_value_bot doctor              Run preflight diagnostics
-    finally_a_value_bot doctor --json       Output diagnostics as JSON
-    finally_a_value_bot test-llm            Test LLM API connection (no tools)
-    finally_a_value_bot test-llm --with-tools   Test LLM with full tool list (like Telegram)
-    finally_a_value_bot setup               Retired; use Web UI onboarding
-    finally_a_value_bot version             Show version
-    finally_a_value_bot help                Show this message
+    meido start               Start Meido and the web UI, then return
+    meido start --foreground  Start attached to this terminal
+    meido stop                Stop that process. Also stops the login service if it is running.
+    meido gateway install     Optional: install the login service (macOS and Linux)
+    meido gateway status      Show whether that service is running
+    meido gateway logs 100    Show last 100 lines of its logs
+    meido version             Show version
+    meido help                Show this message
 
 ABOUT:
-    https://finally_a_value_bot.ai"#
+    https://github.com/kenpyfin/meido"#
     );
+}
+
+fn print_detached_status(config: &Config, runtime_dir: &str, pid: u32, wait_for_bind: bool) {
+    if wait_for_bind {
+        println!("Meido started in the background (pid {pid}).");
+    } else {
+        println!("Meido is already running (pid {pid}).");
+    }
+    if wait_for_bind && config.web_enabled {
+        println!("Waiting for the web UI to bind...");
+        match daemon::wait_for_bound_port(Path::new(runtime_dir), pid) {
+            daemon::BoundWait::Ready(port) => {
+                println!("{}", daemon::web_ui_line(&config.web_host, port, true));
+            }
+            daemon::BoundWait::Failed => {
+                println!("The web UI failed to bind. Logs: {runtime_dir}/logs");
+            }
+            daemon::BoundWait::Exited => {
+                println!("Meido exited before the web UI bound. Logs: {runtime_dir}/logs");
+            }
+            daemon::BoundWait::TimedOut => {
+                println!("The web UI has not bound yet. Logs: {runtime_dir}/logs");
+            }
+        }
+    } else if let Some(port) = daemon::bound_port_for_pid(Path::new(runtime_dir), pid) {
+        println!(
+            "{}",
+            daemon::web_ui_line(&config.web_host, port, config.web_enabled)
+        );
+    } else {
+        println!(
+            "{}",
+            daemon::web_ui_line(&config.web_host, config.web_port, config.web_enabled)
+        );
+    }
+    println!("Logs: {runtime_dir}/logs");
+    println!("Stop with: meido stop");
+}
+
+fn load_config() -> anyhow::Result<Config> {
+    match Config::load() {
+        Ok(config) => {
+            config.publish_workspace_paths();
+            Ok(config)
+        }
+        Err(FinallyAValueBotError::Config(e)) => {
+            eprintln!("Config missing/invalid: {e}");
+            eprintln!("Create or fix .env (bootstrap values), then open Web UI to finish setup.");
+            eprintln!("Example: cp .env.example .env && meido start (then visit Web UI)");
+            Err(anyhow::anyhow!("config required: {e}"))
+        }
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn print_version() {
-    println!("finally_a_value_bot {VERSION}");
-}
-
-async fn run_test_llm(with_tools: bool) -> anyhow::Result<()> {
-    let mut config = match Config::load() {
-        Ok(c) => c,
-        Err(FinallyAValueBotError::Config(e)) => {
-            eprintln!("Config error: {e}");
-            eprintln!("Set FINALLY_A_VALUE_BOT_CONFIG or create .env (copy from .env.example)");
-            std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("Failed to load config: {e}");
-            std::process::exit(1);
-        }
-    };
-    let runtime_data_dir = config.runtime_data_dir();
-    let db = match db::Database::new(&runtime_data_dir) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("Database init failed: {e}");
-            std::process::exit(1);
-        }
-    };
-    if let Err(e) = config.merge_llm_selection_from_app_settings(&db) {
-        eprintln!("LLM config error: {e}");
-        std::process::exit(1);
-    }
-    let provider = finally_a_value_bot::llm::create_provider(&config);
-    let messages = vec![Message {
-        role: "user".into(),
-        content: MessageContent::Text("Reply with exactly: OK".into()),
-    }];
-    let tools_arg = if with_tools {
-        let db = std::sync::Arc::new(db);
-        let token = if config.telegram_bot_token.is_empty() {
-            "dummy"
-        } else {
-            &config.telegram_bot_token
-        };
-        let bot = teloxide::Bot::new(token);
-        let runtime_toggles =
-            finally_a_value_bot::runtime_toggles::RuntimeToggles::new(config.tool_output_debug);
-        let env_redactor = std::sync::Arc::new(
-            finally_a_value_bot::safety_redaction::EnvSecretRedactor::discover(&config),
-        );
-        let tools = finally_a_value_bot::tools::ToolRegistry::new(
-            &config,
-            bot,
-            db.clone(),
-            runtime_toggles,
-            env_redactor,
-        );
-        let defs = tools.definitions();
-        println!("Testing with {} tools (same as Telegram).", defs.len());
-        Some(defs)
-    } else {
-        None
-    };
-    println!(
-        "Testing LLM: provider={} model={} base={}{}",
-        config.llm_provider,
-        config.model,
-        config.llm_base_url.as_deref().unwrap_or("(default)"),
-        if with_tools { " (with tools)" } else { "" }
-    );
-    match provider
-        .send_message("You are a test assistant.", messages, tools_arg)
-        .await
-    {
-        Ok(resp) => {
-            let text = resp
-                .content
-                .iter()
-                .filter_map(|b| match b {
-                    finally_a_value_bot::claude::ResponseContentBlock::Text { text } => {
-                        Some(text.as_str())
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("");
-            let usage = resp
-                .usage
-                .as_ref()
-                .map(|u| {
-                    format!(
-                        " (input: {} output: {} tokens)",
-                        u.input_tokens, u.output_tokens
-                    )
-                })
-                .unwrap_or_default();
-            println!("LLM OK. Response: {}{}", text.trim(), usage);
-        }
-        Err(e) => {
-            eprintln!("LLM error: {e}");
-            std::process::exit(1);
-        }
-    }
-    Ok(())
+    println!("meido {VERSION}");
 }
 
 fn move_path(src: &Path, dst: &Path) -> std::io::Result<()> {
@@ -241,7 +196,7 @@ fn ensure_workspace_shared_dir(data_root: &Path) {
 
 /// Log when a mistaken nested workspace exists under `shared/workspace/`.
 fn warn_shadow_workspace_if_present(data_root: &Path) {
-    let shadow = finally_a_value_bot::tools::shadow_workspace_path(data_root);
+    let shadow = meido::tools::shadow_workspace_path(data_root);
     if shadow.is_dir() {
         tracing::warn!(
             shadow = %shadow.display(),
@@ -323,6 +278,72 @@ fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+const DEFAULT_AGENTS_MD: &str = include_str!("../defaults/AGENTS.md");
+
+/// `true` when principles stay at `{workspace}/AGENTS.md` (unset or that relative name).
+fn principles_at_workspace_root(principles_path: Option<&str>) -> bool {
+    match principles_path.map(str::trim).filter(|p| !p.is_empty()) {
+        None | Some("AGENTS.md") | Some("./AGENTS.md") => true,
+        Some(_) => false,
+    }
+}
+
+/// Principles file from `VAULT_PRINCIPLES_PATH` when set. Absolute paths are kept.
+/// Relative `..` is refused. Unset means `{workspace}/AGENTS.md`.
+fn principles_dest(workspace_root: &Path, principles_path: Option<&str>) -> Option<PathBuf> {
+    let rel = principles_path
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .unwrap_or("AGENTS.md");
+    let path = Path::new(rel);
+    if !path.is_absolute()
+        && (rel.contains(':')
+            || path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir)))
+    {
+        return None;
+    }
+    let dest = meido::config::resolve_workspace_data_path(workspace_root, rel);
+    if dest.as_os_str().is_empty() {
+        None
+    } else {
+        Some(dest)
+    }
+}
+
+/// Write the shipped principles file when the configured path has none.
+/// An existing file is left unchanged.
+fn ensure_default_agents_md(workspace_root: &Path, principles_path: Option<&str>) {
+    let Some(dest) = principles_dest(workspace_root, principles_path) else {
+        tracing::warn!(
+            "Not writing default principles: VAULT_PRINCIPLES_PATH is not a safe relative path"
+        );
+        return;
+    };
+    if dest.exists() {
+        return;
+    }
+    if let Some(parent) = dest.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            tracing::warn!(
+                "Failed to create directory for default principles: {}",
+                parent.display()
+            );
+            return;
+        }
+    }
+    if let Err(e) = std::fs::write(&dest, DEFAULT_AGENTS_MD) {
+        tracing::warn!(
+            "Failed to write default principles to '{}': {}",
+            dest.display(),
+            e
+        );
+    } else {
+        tracing::info!("Wrote default principles to {}", dest.display());
+    }
 }
 
 /// Ensure AGENTS.md lives at workspace_root/AGENTS.md (canonical). Move from runtime/groups/ or
@@ -416,7 +437,7 @@ fn migrate_legacy_runtime_layout(data_root: &Path, runtime_dir: &Path) {
 }
 
 fn is_llm_ready(config: &Config) -> bool {
-    finally_a_value_bot::llm_catalog::any_provider_api_key_configured()
+    meido::llm_catalog::any_provider_api_key_configured()
         || matches!(
             config.llm_provider.as_str(),
             "ollama" | "llama" | "llamacpp"
@@ -442,27 +463,23 @@ async fn main() -> anyhow::Result<()> {
 
     match command {
         Some("start") => {}
+        Some("stop") => {
+            let config = load_config()?;
+            let gateway_stopped = match gateway::stop_if_active() {
+                Ok(stopped) => stopped,
+                Err(e) => {
+                    eprintln!("Warning: failed to stop gateway service: {e}");
+                    false
+                }
+            };
+            let stopped = daemon::stop(Path::new(&config.runtime_data_dir()), config.web_port)?;
+            if stopped.is_empty() && !gateway_stopped {
+                println!("Meido is not running.");
+            }
+            return Ok(());
+        }
         Some("gateway") => {
             gateway::handle_gateway_cli(&args[2..])?;
-            return Ok(());
-        }
-        Some("setup") => {
-            println!("`setup` is retired. Use Web UI onboarding instead.");
-            println!("Start the app, then open http://127.0.0.1:10961 and configure Settings.");
-            return Ok(());
-        }
-        Some("config") => {
-            println!("`config` is retired. Use Web UI onboarding instead.");
-            println!("Start the app, then open http://127.0.0.1:10961 and configure Settings.");
-            return Ok(());
-        }
-        Some("doctor") => {
-            doctor::run_cli(&args[2..])?;
-            return Ok(());
-        }
-        Some("test-llm") => {
-            let with_tools = args.get(2).map(|s| s.as_str()) == Some("--with-tools");
-            run_test_llm(with_tools).await?;
             return Ok(());
         }
         Some("version" | "--version" | "-V") => {
@@ -480,52 +497,65 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let mut config = match Config::load() {
-        Ok(c) => c,
-        Err(FinallyAValueBotError::Config(e)) => {
-            eprintln!("Config missing/invalid: {e}");
-            eprintln!("Create or fix .env (bootstrap values), then open Web UI to finish setup.");
-            eprintln!(
-                "Example: cp .env.example .env && finally_a_value_bot start (then visit Web UI)"
-            );
-            return Err(anyhow::anyhow!("config required: {e}"));
+    let mut config = load_config()?;
+    let foreground = args.iter().any(|arg| arg == "--foreground" || arg == "-f");
+    let runtime_data_dir = config.runtime_data_dir();
+    match daemon::resolve_start(Path::new(&runtime_data_dir), foreground)? {
+        daemon::StartRole::Run => {}
+        daemon::StartRole::Background { pid } => {
+            print_detached_status(&config, &runtime_data_dir, pid, true);
+            return Ok(());
         }
-        Err(e) => return Err(e.into()),
+        daemon::StartRole::AlreadyRunning { pid } => {
+            print_detached_status(&config, &runtime_data_dir, pid, false);
+            return Ok(());
+        }
+    }
+    let _pid_guard = if daemon::is_detached_child() {
+        Some(daemon::PidGuard::install(Path::new(&runtime_data_dir))?)
+    } else {
+        None
     };
+    if daemon::is_detached_child() || meido::meido_env::is_present(meido::meido_env::GATEWAY) {
+        logging::init_logging(&runtime_data_dir)?;
+    } else {
+        logging::init_console_logging();
+    }
     info!("Starting Meido...");
 
     let data_root_dir = config.data_root_dir();
-    let runtime_data_dir = config.runtime_data_dir();
     migrate_legacy_runtime_layout(&data_root_dir, Path::new(&runtime_data_dir));
     migrate_repo_shared_into_workspace(Path::new(config.working_dir()));
-    migrate_agents_md_to_workspace_root(
-        Path::new(config.working_dir()),
-        Path::new(&runtime_data_dir),
-    );
+    let principles_path = config
+        .vault
+        .as_ref()
+        .and_then(|vault| vault.principles_path.as_deref());
+    if principles_at_workspace_root(principles_path) {
+        migrate_agents_md_to_workspace_root(
+            Path::new(config.working_dir()),
+            Path::new(&runtime_data_dir),
+        );
+    }
+    ensure_default_agents_md(Path::new(config.working_dir()), principles_path);
 
     match builtin_skills::resolve_builtin_skills_dir(&config) {
         Some(p) => info!("Built-in skills directory: {}", p.display()),
         None => tracing::warn!(
-            "Built-in skills directory not found; set FINALLY_A_VALUE_BOT_BUILTIN_SKILLS or keep `builtin_skills/` next to the workspace data root. Only skills under the workspace will be available until then."
+            "Built-in skills directory not found; set MEIDO_BUILTIN_SKILLS or keep `builtin_skills/` next to the workspace data root. Only skills under the workspace will be available until then."
         ),
-    }
-
-    if std::env::var("FINALLY_A_VALUE_BOT_GATEWAY").is_ok() {
-        logging::init_logging(&runtime_data_dir)?;
-    } else {
-        logging::init_console_logging();
     }
 
     let db = db::Database::new(&runtime_data_dir)?;
     info!("Database initialized");
 
     config.merge_llm_selection_from_app_settings(&db)?;
+    meido::topics::seed_system_llm_from_env(&db)?;
     info!(
         "LLM selection: provider={} model={}",
         config.llm_provider, config.model
     );
 
-    match finally_a_value_bot::persona_shared_migrate::maybe_run(&config, &db) {
+    match meido::persona_shared_migrate::maybe_run(&config, &db) {
         Ok(stats) => {
             if stats.moved_to_persona + stats.moved_to_skills + stats.moved_to_unmigrated > 0 {
                 info!(
@@ -548,7 +578,7 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => tracing::warn!("Sibling channel binding provisioning skipped: {}", e),
     }
 
-    finally_a_value_bot::mempalace_setup::apply_managed_mempalace(&mut config);
+    meido::mempalace_setup::apply_managed_mempalace(&mut config);
 
     if let Err(e) = gateway::seed_default_vault_maintenance_tasks(&config) {
         tracing::warn!("Failed to seed recurring vault tasks: {}", e);
@@ -583,7 +613,8 @@ async fn main() -> anyhow::Result<()> {
         &runtime_data_dir,
         config.working_dir(),
         principles_path,
-    );
+    )
+    .with_origin_vault_root(config.origin_vault_root());
     info!("Memory manager initialized");
 
     // Workspace + shared skills first (override names); then repository `builtin_skills/` when resolved.

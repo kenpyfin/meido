@@ -539,7 +539,7 @@ pub fn translate_palace_tool(tool: &str, args: &Value) -> Result<(String, Value)
                     "room": args.get("room").cloned().unwrap_or(Value::Null),
                     "content": args.get("content").cloned().unwrap_or(Value::Null),
                     "source_file": args.get("source_file").cloned().unwrap_or(Value::Null),
-                    "added_by": "finally-a-value-bot",
+                    "added_by": "meido",
                 }),
             )),
             Some("delete_by_source") => Ok((
@@ -1248,21 +1248,7 @@ fn split_cursor(cursor: &str) -> (&str, &str) {
 }
 
 fn origin_root_from_config(config: &Config) -> PathBuf {
-    let root = config.workspace_root_absolute();
-    if let Some(vault) = &config.vault {
-        if let Some(rel) = vault
-            .origin_vault_path
-            .as_deref()
-            .filter(|p| !p.trim().is_empty())
-        {
-            let path = PathBuf::from(rel);
-            if path.is_absolute() {
-                return path;
-            }
-            return root.join(path);
-        }
-    }
-    root.join("shared").join("ORIGIN")
+    config.origin_vault_root()
 }
 
 fn safe_origin_file(root: &Path, rel: &str) -> Option<PathBuf> {

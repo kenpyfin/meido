@@ -29,12 +29,12 @@ jobs:
         include:
           - label: linux-x86_64
             os: ubuntu-latest
-            bin: finally-a-value-bot
+            bin: meido
             target_triple: x86_64-unknown-linux-gnu
             archive_ext: tar.gz
           - label: windows-x86_64
             os: windows-latest
-            bin: finally-a-value-bot.exe
+            bin: meido.exe
             target_triple: x86_64-pc-windows-msvc
             archive_ext: zip
 
@@ -66,7 +66,7 @@ jobs:
         if: matrix.archive_ext == 'tar.gz'
         shell: bash
         run: |
-          ASSET_NAME="finally-a-value-bot-${RELEASE_TAG}-${{ matrix.target_triple }}.tar.gz"
+          ASSET_NAME="meido-${RELEASE_TAG}-${{ matrix.target_triple }}.tar.gz"
           tar -czf "$ASSET_NAME" -C target/release "${{ matrix.bin }}"
           echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
 
@@ -74,7 +74,7 @@ jobs:
         if: matrix.archive_ext == 'zip'
         shell: pwsh
         run: |
-          $assetName = "finally-a-value-bot-${env:RELEASE_TAG}-${{ matrix.target_triple }}.zip"
+          $assetName = "meido-${env:RELEASE_TAG}-${{ matrix.target_triple }}.zip"
           Compress-Archive -Path "target/release/${{ matrix.bin }}" -DestinationPath $assetName -Force
           "ASSET_NAME=$assetName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 

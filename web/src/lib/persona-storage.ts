@@ -1,8 +1,8 @@
 import type { ChatSession } from '../types'
 import { PERSONA_SESSION_STORAGE_KEY } from '../app/constants'
 
-const PERSONA_STORAGE_KEY = 'finally-a-value-bot_selected_persona_id'
-const PERSONA_LAST_READ_STORAGE_KEY = 'finally-a-value-bot_persona_last_read_v1'
+const PERSONA_STORAGE_KEY = 'meido_selected_persona_id'
+const PERSONA_LAST_READ_STORAGE_KEY = 'meido_persona_last_read_v1'
 
 export function readStoredPersonaId(): number | null {
   if (typeof window === 'undefined') return null

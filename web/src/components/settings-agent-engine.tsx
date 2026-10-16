@@ -2,7 +2,6 @@ import { Component, useCallback, useEffect, useRef, useState, type ReactNode } f
 import { asEngineId, engineLabel, ENGINE_OPTIONS, type EngineId } from '../lib/agent-engine'
 import { SettingsPanelSkeleton } from './skeleton'
 import { SettingsLlmPanel } from './settings-llm'
-import { SettingsLocalDelegatePanel } from './settings-local-delegate'
 import { SettingsCursorPanel } from './settings-cursor'
 import { SettingsGeminiAdkPanel } from './settings-gemini-adk'
 import { SettingsRunContextPanel } from './settings-run-context'
@@ -272,12 +271,24 @@ export function SettingsAgentEnginePanel({
 
       <ConfigPanelErrorBoundary key={selectedEngine}>
         {selectedEngine === 'classic' ? (
-          <SettingsLlmPanel api={api} onError={onError} activePersonaId={activePersonaId} />
+          <SettingsLlmPanel
+            api={api}
+            onError={onError}
+            activePersonaId={activePersonaId}
+            includeThinking={false}
+          />
         ) : null}
         {selectedEngine === 'classic_cost_routing' ? (
           <div className="flex flex-col gap-4">
-            <SettingsLlmPanel api={api} onError={onError} activePersonaId={activePersonaId} />
-            <SettingsLocalDelegatePanel api={api} onError={onError} />
+            <SettingsLlmPanel
+              api={api}
+              onError={onError}
+              activePersonaId={activePersonaId}
+              includeThinking={false}
+            />
+            <span>
+              The local delegate used by cost routing is in Settings → Engine.
+            </span>
           </div>
         ) : null}
         {selectedEngine === 'cursor' ? (
@@ -285,6 +296,7 @@ export function SettingsAgentEnginePanel({
             api={api}
             onError={onError}
             activePersonaId={activePersonaId}
+            scope="model"
           />
         ) : null}
         {selectedEngine === 'gemini_adk' ? (
@@ -292,6 +304,7 @@ export function SettingsAgentEnginePanel({
             api={api}
             onError={onError}
             activePersonaId={activePersonaId}
+            scope="topology"
           />
         ) : null}
       </ConfigPanelErrorBoundary>

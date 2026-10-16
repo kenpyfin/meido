@@ -19,10 +19,12 @@ import {
   PanelLeft,
   Settings,
   Sun,
+  UserRound,
   Terminal,
 } from 'lucide-react'
 
 export type CommandPaletteActions = {
+  onOpenPersona: () => void
   onOpenSettings: () => void
   onOpenInbox: () => void
   onOpenOps?: () => void
@@ -73,6 +75,10 @@ export function CommandPalette({
       <CommandList>
         <CommandEmpty>No matches.</CommandEmpty>
         <CommandGroup heading="Actions">
+          <CommandItem onSelect={() => run(actions.onOpenPersona)}>
+            <UserRound />
+            Open Persona
+          </CommandItem>
           <CommandItem onSelect={() => run(actions.onOpenSettings)}>
             <Settings />
             Open Settings

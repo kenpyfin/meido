@@ -10,7 +10,6 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { IconListTree, IconMoreVertical } from './icons'
-import { AgentEngineSelect } from './agent-engine-select'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,7 +17,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu'
-import { ENGINE_OPTIONS, type EngineId } from '../lib/agent-engine'
 import {
   filterTopicTree,
   formatTopicWhen,
@@ -48,8 +46,7 @@ export type TopicOutlineTreeProps = {
   onTogglePin: (topicId: string, pinned: boolean) => void
   onMerge: (topicId: string) => void
   onDelete: (topicId: string) => void
-  onCreateSection: (topicId: string, title: string, engine: EngineId) => Promise<void>
-  agentEngine?: EngineId | null
+  onCreateSession: (topicId: string, title: string) => Promise<void>
   onRefresh: () => void
   collapsed?: boolean
   onToggleCollapsed?: () => void
@@ -71,8 +68,7 @@ export function TopicOutlineTree({
   onTogglePin,
   onMerge,
   onDelete,
-  onCreateSection,
-  agentEngine = null,
+  onCreateSession,
   onRefresh,
   collapsed = false,
   onToggleCollapsed,
@@ -82,15 +78,10 @@ export function TopicOutlineTree({
   const [cursor, setCursor] = React.useState(0)
   const [editingId, setEditingId] = React.useState<string | null>(null)
   const [draft, setDraft] = React.useState('')
-  const [sectionTopicId, setSectionTopicId] = React.useState<string | null>(null)
-  const [sectionTitle, setSectionTitle] = React.useState('')
-  const [sectionEngine, setSectionEngine] = React.useState<EngineId>('classic')
-  const [sectionBusy, setSectionBusy] = React.useState(false)
-  const [sectionError, setSectionError] = React.useState('')
-  const latestTopicId = React.useMemo(
-    () => sortTopicsByTimeDesc(topics)[0]?.id ?? null,
-    [topics],
-  )
+  const [sessionTopicId, setSessionTopicId] = React.useState<string | null>(null)
+  const [sessionTitle, setSessionTitle] = React.useState('')
+  const [sessionBusy, setSessionBusy] = React.useState(false)
+  const [sessionError, setSessionError] = React.useState('')
   const visible = React.useMemo(
     () => filterTopicTree(sortTopicsByTimeDesc(topics), filter),
     [filter, topics],
@@ -254,12 +245,10 @@ export function TopicOutlineTree({
                         onTogglePin={() => onTogglePin(topic.id, !topic.pinned)}
                         onMerge={() => onMerge(topic.id)}
                         onDelete={() => onDelete(topic.id)}
-                        canCreateSection={topic.id === latestTopicId}
-                        onCreateSection={() => {
-                          setSectionTopicId(topic.id)
-                          setSectionTitle('')
-                          setSectionEngine(agentEngine ?? 'classic')
-                          setSectionError('')
+                        onCreateSession={() => {
+                          setSessionTopicId(topic.id)
+                          setSessionTitle(topic.title)
+                          setSessionError('')
                         }}
                       />
                     </>
@@ -291,29 +280,27 @@ export function TopicOutlineTree({
           })}
         </div>
       )}
-      <NewSectionDialog
-        open={sectionTopicId != null}
-        title={sectionTitle}
-        engine={sectionEngine}
-        busy={sectionBusy}
-        error={sectionError}
-        onTitle={setSectionTitle}
-        onEngine={setSectionEngine}
+      <NewTopicSessionDialog
+        open={sessionTopicId != null}
+        title={sessionTitle}
+        busy={sessionBusy}
+        error={sessionError}
+        onTitle={setSessionTitle}
         onOpenChange={(open) => {
-          if (!open && !sectionBusy) setSectionTopicId(null)
+          if (!open && !sessionBusy) setSessionTopicId(null)
         }}
         onSubmit={() => {
-          if (!sectionTopicId || !sectionTitle.trim() || sectionBusy) return
-          const topicId = sectionTopicId
-          const nextTitle = sectionTitle.trim()
-          setSectionBusy(true)
-          setSectionError('')
-          void onCreateSection(topicId, nextTitle, sectionEngine)
-            .then(() => setSectionTopicId(null))
+          const nextTitle = sessionTitle.trim()
+          if (!sessionTopicId || !nextTitle || nextTitle.length > 500 || sessionBusy) return
+          const topicId = sessionTopicId
+          setSessionBusy(true)
+          setSessionError('')
+          void onCreateSession(topicId, nextTitle)
+            .then(() => setSessionTopicId(null))
             .catch((err: unknown) => {
-              setSectionError(err instanceof Error ? err.message : 'Could not create a section')
+              setSessionError(err instanceof Error ? err.message : 'Could not create a session')
             })
-            .finally(() => setSectionBusy(false))
+            .finally(() => setSessionBusy(false))
         }}
       />
     </div>
@@ -324,22 +311,20 @@ function TopicActionsMenu({
   title,
   pinned,
   canMerge,
-  canCreateSection,
   onRename,
   onTogglePin,
   onMerge,
   onDelete,
-  onCreateSection,
+  onCreateSession,
 }: {
   title: string
   pinned: boolean
   canMerge: boolean
-  canCreateSection: boolean
   onRename: () => void
   onTogglePin: () => void
   onMerge: () => void
   onDelete: () => void
-  onCreateSection: () => void
+  onCreateSession: () => void
 }) {
   return (
     <DropdownMenu>
@@ -379,14 +364,13 @@ function TopicActionsMenu({
           Merge with previous
         </DropdownMenuItem>
         <DropdownMenuItem
-          disabled={!canCreateSection}
-          title={canCreateSection ? 'Start the next section' : 'A new section starts after the latest topic'}
+          title="Start a fresh session from this topic"
           onSelect={(event) => {
             event.stopPropagation()
-            onCreateSection()
+            onCreateSession()
           }}
         >
-          Create new section
+          Create new session
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem
@@ -403,47 +387,44 @@ function TopicActionsMenu({
   )
 }
 
-function NewSectionDialog({
+function NewTopicSessionDialog({
   open,
   title,
-  engine,
   busy,
   error,
   onTitle,
-  onEngine,
   onOpenChange,
   onSubmit,
 }: {
   open: boolean
   title: string
-  engine: EngineId
   busy: boolean
   error: string
   onTitle: (value: string) => void
-  onEngine: (engine: EngineId) => void
   onOpenChange: (open: boolean) => void
   onSubmit: () => void
 }) {
-  const fieldId = React.useId()
-  const canCreate = title.trim().length > 0 && !busy
+  const trimmed = title.trim()
+  const tooLong = trimmed.length > 500
+  const canCreate = trimmed.length > 0 && !tooLong && !busy
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-[420px]">
         <DialogHeader>
-          <DialogTitle>New section</DialogTitle>
+          <DialogTitle>New session</DialogTitle>
           <DialogDescription>
-            Closes the latest section. The next messages use this title, and the engine is saved for
-            this persona.
+            Starts a fresh session from this topic, on the persona you already have open.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-2">
           <Input
-            placeholder="Section title"
+            placeholder="Session focus"
             value={title}
             onChange={(event) => onTitle(event.target.value)}
             autoFocus
             disabled={busy}
-            aria-label="Section title"
+            aria-label="Session title"
+            maxLength={500}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 event.preventDefault()
@@ -451,28 +432,15 @@ function NewSectionDialog({
               }
             }}
           />
+          {tooLong ? <p className="text-xs text-destructive">Keep the title under 500 characters.</p> : null}
           {error ? <p className="text-xs text-destructive">{error}</p> : null}
-          <div className="mt-2 flex flex-col gap-1.5">
-            <label htmlFor={fieldId} className="text-xs text-muted-foreground">
-              Agent engine
-            </label>
-            <AgentEngineSelect
-              id={fieldId}
-              value={engine}
-              onChange={onEngine}
-              disabled={busy}
-            />
-            <p className="text-xs text-muted-foreground">
-              {ENGINE_OPTIONS.find((opt) => opt.id === engine)?.subtitle}
-            </p>
-          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
           <Button onClick={onSubmit} disabled={!canCreate}>
-            {busy ? 'Creating…' : 'Create section'}
+            {busy ? 'Creating…' : 'Create session'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -512,8 +480,7 @@ export type TopicOutlineRailProps = {
   onTogglePin: (topicId: string, pinned: boolean) => void
   onMerge: (topicId: string) => void
   onDelete: (topicId: string) => void
-  onCreateSection: (topicId: string, title: string, engine: EngineId) => Promise<void>
-  agentEngine?: EngineId | null
+  onCreateSession: (topicId: string, title: string) => Promise<void>
   onRefresh: () => void
   enableSpy?: boolean
   className?: string
@@ -535,8 +502,7 @@ export function TopicOutlineRail({
   onTogglePin,
   onMerge,
   onDelete,
-  onCreateSection,
-  agentEngine = null,
+  onCreateSession,
   onRefresh,
   enableSpy = false,
   className,
@@ -628,8 +594,7 @@ export function TopicOutlineRail({
         onTogglePin={onTogglePin}
         onMerge={onMerge}
         onDelete={onDelete}
-        onCreateSection={onCreateSection}
-        agentEngine={agentEngine}
+        onCreateSession={onCreateSession}
         onRefresh={onRefresh}
         collapsed={variant === 'sheet' ? false : collapsed}
         onToggleCollapsed={toggleCollapsed}

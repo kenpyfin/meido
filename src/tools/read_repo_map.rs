@@ -9,13 +9,22 @@ use super::{schema_object, Tool, ToolResult};
 
 pub struct ReadRepoMapTool {
     working_dir: PathBuf,
+    origin_vault: PathBuf,
 }
 
 impl ReadRepoMapTool {
     pub fn new(working_dir: &str) -> Self {
+        let working_dir = PathBuf::from(working_dir);
+        let origin_vault = working_dir.join("shared").join("ORIGIN");
         Self {
-            working_dir: PathBuf::from(working_dir),
+            working_dir,
+            origin_vault,
         }
+    }
+
+    pub fn with_origin_vault(mut self, origin_vault: PathBuf) -> Self {
+        self.origin_vault = origin_vault;
+        self
     }
 }
 
@@ -186,12 +195,22 @@ impl Tool for ReadRepoMapTool {
         let tool_working_dir =
             super::resolve_tool_working_dir_for_auth(&self.working_dir, auth.as_ref());
         let root = match input.get("path").and_then(|v| v.as_str()) {
-            Some(path) => super::resolve_tool_path(&self.working_dir, &tool_working_dir, path),
+            Some(path) => super::resolve_tool_path_with_origin(
+                &self.working_dir,
+                &tool_working_dir,
+                path,
+                &self.origin_vault,
+                auth.as_ref().and_then(|a| a.vector_db_root.as_deref()),
+            ),
             None => tool_working_dir,
         };
-        if let Err(msg) =
-            super::assert_persona_tool_path_allowed(&self.working_dir, &root, auth.as_ref(), false)
-        {
+        if let Err(msg) = super::assert_persona_tool_path_allowed_with_origin(
+            &self.working_dir,
+            &root,
+            auth.as_ref(),
+            false,
+            &self.origin_vault,
+        ) {
             return ToolResult::error(msg);
         }
 
@@ -232,10 +251,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_repo_map_basic() {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_repo_map_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("meido_repo_map_{}", uuid::Uuid::new_v4()));
         // Tools resolve their working dir to `<root>/shared`, so place sources there.
         let src = root.join("shared").join("src");
         std::fs::create_dir_all(&src).unwrap();

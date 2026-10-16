@@ -93,8 +93,7 @@ fn stored_message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredMe
     })
 }
 
-const MESSAGE_SELECT_COLS: &str =
-    "id, chat_id, persona_id, session_id, sender_name, content, is_from_bot, timestamp, origin, speaker_persona_id";
+const MESSAGE_SELECT_COLS: &str = "id, chat_id, persona_id, session_id, sender_name, content, is_from_bot, timestamp, origin, speaker_persona_id";
 
 /// Main chat timeline: legacy rows plus focused sessions opted into main chat.
 const MAIN_CHAT_MESSAGE_VISIBILITY: &str = "(
@@ -129,8 +128,7 @@ fn persona_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Persona> {
     })
 }
 
-const CHAT_SESSION_SELECT_COLS: &str =
-    "id, chat_id, persona_id, title, intent, status, created_at, last_active_at, archived_at, ttl_hours, bootstrap_context_json, mirror_main_chat, seed_context, source_topic_id";
+const CHAT_SESSION_SELECT_COLS: &str = "id, chat_id, persona_id, title, intent, status, created_at, last_active_at, archived_at, ttl_hours, bootstrap_context_json, mirror_main_chat, seed_context, source_topic_id";
 
 fn chat_session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatSession> {
     Ok(ChatSession {
@@ -864,10 +862,38 @@ fn later_rfc3339(left: &str, right: &str) -> String {
     }
 }
 
+/// SQLite file name under the runtime data directory.
+pub const DB_FILE_NAME: &str = "meido.db";
+/// File name used before the product rename; adopted on first open, never written.
+const LEGACY_DB_FILE_NAME: &str = "finally_a_value_bot.db";
+
+/// Move a pre-rename database (and its WAL/SHM sidecars) to `DB_FILE_NAME`.
+///
+/// Runs only when the current file is absent and the legacy one exists, so a fresh
+/// install and an already-migrated install are both no-ops.
+fn adopt_legacy_db_file(data_dir: &Path) -> std::io::Result<()> {
+    if data_dir.join(DB_FILE_NAME).exists() || !data_dir.join(LEGACY_DB_FILE_NAME).exists() {
+        return Ok(());
+    }
+    for suffix in ["", "-wal", "-shm"] {
+        let from = data_dir.join(format!("{LEGACY_DB_FILE_NAME}{suffix}"));
+        if from.exists() {
+            std::fs::rename(&from, data_dir.join(format!("{DB_FILE_NAME}{suffix}")))?;
+        }
+    }
+    tracing::info!(
+        "Renamed database {LEGACY_DB_FILE_NAME} to {DB_FILE_NAME} in {}",
+        data_dir.display()
+    );
+    Ok(())
+}
+
 impl Database {
     pub fn new(data_dir: &str) -> Result<Self, FinallyAValueBotError> {
-        let db_path = Path::new(data_dir).join("finally_a_value_bot.db");
-        std::fs::create_dir_all(data_dir)?;
+        let data_root = Path::new(data_dir);
+        std::fs::create_dir_all(data_root)?;
+        adopt_legacy_db_file(data_root)?;
+        let db_path = data_root.join(DB_FILE_NAME);
 
         let conn = Connection::open(db_path)?;
         // PRAGMA journal_mode returns a row; use query_row to consume it (execute_batch fails with extra_check)
@@ -2886,7 +2912,7 @@ impl Database {
                 return Err(FinallyAValueBotError::ToolExecution(format!(
                     "unknown channel_type: {}",
                     channel_type
-                )))
+                )));
             }
         };
         let now = chrono::Utc::now().to_rfc3339();
@@ -9967,8 +9993,7 @@ mod tests {
     use super::*;
 
     fn test_db() -> (Database, std::path::PathBuf) {
-        let dir =
-            std::env::temp_dir().join(format!("finally_a_value_bot_test_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("meido_test_{}", uuid::Uuid::new_v4()));
         let db = Database::new(dir.to_str().unwrap()).unwrap();
         (db, dir)
     }

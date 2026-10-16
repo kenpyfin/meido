@@ -894,8 +894,6 @@ async fn summarize_with_llm(
     let mut llm_config = config.clone();
     if !config.hook_prompt_model.trim().is_empty() {
         llm_config.model = config.hook_prompt_model.trim().to_string();
-    } else if !config.orchestrator_model.trim().is_empty() {
-        llm_config.model = config.orchestrator_model.trim().to_string();
     }
     llm_config.max_tokens = SUMMARY_MAX_TOKENS.min(summary_chars as u32 + 200).max(256);
 

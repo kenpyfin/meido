@@ -19,7 +19,7 @@ const SHIPPED_HOOK_MANIFEST_SUFFIX: &str = ".hook.json";
 /// Resolve the on-disk `builtin_hooks/` directory.
 ///
 /// Precedence:
-/// 1. `FINALLY_A_VALUE_BOT_BUILTIN_HOOKS` if set and path exists
+/// 1. `MEIDO_BUILTIN_HOOKS` (or legacy `FINALLY_A_VALUE_BOT_BUILTIN_HOOKS`) if set and path exists
 /// 2. Parent of workspace root + `builtin_hooks`
 /// 3. Current working directory + `builtin_hooks`
 /// 4. Parent of current executable + `builtin_hooks`
@@ -44,8 +44,8 @@ pub fn resolve_builtin_hooks_dir_fallback() -> Option<PathBuf> {
 }
 
 fn resolve_builtin_hooks_dir_from_workspace(workspace_root: &Path) -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("FINALLY_A_VALUE_BOT_BUILTIN_HOOKS") {
-        let pb = PathBuf::from(p.trim());
+    if let Some(p) = crate::meido_env::get(crate::meido_env::BUILTIN_HOOKS) {
+        let pb = PathBuf::from(p);
         if pb.is_dir() {
             return Some(pb);
         }

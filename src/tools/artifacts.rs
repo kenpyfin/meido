@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 pub struct ArtifactTool {
     pub root: PathBuf,
+    pub origin_vault: PathBuf,
     pub operation: &'static str,
     pub db: std::sync::Arc<crate::db::Database>,
 }
@@ -16,7 +17,7 @@ impl Tool for ArtifactTool {
         self.operation
     }
     fn definition(&self) -> ToolDefinition {
-        let (description,properties,required)=match self.operation {
+        let (description, properties, required) = match self.operation {
             "publish_artifact" => (
                 "Publish a finished output as an immutable downloadable artifact. Returns a verified server-generated link; use it verbatim. The delivery layer automatically attaches publications from this run. Existing identical publication is reused. Use supersedes only for an explicitly replaced earlier output.",
                 json!({"path":{"type":"string","description":"Exact completed source file path"},"job_id":{"type":"string","description":"Optional gateway background job ID"},"supersedes":{"type":"string","description":"Optional artifact ID explicitly replaced by this output"}}),
@@ -27,7 +28,11 @@ impl Tool for ArtifactTool {
                 json!({"q":{"type":"string"},"job_id":{"type":"string"},"cursor":{"type":"string"},"kind":{"type":"string"},"before":{"type":"string"},"after":{"type":"string"}}),
                 vec![],
             ),
-            _ => ("Get a published artifact by ID, including its verified delivery link and availability.",json!({"id":{"type":"string"}}),vec!["id"]),
+            _ => (
+                "Get a published artifact by ID, including its verified delivery link and availability.",
+                json!({"id":{"type":"string"}}),
+                vec!["id"],
+            ),
         };
         ToolDefinition::new(
             self.operation,
@@ -40,6 +45,7 @@ impl Tool for ArtifactTool {
             return ToolResult::error("Missing trusted persona context".into());
         };
         let root = self.root.clone();
+        let origin_vault = self.origin_vault.clone();
         let op = self.operation;
         let db = self.db.clone();
         let result = tokio::task::spawn_blocking(move || -> anyhow::Result<serde_json::Value> {
@@ -52,9 +58,21 @@ impl Tool for ArtifactTool {
                         .as_str()
                         .ok_or_else(|| anyhow::anyhow!("path is required"))?;
                     let cwd = super::resolve_tool_working_dir_for_auth(&root, Some(&auth));
-                    let path = super::resolve_tool_path(&root, &cwd, raw);
-                    super::assert_persona_tool_path_allowed(&root, &path, Some(&auth), false)
-                        .map_err(anyhow::Error::msg)?;
+                    let path = super::resolve_tool_path_with_origin(
+                        &root,
+                        &cwd,
+                        raw,
+                        &origin_vault,
+                        auth.vector_db_root.as_deref(),
+                    );
+                    super::assert_persona_tool_path_allowed_with_origin(
+                        &root,
+                        &path,
+                        Some(&auth),
+                        false,
+                        &origin_vault,
+                    )
+                    .map_err(anyhow::Error::msg)?;
                     let job=input["job_id"].as_str();
                     if let Some(id)=job {
                         let job=db.get_background_job(id)?.ok_or_else(||anyhow::anyhow!("Unknown job"))?;

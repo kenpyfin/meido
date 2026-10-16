@@ -498,6 +498,8 @@ pub struct MemoryManager {
     working_dir: PathBuf,
     /// Optional override for principles path (relative to working_dir). Default: AGENTS.md at workspace root.
     principles_path_override: Option<String>,
+    /// Directory that receives `MemorySnapshots/`. Defaults to `{working_dir}/shared/ORIGIN`.
+    origin_vault_root: PathBuf,
 }
 
 impl MemoryManager {
@@ -511,11 +513,23 @@ impl MemoryManager {
         working_dir: &str,
         principles_path_override: Option<String>,
     ) -> Self {
+        let working_dir = PathBuf::from(working_dir);
+        let origin_vault_root = working_dir.join("shared").join("ORIGIN");
         MemoryManager {
             data_dir: PathBuf::from(data_dir).join("groups"),
-            working_dir: PathBuf::from(working_dir),
+            working_dir,
             principles_path_override: principles_path_override.filter(|p| !p.trim().is_empty()),
+            origin_vault_root,
         }
+    }
+
+    /// Write memory snapshots under the configured ORIGIN vault.
+    pub fn with_origin_vault_root(mut self, root: impl Into<PathBuf>) -> Self {
+        let root = root.into();
+        if !root.as_os_str().is_empty() {
+            self.origin_vault_root = root;
+        }
+        self
     }
 
     /// Path for global principles/memory: workspace root shared/AGENTS.md (single source of truth).
@@ -527,14 +541,23 @@ impl MemoryManager {
         self.data_dir.join(chat_id.to_string()).join("AGENTS.md")
     }
 
-    /// Path for shared principles for all chats/personas: workspace_dir/AGENTS.md (at workspace root),
-    /// or vault.principles_path if configured (e.g. shared/ORIGIN/AGENTS.md).
+    /// Shared principles file. `VAULT_PRINCIPLES_PATH` when set (absolute paths stay absolute);
+    /// otherwise `{working_dir}/AGENTS.md`. A relative value that climbs with `..` is ignored.
     pub fn groups_root_memory_path(&self) -> PathBuf {
         if let Some(ref p) = self.principles_path_override {
-            self.working_dir.join(p.trim().trim_start_matches('/'))
-        } else {
-            self.working_dir.join("AGENTS.md")
+            let trimmed = p.trim();
+            let path = Path::new(trimmed);
+            if path.is_absolute() {
+                return path.to_path_buf();
+            }
+            let climbs = path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir));
+            if !trimmed.contains(':') && !climbs {
+                return crate::config::resolve_workspace_data_path(&self.working_dir, trimmed);
+            }
         }
+        self.working_dir.join("AGENTS.md")
     }
 
     /// Path string for AGENTS.md (principles, for display in system prompt).
@@ -998,9 +1021,7 @@ impl MemoryManager {
         state: &PersonaMemoryState,
     ) -> std::io::Result<()> {
         let snapshot_path = self
-            .working_dir
-            .join("shared")
-            .join("ORIGIN")
+            .origin_vault_root
             .join("MemorySnapshots")
             .join(format!("chat-{}-persona-{}.md", chat_id, persona_id));
         if let Some(parent) = snapshot_path.parent() {
@@ -1523,10 +1544,7 @@ mod tests {
     use std::path::Path;
 
     fn test_memory_manager() -> (MemoryManager, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_mem_test_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("meido_mem_test_{}", uuid::Uuid::new_v4()));
         let dir_str = dir.to_str().unwrap();
         let mm = MemoryManager::new(dir_str, dir_str);
         (mm, dir)
@@ -1545,6 +1563,39 @@ mod tests {
             "path = {}",
             path.display()
         );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn test_principles_path_keeps_absolute_and_defaults_when_unset() {
+        let dir = std::env::temp_dir().join(format!("meido_principles_{}", uuid::Uuid::new_v4()));
+        let dir_str = dir.to_str().unwrap().to_string();
+        let unset = MemoryManager::with_principles_path(&dir_str, &dir_str, None);
+        assert_eq!(unset.groups_root_memory_path(), dir.join("AGENTS.md"));
+
+        let absolute = std::env::temp_dir()
+            .join(format!("meido_agents_{}", uuid::Uuid::new_v4()))
+            .join("Principles.md");
+        let set = MemoryManager::with_principles_path(
+            &dir_str,
+            &dir_str,
+            Some(absolute.to_string_lossy().to_string()),
+        );
+        assert_eq!(set.groups_root_memory_path(), absolute);
+
+        let relative =
+            MemoryManager::with_principles_path(&dir_str, &dir_str, Some("notes/AGENTS.md".into()));
+        assert_eq!(
+            relative.groups_root_memory_path(),
+            dir.join("notes").join("AGENTS.md")
+        );
+
+        let climbed = MemoryManager::with_principles_path(
+            &dir_str,
+            &dir_str,
+            Some("../outside/AGENTS.md".into()),
+        );
+        assert_eq!(climbed.groups_root_memory_path(), dir.join("AGENTS.md"));
         cleanup(&dir);
     }
 

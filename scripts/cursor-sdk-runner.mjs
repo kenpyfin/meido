@@ -231,7 +231,11 @@ function isEphemeralSessionScope(sessionScope) {
 }
 
 function runtimeDataDir() {
-  const runtime = (process.env.FINALLY_A_VALUE_BOT_RUNTIME_DATA || "").trim();
+  const runtime = (
+    process.env.MEIDO_RUNTIME_DATA ||
+    process.env.FINALLY_A_VALUE_BOT_RUNTIME_DATA ||
+    ""
+  ).trim();
   return runtime || path.join(SCRIPT_DIR, "..", "workspace", "runtime");
 }
 

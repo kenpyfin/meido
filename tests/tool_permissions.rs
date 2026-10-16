@@ -2,7 +2,7 @@
 //!
 //! Tests the ToolAuthContext and authorization logic across various scenarios.
 
-use finally_a_value_bot::tools::{auth_context_from_input, authorize_chat_access, ToolAuthContext};
+use meido::tools::{auth_context_from_input, authorize_chat_access, ToolAuthContext};
 use serde_json::json;
 
 // -----------------------------------------------------------------------
@@ -64,7 +64,7 @@ fn test_auth_context_empty_control_list() {
 fn test_auth_context_from_input_valid() {
     let input = json!({
         "some_param": "value",
-        "__finally_a_value_bot_auth": {
+        "__meido_auth": {
             "caller_chat_id": 42,
             "control_chat_ids": [42, 100]
         }
@@ -84,7 +84,7 @@ fn test_auth_context_from_input_missing() {
 #[test]
 fn test_auth_context_from_input_missing_caller_id() {
     let input = json!({
-        "__finally_a_value_bot_auth": {
+        "__meido_auth": {
             "control_chat_ids": [100]
         }
     });
@@ -94,7 +94,7 @@ fn test_auth_context_from_input_missing_caller_id() {
 #[test]
 fn test_auth_context_from_input_empty_control_ids() {
     let input = json!({
-        "__finally_a_value_bot_auth": {
+        "__meido_auth": {
             "caller_chat_id": 42,
             "control_chat_ids": []
         }
@@ -108,7 +108,7 @@ fn test_auth_context_from_input_empty_control_ids() {
 #[test]
 fn test_auth_context_from_input_no_control_ids_key() {
     let input = json!({
-        "__finally_a_value_bot_auth": {
+        "__meido_auth": {
             "caller_chat_id": 42
         }
     });
@@ -124,7 +124,7 @@ fn test_auth_context_from_input_no_control_ids_key() {
 #[test]
 fn test_authorize_same_chat_allowed() {
     let input = json!({
-        "__finally_a_value_bot_auth": {
+        "__meido_auth": {
             "caller_chat_id": 100,
             "control_chat_ids": []
         }
@@ -135,7 +135,7 @@ fn test_authorize_same_chat_allowed() {
 #[test]
 fn test_authorize_different_chat_denied() {
     let input = json!({
-        "__finally_a_value_bot_auth": {
+        "__meido_auth": {
             "caller_chat_id": 100,
             "control_chat_ids": []
         }
@@ -149,7 +149,7 @@ fn test_authorize_different_chat_denied() {
 #[test]
 fn test_authorize_control_chat_cross_access_allowed() {
     let input = json!({
-        "__finally_a_value_bot_auth": {
+        "__meido_auth": {
             "caller_chat_id": 100,
             "control_chat_ids": [100]
         }
@@ -176,7 +176,7 @@ fn test_authorize_no_auth_context_allows() {
 #[test]
 fn test_permission_matrix_regular_own() {
     let input = json!({
-        "__finally_a_value_bot_auth": {
+        "__meido_auth": {
             "caller_chat_id": 100,
             "control_chat_ids": []
         }
@@ -188,7 +188,7 @@ fn test_permission_matrix_regular_own() {
 #[test]
 fn test_permission_matrix_regular_other() {
     let input = json!({
-        "__finally_a_value_bot_auth": {
+        "__meido_auth": {
             "caller_chat_id": 100,
             "control_chat_ids": []
         }
@@ -200,7 +200,7 @@ fn test_permission_matrix_regular_other() {
 #[test]
 fn test_permission_matrix_control_own() {
     let input = json!({
-        "__finally_a_value_bot_auth": {
+        "__meido_auth": {
             "caller_chat_id": 100,
             "control_chat_ids": [100, 200]
         }
@@ -212,7 +212,7 @@ fn test_permission_matrix_control_own() {
 #[test]
 fn test_permission_matrix_control_other() {
     let input = json!({
-        "__finally_a_value_bot_auth": {
+        "__meido_auth": {
             "caller_chat_id": 100,
             "control_chat_ids": [100, 200]
         }
@@ -225,7 +225,7 @@ fn test_permission_matrix_control_other() {
 fn test_permission_matrix_multiple_control() {
     // Chat 100 is NOT in control list
     let input = json!({
-        "__finally_a_value_bot_auth": {
+        "__meido_auth": {
             "caller_chat_id": 100,
             "control_chat_ids": [200, 300]
         }

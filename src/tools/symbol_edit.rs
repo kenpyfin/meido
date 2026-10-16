@@ -9,15 +9,24 @@ use super::{schema_object, Tool, ToolResult};
 
 pub struct SymbolEditTool {
     working_dir: PathBuf,
+    origin_vault: PathBuf,
     enabled: bool,
 }
 
 impl SymbolEditTool {
     pub fn new(working_dir: &str, enabled: bool) -> Self {
+        let working_dir = PathBuf::from(working_dir);
+        let origin_vault = working_dir.join("shared").join("ORIGIN");
         Self {
-            working_dir: PathBuf::from(working_dir),
+            working_dir,
+            origin_vault,
             enabled,
         }
+    }
+
+    pub fn with_origin_vault(mut self, origin_vault: PathBuf) -> Self {
+        self.origin_vault = origin_vault;
+        self
     }
 }
 
@@ -177,7 +186,13 @@ impl Tool for SymbolEditTool {
         let auth = super::auth_context_from_input(&input);
         let working_dir =
             super::resolve_tool_working_dir_for_auth(&self.working_dir, auth.as_ref());
-        let resolved_path = super::resolve_tool_path(&self.working_dir, &working_dir, path);
+        let resolved_path = super::resolve_tool_path_with_origin(
+            &self.working_dir,
+            &working_dir,
+            path,
+            &self.origin_vault,
+            auth.as_ref().and_then(|a| a.vector_db_root.as_deref()),
+        );
         let resolved_path_str = resolved_path.to_string_lossy().to_string();
         if let Err(msg) = crate::tools::path_guard::check_path(&resolved_path_str) {
             return ToolResult::error(msg);
@@ -187,11 +202,12 @@ impl Tool for SymbolEditTool {
         {
             return ToolResult::error(msg);
         }
-        if let Err(msg) = super::assert_persona_tool_path_allowed(
+        if let Err(msg) = super::assert_persona_tool_path_allowed_with_origin(
             &self.working_dir,
             &resolved_path,
             auth.as_ref(),
             true,
+            &self.origin_vault,
         ) {
             return ToolResult::error(msg);
         }
@@ -211,7 +227,7 @@ impl Tool for SymbolEditTool {
                 return ToolResult::error(format!(
                     "{} Fallback: use apply_search_replace with a larger search block around the symbol declaration.",
                     msg
-                ))
+                ));
             }
         };
         let mut out = Vec::new();
@@ -239,10 +255,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_symbol_edit_python_function() {
-        let dir = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_symbol_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("meido_symbol_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("mod.py");
         std::fs::write(

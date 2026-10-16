@@ -37,7 +37,7 @@ bash builtin_skills/index-vault/setup_vault_env.sh
 | ---------------------------- | ------------------------------------------------ | ---------------------- |
 | `VAULT_ORIGIN_VAULT_PATH`    | Path to the ORIGIN vault (relative to workspace) | `shared/ORIGIN`        |
 | `VAULT_EMBEDDING_SERVER_URL` | Embedding API base URL                           | **Required** (no default) |
-| `VAULT_VECTOR_DB_PATH`       | ChromaDB persistent storage path                 | `shared/vault_db`      |
+| `VAULT_VECTOR_DB_PATH`       | ChromaDB path, relative to WORKSPACE_DIR         | `shared/vault_db`      |
 | `VAULT_VECTOR_DB_COLLECTION` | ChromaDB collection name                         | `origin_vault`         |
 
 

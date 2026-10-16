@@ -7,10 +7,10 @@ use std::process::Command;
 use std::sync::mpsc;
 use std::time::Duration;
 
-const LINUX_SERVICE_NAME: &str = "finally_a_value_bot-gateway.service";
-const MAC_LABEL: &str = "ai.finally_a_value_bot.gateway";
-const LOG_STDOUT_FILE: &str = "finally_a_value_bot-gateway.log";
-const LOG_STDERR_FILE: &str = "finally_a_value_bot-gateway.error.log";
+const LINUX_SERVICE_NAME: &str = "meido-gateway.service";
+const MAC_LABEL: &str = "ai.meido.gateway";
+const LOG_STDOUT_FILE: &str = "meido-gateway.log";
+const LOG_STDERR_FILE: &str = "meido-gateway.error.log";
 const DEFAULT_LOG_LINES: usize = 200;
 const STOP_TIMEOUT_SECS: u64 = 10;
 /// Vault index at 00:00, 06:00, 12:00, and 18:00 in the configured timezone.
@@ -56,23 +56,31 @@ pub fn handle_gateway_cli(args: &[String]) -> Result<()> {
 
 pub fn print_gateway_help() {
     println!(
-        r#"Gateway service management
+        r#"Optional login service (macOS and Linux)
+
+`meido start` serves the web UI. It returns immediately and stays up until
+`meido stop` or a reboot. You do not need this service to open the web UI.
+
+`meido gateway` installs a user service that runs that same start:
+    - starts Meido when you log in
+    - restarts it if the process exits
+    - keeps PATH and HOME from install time (a service does not inherit your shell)
 
 USAGE:
-    finally_a_value_bot gateway <ACTION>
+    meido gateway <ACTION>
 
 ACTIONS:
-    install      Install and enable persistent gateway service
-    uninstall    Disable and remove persistent gateway service
-    start        Start gateway service
-    stop         Stop gateway service
-    status       Show gateway service status
-    logs [N]     Show last N lines of gateway logs (default: 200)
+    install      Install and enable the login service, then start it
+    uninstall    Disable and remove the login service
+    start        Start the login service
+    stop         Stop the login service (it stays stopped until you start it)
+    status       Show whether the login service is running
+    logs [N]     Show last N lines of its logs (default: 200)
     help         Show this message
 
-NOTE: install captures your current PATH and HOME so the service can find
-MCP commands, etc. If you add new executables to PATH later,
-run: finally_a_value_bot gateway uninstall && finally_a_value_bot gateway install
+NOTE: install captures your current PATH and HOME so tools and MCP commands
+work under the service. If you add new executables to PATH later,
+run: meido gateway uninstall && meido gateway install
 "#
     );
 }
@@ -94,7 +102,7 @@ pub fn user_gateway_service_installed() -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn restart_user_gateway_now() -> Result<()> {
+pub(crate) fn restart_user_gateway_now() -> Result<()> {
     let output = run_command("systemctl", &["--user", "restart", LINUX_SERVICE_NAME])?;
     ensure_success(
         output,
@@ -104,21 +112,10 @@ fn restart_user_gateway_now() -> Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn restart_user_gateway_now() -> Result<()> {
+pub(crate) fn restart_user_gateway_now() -> Result<()> {
     let target = mac_target_label()?;
     let output = run_command("launchctl", &["kickstart", "-k", &target])?;
     ensure_success(output, "launchctl", &["kickstart", "-k", &target])
-}
-
-/// Restart after a short delay so an in-process HTTP response can flush before the gateway exits.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub fn schedule_user_gateway_restart() {
-    std::thread::spawn(|| {
-        std::thread::sleep(Duration::from_millis(300));
-        if let Err(e) = restart_user_gateway_now() {
-            eprintln!("finally_a_value_bot: gateway restart failed: {e}");
-        }
-    });
 }
 
 fn install() -> Result<()> {
@@ -129,7 +126,7 @@ fn install() -> Result<()> {
         install_linux(&ctx)?;
     } else {
         return Err(anyhow!(
-            "Gateway service is only supported on macOS and Linux"
+            "The login service is only supported on macOS and Linux. Use `meido start` to serve the web UI."
         ));
     }
     match load_config_for_gateway(&ctx) {
@@ -151,7 +148,7 @@ fn uninstall() -> Result<()> {
         uninstall_linux()
     } else {
         Err(anyhow!(
-            "Gateway service is only supported on macOS and Linux"
+            "The login service is only supported on macOS and Linux. Use `meido start` to serve the web UI."
         ))
     }
 }
@@ -163,8 +160,45 @@ fn start() -> Result<()> {
         start_linux()
     } else {
         Err(anyhow!(
-            "Gateway service is only supported on macOS and Linux"
+            "The login service is only supported on macOS and Linux. Use `meido start` to serve the web UI."
         ))
+    }
+}
+
+/// Stop the user gateway when it is installed and running.
+/// `systemctl stop` does not restart a unit with `Restart=always`.
+pub fn stop_if_active() -> Result<bool> {
+    if !user_gateway_service_installed() || !gateway_is_active() {
+        return Ok(false);
+    }
+    stop()?;
+    Ok(true)
+}
+
+fn gateway_is_active() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        match run_command("systemctl", &["--user", "is-active", LINUX_SERVICE_NAME]) {
+            Ok(output) => {
+                let state = String::from_utf8_lossy(&output.stdout);
+                matches!(state.trim(), "active" | "activating" | "reloading")
+            }
+            Err(_) => false,
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let Ok(target) = mac_target_label() else {
+            return false;
+        };
+        match run_command("launchctl", &["print", &target]) {
+            Ok(output) => output.status.success(),
+            Err(_) => false,
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        false
     }
 }
 
@@ -175,7 +209,7 @@ fn stop() -> Result<()> {
         stop_linux()
     } else {
         Err(anyhow!(
-            "Gateway service is only supported on macOS and Linux"
+            "The login service is only supported on macOS and Linux. Use `meido start` to serve the web UI."
         ))
     }
 }
@@ -187,7 +221,7 @@ fn status() -> Result<()> {
         status_linux()
     } else {
         Err(anyhow!(
-            "Gateway service is only supported on macOS and Linux"
+            "The login service is only supported on macOS and Linux. Use `meido start` to serve the web UI."
         ))
     }
 }
@@ -239,7 +273,7 @@ fn build_context() -> Result<ServiceContext> {
 }
 
 fn resolve_config_path(cwd: &Path) -> Option<PathBuf> {
-    if let Ok(from_env) = std::env::var("FINALLY_A_VALUE_BOT_CONFIG") {
+    if let Some(from_env) = crate::meido_env::get(crate::meido_env::CONFIG) {
         let path = PathBuf::from(from_env);
         return Some(if path.is_absolute() {
             path
@@ -262,11 +296,13 @@ fn resolve_runtime_logs_dir(cwd: &Path) -> PathBuf {
 }
 
 fn load_config_for_gateway(ctx: &ServiceContext) -> Result<Config> {
-    if let Some(path) = &ctx.config_path {
-        Config::load_from_path(path).map_err(Into::into)
+    let config = if let Some(path) = &ctx.config_path {
+        Config::load_from_path(path)?
     } else {
-        Config::load().map_err(Into::into)
-    }
+        Config::load()?
+    };
+    config.publish_workspace_paths();
+    Ok(config)
 }
 
 /// Create or retime the built-in vault index and git-push jobs so they do not share a start time.
@@ -439,13 +475,20 @@ fn run_command_with_timeout(
     });
     match rx.recv_timeout(Duration::from_secs(timeout_secs)) {
         Ok(Ok(output)) => Ok(output),
-        Ok(Err(e)) => Err(anyhow!("Failed to run {} {}: {}", cmd_str, args_vec.join(" "), e)),
+        Ok(Err(e)) => Err(anyhow!(
+            "Failed to run {} {}: {}",
+            cmd_str,
+            args_vec.join(" "),
+            e
+        )),
         Err(mpsc::RecvTimeoutError::Timeout) => Err(anyhow!(
             "Stop command did not complete within {} seconds (gateway process may be stuck). \
-            Force stop: run `pkill -9 -f finally_a_value_bot` then `finally_a_value_bot gateway uninstall`.",
+            Force stop: run `pkill -9 -x meido` then `meido gateway uninstall`.",
             timeout_secs
         )),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(anyhow!("Stop command thread exited unexpectedly")),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(anyhow!("Stop command thread exited unexpectedly"))
+        }
     }
 }
 
@@ -482,10 +525,14 @@ fn render_linux_unit(ctx: &ServiceContext) -> String {
     unit.push_str("Type=simple\n");
     unit.push_str(&format!("WorkingDirectory={}\n", ctx.working_dir.display()));
     unit.push_str(&format!("ExecStart={} start\n", ctx.exe_path.display()));
-    unit.push_str("Environment=FINALLY_A_VALUE_BOT_GATEWAY=1\n");
+    unit.push_str(&format!(
+        "Environment={}=1\n",
+        crate::meido_env::GATEWAY.preferred
+    ));
     if let Some(config_path) = &ctx.config_path {
         unit.push_str(&format!(
-            "Environment=FINALLY_A_VALUE_BOT_CONFIG={}\n",
+            "Environment={}={}\n",
+            crate::meido_env::CONFIG.preferred,
             config_path.display()
         ));
     }
@@ -530,7 +577,7 @@ fn install_linux(ctx: &ServiceContext) -> Result<()> {
     )?;
 
     println!(
-        "Installed and started gateway service: {}",
+        "Installed and started the login service: {}",
         unit_path.display()
     );
     Ok(())
@@ -549,7 +596,7 @@ fn uninstall_linux() -> Result<()> {
             .with_context(|| format!("Failed to remove {}", unit_path.display()))?;
     }
     let _ = run_command("systemctl", &["--user", "daemon-reload"]);
-    println!("Uninstalled gateway service");
+    println!("Uninstalled the login service");
     Ok(())
 }
 
@@ -559,7 +606,7 @@ fn start_linux() -> Result<()> {
         "systemctl",
         &["--user", "start", LINUX_SERVICE_NAME],
     )?;
-    println!("Gateway service started");
+    println!("Login service started");
     Ok(())
 }
 
@@ -570,7 +617,7 @@ fn stop_linux() -> Result<()> {
         STOP_TIMEOUT_SECS,
     )?;
     ensure_success(output, "systemctl", &["--user", "stop", LINUX_SERVICE_NAME])?;
-    println!("Gateway service stopped");
+    println!("Login service stopped");
     Ok(())
 }
 
@@ -583,7 +630,7 @@ fn status_linux() -> Result<()> {
     if output.status.success() {
         Ok(())
     } else {
-        Err(anyhow!("Gateway service is not running"))
+        Err(anyhow!("Login service is not running"))
     }
 }
 
@@ -644,10 +691,16 @@ fn render_macos_plist(ctx: &ServiceContext) -> String {
 
     items.push("  <key>EnvironmentVariables</key>".to_string());
     items.push("  <dict>".to_string());
-    items.push("    <key>FINALLY_A_VALUE_BOT_GATEWAY</key>".to_string());
+    items.push(format!(
+        "    <key>{}</key>",
+        crate::meido_env::GATEWAY.preferred
+    ));
     items.push("    <string>1</string>".to_string());
     if let Some(config_path) = &ctx.config_path {
-        items.push("    <key>FINALLY_A_VALUE_BOT_CONFIG</key>".to_string());
+        items.push(format!(
+            "    <key>{}</key>",
+            crate::meido_env::CONFIG.preferred
+        ));
         items.push(format!(
             "    <string>{}</string>",
             xml_escape(&config_path.to_string_lossy())
@@ -696,7 +749,7 @@ fn install_macos(ctx: &ServiceContext) -> Result<()> {
     let _ = stop_macos();
     start_macos()?;
     println!(
-        "Installed and started gateway service: {}",
+        "Installed and started the login service: {}",
         plist_path.display()
     );
     Ok(())
@@ -709,7 +762,7 @@ fn uninstall_macos() -> Result<()> {
         std::fs::remove_file(&plist_path)
             .with_context(|| format!("Failed to remove {}", plist_path.display()))?;
     }
-    println!("Uninstalled gateway service");
+    println!("Uninstalled the login service");
     Ok(())
 }
 
@@ -717,9 +770,7 @@ fn start_macos() -> Result<()> {
     let target = mac_target_label()?;
     let plist_path = mac_plist_path()?;
     if !plist_path.exists() {
-        return Err(anyhow!(
-            "Service not installed. Run: finally_a_value_bot gateway install"
-        ));
+        return Err(anyhow!("Service not installed. Run: meido gateway install"));
     }
     let gui_target = format!("gui/{}", current_uid()?);
     let plist_path_str = plist_path.to_string_lossy().to_string();
@@ -741,7 +792,7 @@ fn start_macos() -> Result<()> {
         "launchctl",
         &["kickstart", "-k", &target],
     )?;
-    println!("Gateway service started");
+    println!("Login service started");
     Ok(())
 }
 
@@ -756,7 +807,7 @@ fn stop_macos() -> Result<()> {
             }
         };
     if output.status.success() {
-        println!("Gateway service stopped");
+        println!("Login service stopped");
         return Ok(());
     }
 
@@ -778,7 +829,7 @@ fn status_macos() -> Result<()> {
     if output.status.success() {
         Ok(())
     } else {
-        Err(anyhow!("Gateway service is not running"))
+        Err(anyhow!("Login service is not running"))
     }
 }
 
@@ -796,34 +847,28 @@ mod tests {
     #[test]
     fn test_render_linux_unit_contains_start_and_restart() {
         let ctx = ServiceContext {
-            exe_path: PathBuf::from("/usr/local/bin/finally_a_value_bot"),
-            working_dir: PathBuf::from("/tmp/finally_a_value_bot"),
-            config_path: Some(PathBuf::from(
-                "/tmp/finally_a_value_bot/finally_a_value_bot.config.yaml",
-            )),
-            runtime_logs_dir: PathBuf::from("/tmp/finally_a_value_bot/runtime/logs"),
+            exe_path: PathBuf::from("/usr/local/bin/meido"),
+            working_dir: PathBuf::from("/tmp/meido"),
+            config_path: Some(PathBuf::from("/tmp/meido/meido.config.yaml")),
+            runtime_logs_dir: PathBuf::from("/tmp/meido/runtime/logs"),
             path_env: None,
             home_env: None,
         };
 
         let unit = render_linux_unit(&ctx);
-        assert!(unit.contains("ExecStart=/usr/local/bin/finally_a_value_bot start"));
+        assert!(unit.contains("ExecStart=/usr/local/bin/meido start"));
         assert!(unit.contains("Restart=always"));
-        assert!(unit.contains("FINALLY_A_VALUE_BOT_GATEWAY=1"));
-        assert!(unit.contains(
-            "FINALLY_A_VALUE_BOT_CONFIG=/tmp/finally_a_value_bot/finally_a_value_bot.config.yaml"
-        ));
+        assert!(unit.contains("MEIDO_GATEWAY=1"));
+        assert!(unit.contains("MEIDO_CONFIG=/tmp/meido/meido.config.yaml"));
     }
 
     #[test]
     fn test_render_macos_plist_contains_required_fields() {
         let ctx = ServiceContext {
-            exe_path: PathBuf::from("/usr/local/bin/finally_a_value_bot"),
-            working_dir: PathBuf::from("/tmp/finally_a_value_bot"),
-            config_path: Some(PathBuf::from(
-                "/tmp/finally_a_value_bot/finally_a_value_bot.config.yaml",
-            )),
-            runtime_logs_dir: PathBuf::from("/tmp/finally_a_value_bot/runtime/logs"),
+            exe_path: PathBuf::from("/usr/local/bin/meido"),
+            working_dir: PathBuf::from("/tmp/meido"),
+            config_path: Some(PathBuf::from("/tmp/meido/meido.config.yaml")),
+            runtime_logs_dir: PathBuf::from("/tmp/meido/runtime/logs"),
             path_env: None,
             home_env: None,
         };
@@ -832,8 +877,8 @@ mod tests {
         assert!(plist.contains("<key>Label</key>"));
         assert!(plist.contains(MAC_LABEL));
         assert!(plist.contains("<string>start</string>"));
-        assert!(plist.contains("FINALLY_A_VALUE_BOT_GATEWAY"));
-        assert!(plist.contains("FINALLY_A_VALUE_BOT_CONFIG"));
+        assert!(plist.contains("MEIDO_GATEWAY"));
+        assert!(plist.contains("MEIDO_CONFIG"));
     }
 
     #[test]
@@ -846,9 +891,9 @@ mod tests {
 
     #[test]
     fn test_resolve_runtime_logs_dir_fallback() {
-        let dir = resolve_runtime_logs_dir(Path::new("/tmp/finally_a_value_bot"));
+        let dir = resolve_runtime_logs_dir(Path::new("/tmp/meido"));
         assert!(
-            dir.ends_with("runtime/logs") || dir.ends_with("finally_a_value_bot.data/runtime/logs"),
+            dir.ends_with("runtime/logs") || dir.ends_with("meido.data/runtime/logs"),
             "unexpected logs dir: {}",
             dir.display()
         );

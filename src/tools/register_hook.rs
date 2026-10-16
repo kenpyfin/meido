@@ -90,10 +90,8 @@ impl Tool for RegisterHookTool {
         let auth = match auth_context_from_input(&input) {
             Some(ctx) => ctx,
             None => {
-                return ToolResult::error(
-                    "Missing auth context (__finally_a_value_bot_auth)".into(),
-                )
-                .with_error_type("auth_required")
+                return ToolResult::error("Missing auth context (__meido_auth)".into())
+                    .with_error_type("auth_required");
             }
         };
 
@@ -151,10 +149,10 @@ impl Tool for RegisterHookTool {
             match call_blocking(db.clone(), move |db| db.get_hook_definition(existing_id)).await {
                 Ok(Some(existing)) => existing.scoped_persona_ids,
                 Ok(None) => {
-                    return ToolResult::error(format!("Hook definition {existing_id} not found"))
+                    return ToolResult::error(format!("Hook definition {existing_id} not found"));
                 }
                 Err(e) => {
-                    return ToolResult::error(format!("Failed to load existing hook scope: {e}"))
+                    return ToolResult::error(format!("Failed to load existing hook scope: {e}"));
                 }
             }
         } else {

@@ -27,6 +27,13 @@ export interface AppDialogsSettingsProps {
     personaId?: number,
   ) => Promise<void>
   reloadInstallationStatus: () => Promise<void>
+}
+
+export interface AppDialogsPersonaProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  error: string
+  setError: (value: string) => void
   onPersonaBulletinChanged?: () => void | Promise<void>
   onCreatePersona?: () => void | Promise<void>
   onRenamePersona?: (personaId: number, name: string) => Promise<void>
@@ -181,6 +188,7 @@ export interface AppDialogsProps {
   activePersonaId: number | null
   personas: Persona[]
   settings: AppDialogsSettingsProps
+  persona: AppDialogsPersonaProps
   queue: AppDialogsQueueProps
   schedules: AppDialogsSchedulesProps
   inbox: AppDialogsInboxProps
@@ -199,6 +207,13 @@ export type SettingsDialogProps = {
   activePersonaId: number | null
   personas: Persona[]
   settings: AppDialogsSettingsProps
+}
+
+export type PersonaDialogProps = {
+  api: AppDialogsProps['api']
+  activePersonaId: number | null
+  personas: Persona[]
+  persona: AppDialogsPersonaProps
 }
 
 export type QueueDialogProps = {

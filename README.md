@@ -15,7 +15,7 @@ Meido is an agentic assistant with a web-first operator UI. Telegram, Discord, W
 
 ## Quick Start
 
-**Compatibility note:** the binary is still `finally-a-value-bot` and environment variables still use the `FINALLY_A_VALUE_BOT_` prefix. That is unchanged on purpose; an internal rename is planned.
+Meido is its own app. The command is `meido`. It does not replace or share a service with Finally a Value Bot. Prefer `MEIDO_*` environment keys.
 
 ### 1. Install the binary
 
@@ -23,9 +23,13 @@ Meido is an agentic assistant with a web-first operator UI. Telegram, Discord, W
 curl -fsSL https://raw.githubusercontent.com/kenpyfin/meido/main/install.sh | bash
 ```
 
-Build from source: `cargo build --release` and `cd web && npm ci && npm run build`. **Windows** — see [`install.ps1`](install.ps1) in this repo.
+That installs the binary and prints the built-in setup steps. From a checkout, `bash install.sh` in a terminal walks through them: LLM API key, Cursor `CURSOR_API_KEY`, MemPalace, and Steel (`BROWSER_MANAGED` plus the Docker image and skill venv). **Windows** — [`install.ps1`](install.ps1) asks the same questions.
 
-The bot reads configuration from a **`.env` file in the current working directory** (or from the path in `FINALLY_A_VALUE_BOT_CONFIG`). Use a dedicated project directory and keep your `.env` there.
+A new workspace gets [`defaults/AGENTS.md`](defaults/AGENTS.md) as `AGENTS.md` at the workspace root (or at `VAULT_PRINCIPLES_PATH` when that is set). Install writes it when the file is missing, and the first `meido start` does the same. An existing principles file is left as-is.
+
+Build from source: `cargo build --release` and `cd web && npm ci && npm run build`.
+
+Meido reads configuration from a **`.env` file in the current working directory** (or from the path in `MEIDO_CONFIG`). Use a dedicated project directory and keep your `.env` there.
 
 ### 2. Bootstrap `.env`
 
@@ -41,17 +45,21 @@ Bootstrap variables stay in `.env` (repo root): workspace path, config path over
 ### 3. Start and finish onboarding in Web UI
 
 ```bash
-finally-a-value-bot start
+meido start
 ```
 
-Then open **http://127.0.0.1:10961**. Configure **LLM and bot tokens in repo-root `.env`** (see `.env.example`). Use **Settings** for bot integrations (extra instances), persona scope per channel, and optional **restart** when `FINALLY_A_VALUE_BOT_RESTART_COMMAND` is set. Changes to `.env` require a process restart.
+`meido start` returns immediately and leaves Meido running. Stop that process with `meido stop`. Add `--foreground` to keep it attached to the terminal. Then open **http://127.0.0.1:10961**. Put LLM API keys in repo-root `.env` (see `.env.example`). Use **Settings** for provider/model, Integrations (channels), personas, and Agent engine. Gateway installs can restart from the UI on Linux/macOS. Changes to `.env` require a process restart.
+
+To open the UI on a DNS name such as `pp.local`, set `WEB_HOST=pp.local` and `WEB_AUTH_TOKEN` in `.env`. The process listens on every interface. Meido does not register the name; point it at this machine's LAN IP:
+
+- **mDNS** (names ending in `.local` that match this computer's hostname): on Linux, `sudo apt install avahi-daemon` and `sudo systemctl enable --now avahi-daemon` (`hostname` shows the label, advertised as `<hostname>.local`). Publish a different name with `avahi-publish -a -R pp.local <LAN-IP>`. On macOS, `sudo scutil --set LocalHostName pp`. On Windows, rename the PC to that label.
+- **Hosts file**, on each device that should open the UI: `<LAN-IP>  pp.local` in `/etc/hosts` (Linux/macOS) or `C:\Windows\System32\drivers\etc\hosts` (Windows).
+- **Router or Pi-hole:** an A record to that LAN IP. Prefer a suffix such as `.lan`. Many routers will not answer names that end in `.local`.
 
 **Useful checks:**
 
 ```bash
-finally-a-value-bot doctor      # preflight diagnostics
-finally-a-value-bot test-llm    # test LLM connectivity
-finally-a-value-bot help        # all commands
+meido help        # all commands
 ```
 
 **Minimum configuration**
@@ -65,12 +73,16 @@ See [.env.example](.env.example) for the full list (web UI, scheduler, vault, sa
 
 When web is enabled (default), the UI is served at **http://127.0.0.1:10961** by default (`WEB_PORT`). If you bind to a non-local address, set `WEB_AUTH_TOKEN`.
 
-### 5. Background service (optional)
+### 5. Login service (optional, macOS and Linux)
+
+`meido start` serves the web UI and returns. It stays up until `meido stop` or a reboot. You do not need the gateway to open the web UI.
+
+`meido gateway install` is a user service that runs that same start at login and restarts Meido if the process exits. Windows has no gateway.
 
 ```bash
-finally-a-value-bot gateway install   # install and start service
-finally-a-value-bot gateway status
-finally-a-value-bot gateway logs
+meido gateway install   # optional: install and start the login service
+meido gateway status
+meido gateway logs
 ```
 
 When channel + LLM configuration is complete, Meido seeds an onboarding task so you can get started from chat.
@@ -81,7 +93,7 @@ Built-in vault skills need an embedding endpoint. Configure `VAULT_*` in `.env` 
 
 ## Documentation
 
-- Docker deployment is not recommended and is no longer supported in this repo. Prefer the native binary install flow and `finally-a-value-bot gateway install`.
+- Docker deployment is not recommended and is no longer supported in this repo. Prefer the native binary install flow and `meido start`. `meido gateway install` is only the optional login service.
 - [DOCKER.md.bak](DOCKER.md.bak): Archived legacy container notes (reference only).
 
 ## Memory File Spec

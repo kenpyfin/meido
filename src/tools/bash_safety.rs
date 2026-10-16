@@ -451,7 +451,7 @@ mod tests {
         // Hang vector: name filter under /home/ken/big_storage (not a "broad" home root
         // under the old depth<=3 rule, but outside any declared registry root).
         let allowed = vec![PathBuf::from(
-            "/home/ken/big_storage/projects/finally-a-value-bot/workspace",
+            "/home/ken/big_storage/projects/meido/workspace",
         )];
         assert!(is_expensive_shell_search_scoped(
             "find /home/ken/big_storage -name 'Sourdough-Journal-Post-Pipeline.md' -type f",

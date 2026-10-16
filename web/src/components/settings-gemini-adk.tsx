@@ -17,6 +17,8 @@ type Props = {
   api: <T>(path: string, init?: RequestInit) => Promise<T>
   onError: (message: string) => void
   activePersonaId: number | null
+  /** engine: shared default model. topology: this persona's agent graph. */
+  scope?: 'all' | 'engine' | 'topology'
 }
 
 const AGENT_KINDS: AdkAgentKind[] = ['llm', 'sequential', 'parallel', 'loop']
@@ -36,7 +38,7 @@ function emptyAgent(id: string): AdkAgent {
   }
 }
 
-export function SettingsGeminiAdkPanel({ api, onError, activePersonaId }: Props) {
+export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 'all' }: Props) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [engine, setEngine] = useState<GeminiAdkConfigResponse | null>(null)
@@ -164,6 +166,7 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId }: Props)
         <div role="status" className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-900 dark:text-green-100">{saveNotice}</div>
       ) : null}
 
+      {scope !== 'topology' ? (
       <section className="mc-pipeline-section">
         <span className="font-semibold mb-2 block">
           Engine
@@ -184,10 +187,13 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId }: Props)
         </div>
         <span className="mt-2 block">
           Max agent iterations (engine): {engine?.max_iterations ?? '—'} · Schema v
-          {engine?.schema_version ?? profile.version}
+          {engine?.schema_version ?? profile.version}. Topology for a persona is on the Persona page.
         </span>
       </section>
+      ) : null}
 
+      {scope !== 'engine' ? (
+      <>
       <section className="mc-pipeline-section">
         <span className="font-semibold mb-2 block">
           Topology {activePersonaId != null ? '(this persona)' : '(global default)'}
@@ -418,6 +424,8 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId }: Props)
         <span>
           Defaults available via Reset to defaults. Schema version {profile.version}.
         </span>
+      ) : null}
+      </>
       ) : null}
     </div>
   )

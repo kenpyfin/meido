@@ -317,6 +317,18 @@ pub fn first_provider_with_api_key() -> Option<&'static str> {
         .map(|p| p.id)
 }
 
+/// First cloud provider with an API key. Local servers are always "configured" and are skipped.
+pub fn first_cloud_provider_with_api_key() -> Option<&'static str> {
+    PROVIDER_CATALOG
+        .iter()
+        .find(|p| {
+            p.id != "custom"
+                && !is_local_provider(p.id)
+                && !resolve_api_key_for_provider(p.id).is_empty()
+        })
+        .map(|p| p.id)
+}
+
 pub fn any_provider_api_key_configured() -> bool {
     first_provider_with_api_key().is_some()
 }

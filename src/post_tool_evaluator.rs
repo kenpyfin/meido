@@ -243,7 +243,10 @@ fn build_pte_user_prompt(
     let tool_summary = build_tool_results_summary(env_redactor, messages, 6);
     let mut prompt = format!(
         "Session goal (current_request): {}\n\nTools called and their results:\n{}\nCurrent iteration: {} of {}",
-        goal.current_request, tool_summary, iteration + 1, max_iterations
+        goal.current_request,
+        tool_summary,
+        iteration + 1,
+        max_iterations
     );
     if goal.is_short_reply {
         prompt.push_str("\nShort-reply turn: yes\n");

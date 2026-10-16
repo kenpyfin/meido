@@ -381,7 +381,7 @@ export function SettingsIntegrationsPanel({
         body: JSON.stringify(body),
       })
       setNotice(
-        'Integration saved. Group/chat allowlists apply immediately. Restart the gateway only for token or connection changes.',
+        'Integration saved. Group/chat allowlists apply immediately. Restart Meido only for token or connection changes.',
       )
       await load()
       onSaved?.()
@@ -453,7 +453,7 @@ export function SettingsIntegrationsPanel({
       setNewLabel('')
       setNewToken('')
       setNewWecom(emptyWecomExtra())
-      setNotice(data.message ?? 'Bot instance created. Restart the gateway to activate it.')
+      setNotice(data.message ?? 'Bot instance created. Restart Meido to activate it.')
       await load()
       onSaved?.()
     } catch (e) {
@@ -474,7 +474,7 @@ export function SettingsIntegrationsPanel({
         onError('')
         try {
           await api(`/api/channel_bot_instances/${row.id}`, { method: 'DELETE' })
-          setNotice('Bot instance removed. Restart the gateway to stop its dispatcher.')
+          setNotice('Bot instance removed. Restart Meido to stop its dispatcher.')
           await load()
           onSaved?.()
         } catch (e) {
@@ -672,7 +672,7 @@ export function SettingsIntegrationsPanel({
         </span>
         <span className="mb-2 block">
           Telegram and Discord can have multiple bot instances. WhatsApp and WeCom support one
-          app/number in this gateway.
+          app/number on this Meido.
         </span>
         <div className="flex flex-col gap-2">
           <div className="flex gap-2 flex-wrap items-end">
@@ -783,7 +783,7 @@ export function SettingsIntegrationsPanel({
                 <br />
                 <br />
                 Enter comma-separated chat IDs (Telegram group/user IDs, Discord channel IDs, etc.).
-                This setting is global across all integrations. Restart the gateway after saving.
+                This setting is global across all integrations. Restart Meido after saving.
               </>
             }
           >
@@ -824,7 +824,7 @@ export function SettingsIntegrationsPanel({
             {busyId === 'shared' ? 'Saving…' : 'Save Shared Access'}
           </Button>
           <Button size="sm" variant="secondary" disabled={restartBusy} onClick={() => void requestRestart()}>
-            {restartBusy ? 'Restarting…' : 'Restart Gateway'}
+            {restartBusy ? 'Restarting…' : 'Restart Meido'}
           </Button>
         </div>
       </div>

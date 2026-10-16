@@ -14,7 +14,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 3847
 CURSOR_AGENT = "cursor-agent"
-SESSION_PREFIX = "finally-a-value-bot-cursor"
+SESSION_PREFIX = "meido-cursor"
 
 # Derive the project root from this script's location (scripts/cursor-agent-runner.py → project root)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

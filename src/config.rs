@@ -1,6 +1,54 @@
 use crate::error::FinallyAValueBotError;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Join `workspace_root` with a vault path.
+///
+/// Absolute `configured` paths are returned unchanged. Relative paths are joined under
+/// `workspace_root`. If the first path segment equals the last segment of `workspace_root`
+/// (for example `.../workspace` + `workspace/shared/...`), that leading segment is dropped
+/// so the result does not contain `workspace/workspace`.
+pub fn resolve_workspace_data_path(workspace_root: &Path, configured: &str) -> PathBuf {
+    let trimmed = configured.trim();
+    if trimmed.is_empty() {
+        return PathBuf::new();
+    }
+    let p = Path::new(trimmed);
+    if p.is_absolute() {
+        return p.to_path_buf();
+    }
+    let rel = trimmed.trim_start_matches("./");
+    let rel_path = Path::new(rel);
+    let tail: PathBuf = if let (Some(root_leaf), Some(first)) =
+        (workspace_root.file_name(), rel_path.components().next())
+    {
+        use std::path::Component;
+        if let (Some(r), Component::Normal(f)) = (root_leaf.to_str(), first) {
+            if r == f {
+                rel_path.components().skip(1).collect()
+            } else {
+                rel_path.to_path_buf()
+            }
+        } else {
+            rel_path.to_path_buf()
+        }
+    } else {
+        rel_path.to_path_buf()
+    };
+    workspace_root.join(tail)
+}
+
+/// ORIGIN vault root for file tools, locate, and memory snapshots.
+///
+/// `configured` is `VAULT_ORIGIN_VAULT_PATH`. Absolute values are used as given.
+/// Relative values are joined onto `workspace_root`. An empty value is
+/// `{workspace_root}/shared/ORIGIN`.
+pub fn resolve_origin_vault_root(workspace_root: &Path, configured: Option<&str>) -> PathBuf {
+    match configured.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(configured) => resolve_workspace_data_path(workspace_root, configured),
+        None => workspace_root.join("shared").join("ORIGIN"),
+    }
+}
 
 fn default_telegram_bot_token() -> String {
     String::new()
@@ -62,9 +110,12 @@ fn default_web_enabled() -> bool {
 fn default_web_host() -> String {
     "127.0.0.1".into()
 }
-fn default_web_port() -> u16 {
+pub fn default_web_port() -> u16 {
     10961
 }
+
+/// How many ports past the default to try when that port is already taken.
+pub const WEB_PORT_FALLBACK_SPAN: u16 = 50;
 fn default_web_max_inflight_per_session() -> usize {
     2
 }
@@ -99,7 +150,7 @@ pub fn default_steel_docker_image() -> String {
     "ghcr.io/steel-dev/steel-browser:latest".into()
 }
 pub fn default_steel_docker_container_name() -> String {
-    "finally-a-value-bot-steel".into()
+    "meido-steel".into()
 }
 fn default_browser_cdp_port_base() -> u16 {
     9222
@@ -244,7 +295,7 @@ pub fn parse_bool_setting(value: &str) -> bool {
 }
 
 fn default_background_shell_tmux_session_prefix() -> String {
-    "finally_a_value_bot-bg".into()
+    "meido-bg".into()
 }
 
 fn default_background_shell_tmux_enabled() -> bool {
@@ -273,14 +324,6 @@ fn default_runtime_reliability_profile() -> String {
 
 fn default_project_auto_association_strictness() -> String {
     "balanced".into()
-}
-
-fn default_orchestrator_enabled() -> bool {
-    true
-}
-
-fn default_orchestrator_model() -> String {
-    String::new()
 }
 
 fn default_post_tool_evaluator_enabled() -> bool {
@@ -338,7 +381,7 @@ fn default_post_edit_validation_enabled() -> bool {
 }
 
 fn default_cursor_agent_tmux_session_prefix() -> String {
-    "finally_a_value_bot-cursor".into()
+    "meido-cursor".into()
 }
 
 fn default_cursor_agent_tmux_enabled() -> bool {
@@ -348,6 +391,17 @@ fn default_cursor_agent_tmux_enabled() -> bool {
 fn is_local_web_host(host: &str) -> bool {
     let h = host.trim().to_ascii_lowercase();
     h == "127.0.0.1" || h == "localhost" || h == "::1"
+}
+
+/// Address the socket binds. An IP or loopback name is used as-is. A DNS name such as
+/// `pp.local` stays the URL people open, while the socket listens on every interface.
+pub(crate) fn web_bind_host(host: &str) -> String {
+    let host = host.trim();
+    if host.parse::<std::net::IpAddr>().is_ok() || is_local_web_host(host) {
+        host.to_string()
+    } else {
+        "0.0.0.0".to_string()
+    }
 }
 
 /// Keys that configure LLM providers, models, and related limits. These must come from repo-root
@@ -381,8 +435,6 @@ pub fn is_llm_related_runtime_setting_key(key: &str) -> bool {
             | "RECENT_HISTORY_MIN_USER_MESSAGES"
             | "RECENT_HISTORY_MIN_ASSISTANT_MESSAGES"
             | "MAX_DOCUMENT_SIZE_MB"
-            | "ORCHESTRATOR_MODEL"
-            | "ORCHESTRATOR_ENABLED"
             | "POST_TOOL_EVALUATOR_MODEL"
             | "POST_TOOL_EVALUATOR_ENABLED"
             | "SHOW_THINKING"
@@ -411,7 +463,8 @@ pub struct SocialConfig {
 /// Paths are relative to workspace_dir unless absolute.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct VaultConfig {
-    /// ORIGIN vault path relative to workspace_dir (e.g. "shared/ORIGIN").
+    /// ORIGIN vault path. Relative values are joined onto the workspace (`shared/ORIGIN`).
+    /// Absolute values are the file-tool, locate, and memory-snapshot root.
     #[serde(default)]
     pub origin_vault_path: Option<String>,
     /// ChromaDB persistence dir relative to workspace_dir (e.g. "shared/vault_db").
@@ -683,16 +736,10 @@ pub struct Config {
     /// Optional vault/vector DB config for ORIGIN Obsidian vault integration.
     #[serde(default)]
     pub vault: Option<VaultConfig>,
-    /// When true, use orchestrator-first flow: orchestrator plans (direct or delegate), sub-agents run tools; no tools in main context. Default true.
-    #[serde(default = "default_orchestrator_enabled")]
-    pub orchestrator_enabled: bool,
-    /// Optional model override for orchestrator (e.g. faster/cheaper). If empty, use main model.
-    #[serde(default = "default_orchestrator_model")]
-    pub orchestrator_model: String,
     /// Post-Tool Evaluator (PTE): evaluate task completion after each tool iteration. Default false.
     #[serde(default = "default_post_tool_evaluator_enabled")]
     pub post_tool_evaluator_enabled: bool,
-    /// Optional model for PTE (e.g. faster/cheaper). If empty, use orchestrator_model or main model.
+    /// Optional model for PTE. If empty, use `EVALUATOR_MODEL`.
     #[serde(default = "default_post_tool_evaluator_model")]
     pub post_tool_evaluator_model: String,
     /// Post-delivery quality evaluator (PDQE): async QC after user receives the reply.
@@ -740,7 +787,7 @@ pub struct Config {
     /// Optional override commands for post-edit validation, separated by `;;`.
     #[serde(default)]
     pub post_edit_validation_commands: Option<String>,
-    /// Tmux session name prefix for cursor_agent when detach=true (e.g. finally_a_value_bot-cursor).
+    /// Tmux session name prefix for cursor_agent when detach=true (e.g. meido-cursor).
     #[serde(default = "default_cursor_agent_tmux_session_prefix")]
     pub cursor_agent_tmux_session_prefix: String,
     /// Allow spawning cursor_agent in tmux when detach=true. Set false in Docker or when tmux unavailable.
@@ -889,6 +936,65 @@ impl Config {
         dirs
     }
 
+    /// Put workspace-absolute vault paths into the process environment.
+    ///
+    /// `.env` keeps `VAULT_VECTOR_DB_PATH` and `VAULT_ORIGIN_VAULT_PATH` relative to the
+    /// workspace (`shared/vault_db`). Skill scripts inherit this environment and run with
+    /// the skill directory as cwd, so a relative value would be created outside the
+    /// workspace. Absolute values are left as set.
+    pub fn publish_workspace_paths(&self) {
+        let root = self.workspace_root_absolute();
+        let root_text = root.to_string_lossy().to_string();
+        std::env::set_var("WORKSPACE_DIR", &root_text);
+        std::env::set_var(crate::meido_env::WORKSPACE_DIR.preferred, &root_text);
+        let Some(vault) = &self.vault else {
+            return;
+        };
+        for (key, configured) in [
+            ("VAULT_VECTOR_DB_PATH", vault.vector_db_path.as_deref()),
+            (
+                "VAULT_ORIGIN_VAULT_PATH",
+                vault.origin_vault_path.as_deref(),
+            ),
+        ] {
+            let Some(configured) = configured.map(str::trim).filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            if Path::new(configured).is_absolute() {
+                continue;
+            }
+            std::env::set_var(key, resolve_workspace_data_path(&root, configured));
+        }
+    }
+
+    /// Chroma directory from `VAULT_VECTOR_DB_PATH` when that variable is set.
+    ///
+    /// Absolute values are kept. Relative values are joined onto the workspace.
+    /// `None` when the variable is unset, so callers keep `{workspace}/shared/vault_db`.
+    pub fn vector_db_root(&self) -> Option<PathBuf> {
+        let configured = self
+            .vault
+            .as_ref()
+            .and_then(|v| v.vector_db_path.as_deref())
+            .map(str::trim)
+            .filter(|p| !p.is_empty())?;
+        let resolved = resolve_workspace_data_path(&self.workspace_root_absolute(), configured);
+        if resolved.as_os_str().is_empty() {
+            None
+        } else {
+            Some(resolved)
+        }
+    }
+
+    /// Absolute ORIGIN vault. Honors `VAULT_ORIGIN_VAULT_PATH` when set.
+    pub fn origin_vault_root(&self) -> PathBuf {
+        let configured = self
+            .vault
+            .as_ref()
+            .and_then(|v| v.origin_vault_path.as_deref());
+        resolve_origin_vault_root(&self.workspace_root_absolute(), configured)
+    }
+
     /// Absolute path to the workspace root (workspace_dir resolved to absolute).
     pub fn workspace_root_absolute(&self) -> std::path::PathBuf {
         let root = PathBuf::from(&self.workspace_dir);
@@ -923,21 +1029,28 @@ impl Config {
         })
     }
 
-    /// Resolve path to .env file. FINALLY_A_VALUE_BOT_CONFIG can override (points to .env).
+    /// Resolve path to .env file. `MEIDO_CONFIG` (or legacy `FINALLY_A_VALUE_BOT_CONFIG`) can override.
     pub fn resolve_config_path() -> Result<Option<PathBuf>, FinallyAValueBotError> {
-        if let Ok(custom) = std::env::var("FINALLY_A_VALUE_BOT_CONFIG") {
+        if let Some(custom) = crate::meido_env::get(crate::meido_env::CONFIG) {
             let p = std::path::Path::new(&custom);
             if p.exists() {
                 return Ok(Some(PathBuf::from(custom)));
             }
             return Err(FinallyAValueBotError::Config(format!(
-                "FINALLY_A_VALUE_BOT_CONFIG points to non-existent file: {custom}"
+                "MEIDO_CONFIG points to non-existent file: {custom}"
             )));
         }
         if std::path::Path::new("./.env").exists() {
             return Ok(Some(PathBuf::from("./.env")));
         }
         Ok(None)
+    }
+
+    /// Load `.env` over the process environment. The file is the operator config; a stale exported key must not hide it.
+    fn load_dotenv_file(path: &std::path::Path) -> Result<(), FinallyAValueBotError> {
+        dotenvy::from_path_override(path)
+            .map_err(|e| FinallyAValueBotError::Config(format!("Failed to load .env: {e}")))?;
+        Ok(())
     }
 
     fn env(key: &str) -> Option<String> {
@@ -1008,18 +1121,17 @@ impl Config {
             .unwrap_or_default()
     }
 
-    /// Load config from environment (.env file + process env). Load .env from FINALLY_A_VALUE_BOT_CONFIG path or ./
+    /// Load config from environment (.env file + process env). Load .env from `MEIDO_CONFIG` path or `./`.
     pub fn load() -> Result<Self, FinallyAValueBotError> {
         let env_path = Self::resolve_config_path()?;
         let load_path = env_path
             .as_deref()
             .unwrap_or(std::path::Path::new("./.env"));
         if load_path.exists() {
-            dotenvy::from_path(load_path)
-                .map_err(|e| FinallyAValueBotError::Config(format!("Failed to load .env: {e}")))?;
+            Self::load_dotenv_file(load_path)?;
         } else if env_path.is_none() {
             return Err(FinallyAValueBotError::Config(
-                "No .env found. Run `finally_a_value_bot setup` to create one.".into(),
+                "No .env found. Copy .env.example to .env in the current directory, or set MEIDO_CONFIG to its path.".into(),
             ));
         }
 
@@ -1031,8 +1143,7 @@ impl Config {
     /// Load config from a specific .env file path (e.g. for config wizard).
     pub fn load_from_path(path: &std::path::Path) -> Result<Self, FinallyAValueBotError> {
         if path.exists() {
-            dotenvy::from_path(path)
-                .map_err(|e| FinallyAValueBotError::Config(format!("Failed to load .env: {e}")))?;
+            Self::load_dotenv_file(path)?;
         }
         let mut config = Self::load_from_env();
         config.post_deserialize()?;
@@ -1237,11 +1348,6 @@ impl Config {
             ),
             social,
             vault,
-            orchestrator_enabled: Self::env_bool(
-                "ORCHESTRATOR_ENABLED",
-                default_orchestrator_enabled(),
-            ),
-            orchestrator_model: Self::env("ORCHESTRATOR_MODEL").unwrap_or_default(),
             post_tool_evaluator_enabled: Self::env_bool(
                 "POST_TOOL_EVALUATOR_ENABLED",
                 default_post_tool_evaluator_enabled(),
@@ -1500,17 +1606,72 @@ impl Config {
         }
 
         let mut persist_defaults = false;
-        if self.llm_provider.is_empty() {
-            if let Some(p) = crate::llm_catalog::first_provider_with_api_key() {
-                self.llm_provider = p.to_string();
+        let env_provider = Self::env("LLM_PROVIDER")
+            .map(|value| crate::llm_catalog::resolve_catalog_provider_id(value.trim()))
+            .filter(|value| !value.is_empty());
+        let env_model = Self::env("LLM_MODEL").filter(|value| !value.trim().is_empty());
+        let provider_ready = |provider: &str, cfg: &Self| {
+            !provider.trim().is_empty()
+                && (crate::llm_catalog::is_local_provider(provider)
+                    || !crate::llm_catalog::resolve_api_key_for_provider_with_config(
+                        provider,
+                        Some(cfg),
+                    )
+                    .is_empty())
+        };
+        // The installer writes LLM_PROVIDER. It replaces a saved provider that has no key.
+        if let Some(env_provider) = env_provider {
+            if !provider_ready(&self.llm_provider, self) {
+                if self.llm_provider != env_provider {
+                    tracing::info!(
+                        "LLM provider {} is not usable; using {} from LLM_PROVIDER.",
+                        if self.llm_provider.is_empty() {
+                            "(none)"
+                        } else {
+                            self.llm_provider.as_str()
+                        },
+                        env_provider
+                    );
+                }
+                self.llm_provider = env_provider;
+                self.model = env_model.clone().unwrap_or_default();
+                had_provider_setting = false;
+                had_model_setting = env_model.is_some();
                 persist_defaults = true;
-            } else {
-                return Err(FinallyAValueBotError::Config(
-                    "No LLM API keys in .env. Add provider keys (e.g. ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY) or save them under Web UI → Settings → Connections, then choose a provider and model.".into(),
-                ));
             }
         }
-        if self.model.is_empty() {
+        if !self.llm_provider.is_empty() && !provider_ready(&self.llm_provider, self) {
+            if let Some(provider) = crate::llm_catalog::first_cloud_provider_with_api_key() {
+                tracing::info!(
+                    "LLM provider {} has no API key; using {}.",
+                    self.llm_provider,
+                    provider
+                );
+                self.llm_provider = provider.to_string();
+                self.model.clear();
+                had_provider_setting = false;
+                had_model_setting = false;
+                persist_defaults = true;
+            } else {
+                tracing::info!(
+                    "LLM provider {} has no API key; leaving the provider unset.",
+                    self.llm_provider
+                );
+                self.llm_provider.clear();
+                self.model.clear();
+                had_provider_setting = false;
+                had_model_setting = false;
+                persist_defaults = true;
+            }
+        }
+        if self.llm_provider.is_empty() {
+            if let Some(p) = crate::llm_catalog::first_cloud_provider_with_api_key() {
+                self.llm_provider = p.to_string();
+                persist_defaults = true;
+            }
+        }
+        let provider_selected = !self.llm_provider.trim().is_empty();
+        if provider_selected && self.model.is_empty() {
             self.model = crate::llm_catalog::default_model_for_provider(&self.llm_provider).into();
             persist_defaults = true;
         }
@@ -1530,7 +1691,8 @@ impl Config {
             }
         }
 
-        if !crate::llm_catalog::is_local_provider(&self.llm_provider)
+        if provider_selected
+            && !crate::llm_catalog::is_local_provider(&self.llm_provider)
             && crate::llm_catalog::resolve_api_key_for_provider_with_config(
                 &self.llm_provider,
                 Some(self),
@@ -1539,13 +1701,13 @@ impl Config {
         {
             let hints =
                 crate::llm_catalog::provider_api_key_env_hints(&self.llm_provider).join(", ");
-            return Err(FinallyAValueBotError::Config(format!(
-                "No API key in .env for LLM provider {:?}. Set one of: {hints}",
+            tracing::warn!(
+                "No API key in .env for LLM provider {}. Set one of: {hints}. The web UI still starts; add a key under Settings → Connections or switch to the Cursor engine.",
                 self.llm_provider
-            )));
+            );
         }
 
-        if persist_defaults || !had_provider_setting || !had_model_setting {
+        if provider_selected && (persist_defaults || !had_provider_setting || !had_model_setting) {
             db.set_app_setting(
                 crate::llm_catalog::APP_SETTING_LLM_PROVIDER,
                 &self.llm_provider,
@@ -1662,11 +1824,8 @@ impl Config {
                 self.llm_base_url = Some(url.to_string());
             }
         }
-        if let Ok(dir) = std::env::var("FINALLY_A_VALUE_BOT_WORKSPACE_DIR") {
-            let trimmed = dir.trim();
-            if !trimmed.is_empty() {
-                self.workspace_dir = trimmed.to_string();
-            }
+        if let Some(dir) = crate::meido_env::get(crate::meido_env::WORKSPACE_DIR) {
+            self.workspace_dir = dir;
         }
         if self.workspace_dir.trim().is_empty() {
             self.workspace_dir = default_workspace_dir();
@@ -2125,8 +2284,6 @@ pub fn test_config() -> Config {
         cursor_agent_timeout_secs: default_cursor_agent_timeout_secs(),
         social: None,
         vault: None,
-        orchestrator_enabled: true,
-        orchestrator_model: String::new(),
         post_tool_evaluator_enabled: false,
         post_tool_evaluator_model: String::new(),
         response_quality_evaluator_enabled: false,
@@ -2144,7 +2301,7 @@ pub fn test_config() -> Config {
         symbol_edit_enabled: false,
         post_edit_validation_enabled: true,
         post_edit_validation_commands: None,
-        cursor_agent_tmux_session_prefix: "finally_a_value_bot-cursor".into(),
+        cursor_agent_tmux_session_prefix: "meido-cursor".into(),
         cursor_agent_tmux_enabled: true,
         cursor_agent_runner_url: None,
         cursor_sdk_runner_url: None,
@@ -2187,6 +2344,35 @@ pub fn test_config() -> Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn env_file_overrides_exported_api_key() {
+        let dir =
+            std::env::temp_dir().join(format!("meido_dotenv_override_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".env");
+        std::fs::write(&path, "GEMINI_API_KEY=from-file-key\n").unwrap();
+        let previous = std::env::var("GEMINI_API_KEY").ok();
+        std::env::set_var("GEMINI_API_KEY", "from-shell-key");
+        let loaded = Config::load_dotenv_file(&path);
+        let seen = std::env::var("GEMINI_API_KEY").ok();
+        match previous {
+            Some(value) => std::env::set_var("GEMINI_API_KEY", value),
+            None => std::env::remove_var("GEMINI_API_KEY"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        loaded.expect("dotenv override");
+        assert_eq!(seen.as_deref(), Some("from-file-key"));
+    }
+
+    #[test]
+    fn web_bind_host_keeps_ips_and_opens_dns_names() {
+        assert_eq!(web_bind_host("127.0.0.1"), "127.0.0.1");
+        assert_eq!(web_bind_host("localhost"), "localhost");
+        assert_eq!(web_bind_host("192.168.1.20"), "192.168.1.20");
+        assert_eq!(web_bind_host("pp.local"), "0.0.0.0");
+        assert_eq!(web_bind_host("meido.example.com"), "0.0.0.0");
+    }
 
     #[test]
     fn test_config_struct_clone_and_debug() {
@@ -2489,7 +2675,7 @@ discord_allowed_channels: [111, 222]
     fn test_config_save_yaml() {
         let config = test_config();
         let dir = std::env::temp_dir();
-        let path = dir.join("finally_a_value_bot_test_config.yaml");
+        let path = dir.join("meido_test_config.yaml");
         config.save_yaml(path.to_str().unwrap()).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("telegram_bot_token"));
@@ -2514,7 +2700,7 @@ discord_allowed_channels: [111, 222]
         config.web_session_idle_ttl_seconds = 600;
 
         let dir = std::env::temp_dir();
-        let path = dir.join("finally_a_value_bot_test_config.env");
+        let path = dir.join("meido_test_config.env");
         config.save_env(&path).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
 

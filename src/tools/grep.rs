@@ -9,13 +9,22 @@ use super::{schema_object, Tool, ToolResult};
 
 pub struct GrepTool {
     working_dir: PathBuf,
+    origin_vault: PathBuf,
 }
 
 impl GrepTool {
     pub fn new(working_dir: &str) -> Self {
+        let working_dir = PathBuf::from(working_dir);
+        let origin_vault = working_dir.join("shared").join("ORIGIN");
         Self {
-            working_dir: PathBuf::from(working_dir),
+            working_dir,
+            origin_vault,
         }
+    }
+
+    pub fn with_origin_vault(mut self, origin_vault: PathBuf) -> Self {
+        self.origin_vault = origin_vault;
+        self
     }
 }
 
@@ -59,24 +68,52 @@ impl Tool for GrepTool {
         let working_dir =
             super::resolve_tool_working_dir_for_auth(&self.working_dir, auth.as_ref());
         let workspace_root = &self.working_dir;
-        let resolved_path = super::resolve_tool_path(workspace_root, &working_dir, path);
-        if !is_path_within_workspace_root(&resolved_path, workspace_root) {
-            return ToolResult::error(format!(
-                "Path '{}' is outside the workspace root '{}'. \
-grep is limited to workspace files.",
-                resolved_path.display(),
-                workspace_root.display()
-            ));
+        let vector_db = auth.as_ref().and_then(|a| a.vector_db_root.as_deref());
+        let external_roots = auth
+            .as_ref()
+            .map(|a| a.external_roots.as_slice())
+            .unwrap_or(&[]);
+        let resolved_path = super::resolve_tool_path_with_origin(
+            workspace_root,
+            &working_dir,
+            path,
+            &self.origin_vault,
+            vector_db,
+        );
+        if !path_allowed_for_grep(
+            &resolved_path,
+            workspace_root,
+            &self.origin_vault,
+            vector_db,
+            external_roots,
+        ) {
+            let outside = match vector_db {
+                Some(db) => format!(
+                    "Path '{}' is outside the workspace root '{}', the ORIGIN vault '{}', and the vector db '{}'.",
+                    resolved_path.display(),
+                    workspace_root.display(),
+                    self.origin_vault.display(),
+                    db.display()
+                ),
+                None => format!(
+                    "Path '{}' is outside the workspace root '{}' and the ORIGIN vault '{}'.",
+                    resolved_path.display(),
+                    workspace_root.display(),
+                    self.origin_vault.display()
+                ),
+            };
+            return ToolResult::error(outside);
         }
         let resolved_path_str = resolved_path.to_string_lossy().to_string();
         if let Err(msg) = crate::tools::path_guard::check_path(&resolved_path_str) {
             return ToolResult::error(msg);
         }
-        if let Err(msg) = super::assert_persona_tool_path_allowed(
+        if let Err(msg) = super::assert_persona_tool_path_allowed_with_origin(
             workspace_root,
             &resolved_path,
             auth.as_ref(),
             false,
+            &self.origin_vault,
         ) {
             return ToolResult::error(msg);
         }
@@ -115,11 +152,19 @@ const MAX_GREP_OUTPUT_CHARS: usize = 32_000;
 const MAX_GREP_MATCH_LINES: usize = 500;
 const MAX_GREP_FILES_SCANNED: usize = 3_000;
 
-fn is_path_within_workspace_root(path: &Path, workspace_root: &Path) -> bool {
-    let resolved_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let resolved_root =
-        std::fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
-    resolved_path.starts_with(resolved_root)
+fn path_allowed_for_grep(
+    path: &Path,
+    workspace_root: &Path,
+    origin_vault: &Path,
+    vector_db: Option<&Path>,
+    external_roots: &[PathBuf],
+) -> bool {
+    super::path_under_root(path, workspace_root)
+        || super::path_under_root(path, origin_vault)
+        || vector_db.is_some_and(|root| super::path_under_root(path, root))
+        || external_roots
+            .iter()
+            .any(|root| super::path_under_root(path, root))
 }
 
 fn truncate_grep_results(results: &mut Vec<String>) {
@@ -252,8 +297,7 @@ mod tests {
     use serde_json::json;
 
     fn setup_grep_dir() -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("finally_a_value_bot_grep_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("meido_grep_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("hello.rs"),
@@ -266,10 +310,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_finds_matches() {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_grep_ws_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("meido_grep_ws_{}", uuid::Uuid::new_v4()));
         let shared = root.join("shared");
         std::fs::create_dir_all(&shared).unwrap();
         let dir = setup_grep_dir();
@@ -287,10 +328,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_no_matches() {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_grep_ws_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("meido_grep_ws_{}", uuid::Uuid::new_v4()));
         let shared = root.join("shared");
         std::fs::create_dir_all(&shared).unwrap();
         let dir = setup_grep_dir();
@@ -306,10 +344,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_with_file_glob() {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_grep_ws_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("meido_grep_ws_{}", uuid::Uuid::new_v4()));
         let shared = root.join("shared");
         std::fs::create_dir_all(&shared).unwrap();
         let dir = setup_grep_dir();
@@ -350,8 +385,7 @@ mod tests {
 
     #[test]
     fn test_grep_file_function() {
-        let dir =
-            std::env::temp_dir().join(format!("finally_a_value_bot_gf_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("meido_gf_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("test.txt");
         std::fs::write(&file, "foo bar\nbaz qux\nfoo again\n").unwrap();
@@ -368,8 +402,7 @@ mod tests {
 
     #[test]
     fn test_grep_recursive_skips_hidden_dirs() {
-        let dir =
-            std::env::temp_dir().join(format!("finally_a_value_bot_gr_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("meido_gr_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(dir.join(".hidden")).unwrap();
         std::fs::write(dir.join(".hidden").join("secret.txt"), "match_me").unwrap();
         std::fs::write(dir.join("visible.txt"), "match_me").unwrap();
@@ -388,10 +421,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_defaults_to_working_dir() {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_grep2_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("meido_grep2_{}", uuid::Uuid::new_v4()));
         let work = root.join("workspace");
         let shared = work.join("shared");
         std::fs::create_dir_all(&shared).unwrap();
@@ -407,16 +437,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_grep_rejects_path_outside_workspace() {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_grep_outside_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("meido_grep_outside_{}", uuid::Uuid::new_v4()));
         let shared = root.join("shared");
         std::fs::create_dir_all(&shared).unwrap();
-        let outside_dir = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_grep_external_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let outside_dir =
+            std::env::temp_dir().join(format!("meido_grep_external_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&outside_dir).unwrap();
         std::fs::write(outside_dir.join("a.txt"), "needle").unwrap();
 

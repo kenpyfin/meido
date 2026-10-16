@@ -1,15 +1,50 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use std::collections::VecDeque;
+use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use tracing_subscriber::fmt::format::{FormatEvent, FormatFields, Writer};
 use tracing_subscriber::fmt::writer::MakeWriter;
+use tracing_subscriber::fmt::FmtContext;
+use tracing_subscriber::registry::LookupSpan;
 
-pub const LOG_FILE_PREFIX: &str = "finally_a_value_bot-";
+pub const LOG_FILE_PREFIX: &str = "meido-";
+const LEGACY_LOG_FILE_PREFIX: &str = "finally_a_value_bot-";
 pub const LOG_FILE_SUFFIX: &str = ".log";
 pub const LOG_RETENTION_DAYS: i64 = 30;
+
+struct MeidoEventFormat;
+
+impl<S, N> FormatEvent<S, N> for MeidoEventFormat
+where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        mut writer: Writer<'_>,
+        event: &tracing::Event<'_>,
+    ) -> fmt::Result {
+        let meta = event.metadata();
+        write!(
+            writer,
+            "{}  {:5} {}: ",
+            Utc::now().format("%Y-%m-%dT%H:%M:%S%.6fZ"),
+            meta.level(),
+            meta.target()
+        )?;
+        ctx.format_fields(writer.by_ref(), event)?;
+        writeln!(writer)
+    }
+}
+
+fn env_filter() -> tracing_subscriber::EnvFilter {
+    tracing_subscriber::EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into())
+}
 
 pub fn init_logging(runtime_data_dir: &str) -> Result<()> {
     let log_dir = PathBuf::from(runtime_data_dir).join("logs");
@@ -19,11 +54,9 @@ pub fn init_logging(runtime_data_dir: &str) -> Result<()> {
 
     let writer = HourlyLogWriter::new(log_dir, LOG_RETENTION_DAYS)?;
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
-        )
         .with_ansi(false)
+        .event_format(MeidoEventFormat)
+        .with_env_filter(env_filter())
         .with_writer(writer)
         .init();
 
@@ -32,10 +65,8 @@ pub fn init_logging(runtime_data_dir: &str) -> Result<()> {
 
 pub fn init_console_logging() {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
-        )
+        .event_format(MeidoEventFormat)
+        .with_env_filter(env_filter())
         .init();
 }
 
@@ -157,11 +188,18 @@ pub fn cleanup_old_logs(log_dir: &Path, now: DateTime<Utc>, retention_days: i64)
     Ok(())
 }
 
-fn parse_log_filename_time(file_name: &str) -> Option<DateTime<Utc>> {
-    if !(file_name.starts_with(LOG_FILE_PREFIX) && file_name.ends_with(LOG_FILE_SUFFIX)) {
+fn log_name_body(file_name: &str) -> Option<&str> {
+    let prefix = [LOG_FILE_PREFIX, LEGACY_LOG_FILE_PREFIX]
+        .into_iter()
+        .find(|prefix| file_name.starts_with(prefix))?;
+    if !file_name.ends_with(LOG_FILE_SUFFIX) {
         return None;
     }
-    let body = &file_name[LOG_FILE_PREFIX.len()..file_name.len() - LOG_FILE_SUFFIX.len()];
+    Some(&file_name[prefix.len()..file_name.len() - LOG_FILE_SUFFIX.len()])
+}
+
+fn parse_log_filename_time(file_name: &str) -> Option<DateTime<Utc>> {
+    let body = log_name_body(file_name)?;
     let naive =
         NaiveDateTime::parse_from_str(&format!("{body}:00:00"), "%Y-%m-%d-%H:%M:%S").ok()?;
     Some(DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc))
@@ -209,14 +247,12 @@ mod tests {
     use uuid::Uuid;
 
     fn test_dir() -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "finally_a_value_bot_logging_test_{}",
-            Uuid::new_v4()
-        ))
+        std::env::temp_dir().join(format!("meido_logging_test_{}", Uuid::new_v4()))
     }
 
     #[test]
     fn test_parse_log_filename_time() {
+        assert!(parse_log_filename_time("meido-2026-02-08-10.log").is_some());
         assert!(parse_log_filename_time("finally_a_value_bot-2026-02-08-10.log").is_some());
         assert!(parse_log_filename_time("finally_a_value_bot-2026-02-08.log").is_none());
         assert!(parse_log_filename_time("other-2026-02-08-10.log").is_none());

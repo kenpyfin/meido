@@ -252,6 +252,41 @@ pub async fn run_app(
     }
 
     let wecom = crate::channels::wecom::WecomGateway::from_config(&config);
+    let prepared_listener = if config.web_enabled {
+        match crate::web::bind_web_listener(&config.web_host, config.web_port).await {
+            Ok(bound) => Some(bound),
+            Err(err) => {
+                error!(
+                    "Failed to bind web server at {}:{}: {}",
+                    config.web_host, config.web_port, err
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let web_listener = prepared_listener.map(|(listener, bound)| {
+        if bound != config.web_port {
+            info!(
+                "Default web port {} is in use; using {}",
+                config.web_port, bound
+            );
+        }
+        config.web_port = bound;
+        listener
+    });
+    if config.web_enabled {
+        let runtime_dir = config.runtime_data_dir();
+        let recorded = if web_listener.is_some() {
+            crate::daemon::write_bound_port(std::path::Path::new(&runtime_dir), config.web_port)
+        } else {
+            crate::daemon::write_bind_failed(std::path::Path::new(&runtime_dir))
+        };
+        if let Err(err) = recorded {
+            warn!("Failed to record web listen port: {err}");
+        }
+    }
     let state = Arc::new(AppState {
         config,
         env_redactor,
@@ -272,19 +307,24 @@ pub async fn run_app(
         wecom,
         chat_queue: ChatRunQueue::default(),
         background_job_control: BackgroundJobControl::default(),
+        persona_external_paths: Arc::new(
+            crate::persona_external_paths::PersonaExternalPaths::load(
+                Config::resolve_config_path().unwrap_or(None),
+            ),
+        ),
     });
     let _ = app_state_slot.set(state.clone());
 
     info!("web UI is the primary interface; messaging channels are optional");
     // Start local web server if enabled
-    if state.config.web_enabled {
+    if let Some(listener) = web_listener {
         let web_state = state.clone();
         info!(
             "Starting Web UI server on {}:{}",
             state.config.web_host, state.config.web_port
         );
         tokio::spawn(async move {
-            crate::web::start_web_server(web_state).await;
+            crate::web::start_web_server(web_state, listener).await;
         });
     }
 

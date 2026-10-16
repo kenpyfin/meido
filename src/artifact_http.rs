@@ -93,7 +93,7 @@ pub async fn serve_file(
                     StatusCode::RANGE_NOT_SATISFIABLE,
                     [("content-range", format!("bytes */{size}"))],
                 )
-                    .into_response())
+                    .into_response());
             }
         }
     }
@@ -192,17 +192,6 @@ fn parse_range(value: &str, size: u64) -> Option<(u64, u64)> {
     };
     (start < size && end >= start).then_some((start, end))
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn ranges() {
-        assert_eq!(parse_range("bytes=2-5", 10), Some((2, 5)));
-        assert_eq!(parse_range("bytes=-3", 10), Some((7, 9)));
-        assert_eq!(parse_range("bytes=10-", 10), None);
-        assert_eq!(parse_range("bytes=0-1,4-5", 10), None);
-    }
-}
 
 fn guess_upload_content_type(path: &FsPath) -> &'static str {
     match path
@@ -231,5 +220,17 @@ fn guess_upload_content_type(path: &FsPath) -> &'static str {
         Some("m4a") => "audio/mp4",
         Some("flac") => "audio/flac",
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn ranges() {
+        assert_eq!(parse_range("bytes=2-5", 10), Some((2, 5)));
+        assert_eq!(parse_range("bytes=-3", 10), Some((7, 9)));
+        assert_eq!(parse_range("bytes=10-", 10), None);
+        assert_eq!(parse_range("bytes=0-1,4-5", 10), None);
     }
 }

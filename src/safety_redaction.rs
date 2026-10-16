@@ -23,10 +23,19 @@ const SKIP_DIR_NAMES: &[&str] = &[".git", "node_modules", "target", "runtime"];
 /// Config / operational keys whose values are not credentials (exact match, uppercase).
 const NON_SECRET_ENV_KEYS: &[&str] = &[
     "WORKSPACE_DIR",
+    // MEIDO_* preferred + FINALLY_A_VALUE_BOT_* legacy (see meido_env::NON_SECRET_KEYS)
+    "MEIDO_WORKSPACE_DIR",
+    "MEIDO_CONFIG",
+    "MEIDO_BUILTIN_SKILLS",
+    "MEIDO_BUILTIN_HOOKS",
+    "MEIDO_SELF_REPO",
+    "MEIDO_RUNTIME_DATA",
     "FINALLY_A_VALUE_BOT_WORKSPACE_DIR",
     "FINALLY_A_VALUE_BOT_CONFIG",
     "FINALLY_A_VALUE_BOT_BUILTIN_SKILLS",
     "FINALLY_A_VALUE_BOT_BUILTIN_HOOKS",
+    "FINALLY_A_VALUE_BOT_SELF_REPO",
+    "FINALLY_A_VALUE_BOT_RUNTIME_DATA",
     "TIMEZONE",
     "WEB_HOST",
     "WEB_PORT",
@@ -62,7 +71,6 @@ const NON_SECRET_ENV_KEYS: &[&str] = &[
     "WECOM_BOT_ID",
     "WECOM_MODE",
     "QUALITY_EVAL_CHANNELS",
-    "ORCHESTRATOR_MODEL",
     "CURSOR_AGENT_MODEL",
     "HOOK_PROMPT_MODEL",
     "EVALUATOR_MODEL",
@@ -107,7 +115,6 @@ const NON_SECRET_ENV_KEYS: &[&str] = &[
     "RECENT_HISTORY_MIN_ASSISTANT_MESSAGES",
     "SHOW_THINKING",
     "TOOL_OUTPUT_DEBUG",
-    "ORCHESTRATOR_ENABLED",
     "POST_TOOL_EVALUATOR_ENABLED",
     "RESPONSE_QUALITY_EVALUATOR_ENABLED",
     "BACKGROUND_SHELL_TMUX_ENABLED",
@@ -690,7 +697,7 @@ mod tests {
         assert!(should_redact_env_key("CURSOR_API_KEY"));
         assert!(!should_redact_env_key("WORKSPACE_DIR"));
         assert!(!should_redact_env_key("SOCIAL_TIKTOK_CLIENT_ID"));
-        assert!(!should_redact_env_key("ORCHESTRATOR_MODEL"));
+        assert!(!should_redact_env_key("CURSOR_AGENT_MODEL"));
     }
 
     #[test]

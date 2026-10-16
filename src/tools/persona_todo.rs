@@ -159,7 +159,7 @@ impl Tool for ListTodosTool {
             other => {
                 return ToolResult::error(format!(
                     "Invalid status '{other}'; use open, done, or all"
-                ))
+                ));
             }
         };
         let limit = input
@@ -276,7 +276,7 @@ mod tests {
 
     fn auth_input(chat_id: i64, persona_id: i64) -> serde_json::Value {
         json!({
-            "__finally_a_value_bot_auth": {
+            "__meido_auth": {
                 "caller_channel": "web",
                 "caller_chat_id": chat_id,
                 "caller_persona_id": persona_id,
@@ -288,8 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_list_complete_todo() {
-        let dir =
-            std::env::temp_dir().join(format!("finally_a_value_bot_todo_{}", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("meido_todo_{}", uuid::Uuid::new_v4()));
         let db = Arc::new(Database::new(dir.to_str().unwrap()).unwrap());
         db.upsert_chat(7, None, "private").unwrap();
         let pid = db.get_or_create_default_persona(7).unwrap();

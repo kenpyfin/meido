@@ -74,8 +74,7 @@ function renderTree(onJump = vi.fn()) {
         onTogglePin={() => {}}
         onMerge={() => {}}
         onDelete={() => {}}
-        onCreateSection={() => Promise.resolve()}
-        agentEngine="classic"
+        onCreateSession={() => Promise.resolve()}
         onRefresh={() => {}}
       />,
     )
@@ -115,8 +114,7 @@ describe('TopicOutlineTree', () => {
           onTogglePin={() => {}}
           onMerge={() => {}}
           onDelete={onDelete}
-          onCreateSection={() => Promise.resolve()}
-          agentEngine="classic"
+          onCreateSession={() => Promise.resolve()}
           onRefresh={() => {}}
         />,
       )
@@ -138,8 +136,8 @@ describe('TopicOutlineTree', () => {
     expect(onDelete).toHaveBeenCalledWith('t2')
   })
 
-  it('creates a section from the latest topic menu', async () => {
-    const onCreateSection = vi.fn().mockResolvedValue(undefined)
+  it('creates a session from any topic menu', async () => {
+    const onCreateSession = vi.fn().mockResolvedValue(undefined)
     await act(async () => {
       root.render(
         <TopicOutlineTree
@@ -155,27 +153,27 @@ describe('TopicOutlineTree', () => {
           onTogglePin={() => {}}
           onMerge={() => {}}
           onDelete={() => {}}
-          onCreateSection={onCreateSection}
-          agentEngine="cursor"
+          onCreateSession={onCreateSession}
           onRefresh={() => {}}
         />,
       )
     })
-    const trigger = container.querySelector('[aria-label="Topic actions for Budget"]')
+    const trigger = container.querySelector('[aria-label="Topic actions for Deploy logs"]')
     await act(async () => {
       trigger?.dispatchEvent(
         new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }),
       )
     })
     const item = [...document.body.querySelectorAll('[role="menuitem"]')].find((node) =>
-      node.textContent?.includes('Create new section'),
+      node.textContent?.includes('Create new session'),
     )
     expect(item).toBeTruthy()
     expect(item?.getAttribute('aria-disabled')).not.toBe('true')
+    expect(document.body.textContent).not.toContain('Agent engine')
     await act(async () => {
       item?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
-    const input = document.body.querySelector('[aria-label="Section title"]')
+    const input = document.body.querySelector('[aria-label="Session title"]')
     expect(input).toBeTruthy()
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
@@ -183,13 +181,13 @@ describe('TopicOutlineTree', () => {
       input?.dispatchEvent(new Event('input', { bubbles: true }))
     })
     const create = [...document.body.querySelectorAll('button')].find((node) =>
-      node.textContent?.includes('Create section'),
+      node.textContent?.includes('Create session'),
     )
     expect(create).toBeTruthy()
     await act(async () => {
       create?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     })
-    expect(onCreateSection).toHaveBeenCalledWith('t2', 'Packaging', 'cursor')
+    expect(onCreateSession).toHaveBeenCalledWith('t1', 'Packaging')
   })
 
   it('jumps to the topic start on Enter', async () => {

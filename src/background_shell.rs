@@ -22,8 +22,7 @@ const COMMAND_SCRIPT: &str = "command.sh";
 const WRAPPER_SCRIPT: &str = "wrapper.sh";
 
 pub fn in_docker() -> bool {
-    std::env::var("FINALLY_A_VALUE_BOT_IN_DOCKER").as_deref() == Ok("1")
-        || Path::new("/.dockerenv").exists()
+    crate::meido_env::is_flag_one(crate::meido_env::IN_DOCKER) || Path::new("/.dockerenv").exists()
 }
 
 pub fn tmux_available(config: &Config) -> bool {
@@ -96,7 +95,7 @@ fn session_name(prefix: &str, job_id: &str) -> String {
     let short: String = job_id.chars().take(8).collect();
     let prefix = prefix.trim();
     let prefix = if prefix.is_empty() {
-        "finally_a_value_bot-bg"
+        "meido-bg"
     } else {
         prefix
     };

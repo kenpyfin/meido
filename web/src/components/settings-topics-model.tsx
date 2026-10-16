@@ -30,7 +30,7 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
     setLoading(true)
     try {
       const [next, llmConfig] = await Promise.all([
-        api<TopicsModelResponse>('/api/topics/model'),
+        api<TopicsModelResponse>('/api/system-llm'),
         api<LlmConfigResponse>('/api/llm'),
       ])
       setData(next)
@@ -68,13 +68,13 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
     const chosenProvider = nextProvider.trim()
     const chosenModel = nextModel.trim()
     if (!chosenProvider || !chosenModel) {
-      onError('Choose a provider and a model for topic titles.')
+      onError('Choose a provider and a model for the system LLM.')
       return
     }
     setSaving(true)
     setNotice(null)
     try {
-      const next = await api<TopicsModelResponse>('/api/topics/model', {
+      const next = await api<TopicsModelResponse>('/api/system-llm', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider: chosenProvider, model: chosenModel }),
@@ -82,7 +82,7 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
       setData(next)
       setProvider(next.provider?.trim() || chosenProvider)
       setModel(next.model?.trim() || chosenModel)
-      setNotice(next.message ?? 'Topic model saved.')
+      setNotice(next.message ?? 'System LLM saved.')
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
       await load()
@@ -142,18 +142,18 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
   }, [loading, localBaseUrl, provider, refreshModels])
 
   if (loading) {
-    return <span className="text-sm text-muted-foreground">Loading topic model…</span>
+    return <span className="text-sm text-muted-foreground">Loading system LLM…</span>
   }
 
   const using = model ? `${providerLabel} / ${model}` : providerLabel
-  const titleTooltip = `A background pass names each stretch of the chat. It reads the open topic plus newer messages, up to 40 shortened lines, and asks ${using} for JSON boundaries and titles. Closed topics and titles you edited stay as saved. If that request fails, the previous titles stay.`
+  const titleTooltip = `Topic split, bulletin updates, and other learning call ${using}. Topic split reads the open topic plus newer messages, up to 40 shortened lines, and asks for JSON boundaries and titles. Closed topics and titles you edited stay as saved. Channel chat uses the engine model.`
 
   return (
     <div className="flex flex-col gap-2 rounded-md border p-3" style={{ borderColor: 'var(--gray-6)' }}>
-      <span className="font-medium">Topic titles</span>
+      <span className="font-medium">System LLM</span>
       <span className="text-sm text-muted-foreground">
-        Provider and model that name conversation sections. The next segmentation pass uses this choice. Existing
-        titles stay until a topic is still open and untitled by you.
+        Provider and model for topic split, bulletin updates, and other learning. Channel chat keeps the model on
+        Agent engine. The next background pass uses this choice.
       </span>
       <div className="flex flex-wrap items-center gap-2">
         <Select
@@ -166,7 +166,7 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
             setModel((current) => (ids.includes(current) ? current : (ids[0] ?? '')))
           }}
         >
-          <SelectTrigger className="min-w-[180px]" aria-label="Topic title provider">
+          <SelectTrigger className="min-w-[180px]" aria-label="System LLM provider">
             <SelectValue placeholder="Provider" />
           </SelectTrigger>
           <SelectContent>
@@ -181,7 +181,7 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
           <TooltipTrigger asChild>
             <span className="inline-flex min-w-[220px] flex-1">
               <Select value={model || undefined} disabled={saving} onValueChange={setModel}>
-                <SelectTrigger className="w-full" aria-label="Topic title model">
+                <SelectTrigger className="w-full" aria-label="System LLM model">
                   <SelectValue placeholder="Model" />
                 </SelectTrigger>
                 <SelectContent>
@@ -213,7 +213,7 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
       </div>
       <span className="text-xs text-muted-foreground" role="status">
         Using {using}
-        {data?.saved && data.source !== 'strategy' ? ' (saved in app)' : ' (chat model until you save)'}.
+        {data?.saved && data.source !== 'strategy' ? ' (saved in app)' : ' (channel model until you save)'}.
         {isLocalProvider(provider) && !data?.local_base_url?.trim()
           ? ' Set the local server URL under Settings → Connections.'
           : ''}

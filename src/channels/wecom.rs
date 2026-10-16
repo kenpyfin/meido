@@ -1040,10 +1040,7 @@ mod tests {
     use crate::db::{stable_canonical_chat_id_for_handle, Database, BOT_INSTANCE_WECOM_PRIMARY};
 
     fn test_db() -> (Database, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_wecom_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("meido_wecom_{}", uuid::Uuid::new_v4()));
         let db = Database::new(dir.to_str().unwrap()).unwrap();
         (db, dir)
     }

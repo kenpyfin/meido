@@ -16,7 +16,13 @@ pub fn oauth_base_url(config: &Config) -> Option<String> {
     if config.social.is_some() && config.web_enabled {
         let host = &config.web_host;
         let port = config.web_port;
-        let scheme = if host == "127.0.0.1" || host == "localhost" || host == "::1" {
+        let host_l = host.to_ascii_lowercase();
+        let scheme = if host_l == "127.0.0.1"
+            || host_l == "localhost"
+            || host_l == "::1"
+            || host_l.ends_with(".local")
+            || host_l.ends_with(".localhost")
+        {
             "http"
         } else {
             "https"

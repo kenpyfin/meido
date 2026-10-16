@@ -40,6 +40,10 @@ pub struct SearchRoot {
     pub specificity: u8,
     /// When true, this entry is an exact file pointer (SOP vault_path), not a directory root.
     pub exact_file: bool,
+    /// `ORIGIN/…` queries join the remainder onto this root (the directory may not be named ORIGIN).
+    pub strips_origin_prefix: bool,
+    /// `vault_db/…` queries join the remainder onto this root when `VAULT_VECTOR_DB_PATH` is set.
+    pub strips_vault_db_prefix: bool,
 }
 
 /// Parse `Repo: /absolute/path` (or trailing absolute path) from Tier 1 stable facts.
@@ -101,8 +105,24 @@ fn push_existing_dir(out: &mut Vec<SearchRoot>, label: &str, path: PathBuf, spec
             path,
             specificity,
             exact_file: false,
+            strips_origin_prefix: false,
+            strips_vault_db_prefix: false,
         });
     }
+}
+
+fn push_origin_vault(out: &mut Vec<SearchRoot>, path: PathBuf) {
+    if path.is_file() {
+        return;
+    }
+    out.push(SearchRoot {
+        label: "ORIGIN vault".to_string(),
+        path,
+        specificity: 80,
+        exact_file: false,
+        strips_origin_prefix: true,
+        strips_vault_db_prefix: false,
+    });
 }
 
 fn push_existing_file(out: &mut Vec<SearchRoot>, label: &str, path: PathBuf, specificity: u8) {
@@ -112,18 +132,40 @@ fn push_existing_file(out: &mut Vec<SearchRoot>, label: &str, path: PathBuf, spe
             path,
             specificity,
             exact_file: true,
+            strips_origin_prefix: false,
+            strips_vault_db_prefix: false,
         });
     }
 }
 
 /// Build the ordered root registry from workspace layout + persona memory.
 ///
-/// Nonexistent roots are dropped so the candidate list is always live.
+/// The ORIGIN root is `{workspace}/shared/ORIGIN`. Use [`build_registry_with_origin`]
+/// when `VAULT_ORIGIN_VAULT_PATH` points somewhere else.
+///
+/// Nonexistent roots are dropped so the candidate list is always live. The
+/// configured ORIGIN vault is kept even when the directory is not created yet.
 pub fn build_registry(
     workspace_root: &Path,
     auth: Option<&ToolAuthContext>,
     memory: Option<&PersonaMemoryState>,
 ) -> Vec<SearchRoot> {
+    build_registry_with_origin(
+        workspace_root,
+        auth,
+        memory,
+        &workspace_shared_root(workspace_root).join("ORIGIN"),
+    )
+}
+
+/// Same as [`build_registry`], with an explicit ORIGIN vault root.
+pub fn build_registry_with_origin(
+    workspace_root: &Path,
+    auth: Option<&ToolAuthContext>,
+    memory: Option<&PersonaMemoryState>,
+    origin_vault: &Path,
+) -> Vec<SearchRoot> {
+    let configured_vector_db = auth.and_then(|a| a.vector_db_root.clone());
     let mut out = Vec::new();
     let shared = workspace_shared_root(workspace_root);
 
@@ -131,10 +173,20 @@ pub fn build_registry(
         let persona =
             persona_shared_dir(workspace_root, auth.caller_chat_id, auth.caller_persona_id);
         push_existing_dir(&mut out, "persona cwd", persona.clone(), 100);
-        push_existing_dir(&mut out, "persona ORIGIN", persona.join("ORIGIN"), 95);
+        let persona_origin = persona.join("ORIGIN");
+        if persona_origin.is_dir() {
+            out.push(SearchRoot {
+                label: "persona ORIGIN".into(),
+                path: persona_origin,
+                specificity: 95,
+                exact_file: false,
+                strips_origin_prefix: true,
+                strips_vault_db_prefix: false,
+            });
+        }
         for prefix in shared_global_prefixes() {
-            if prefix == "ORIGIN" {
-                continue; // handled as shared ORIGIN below with lower specificity
+            if prefix == "ORIGIN" || (prefix == "vault_db" && configured_vector_db.is_some()) {
+                continue;
             }
             push_existing_dir(
                 &mut out,
@@ -145,9 +197,38 @@ pub fn build_registry(
         }
     }
 
-    push_existing_dir(&mut out, "shared ORIGIN", shared.join("ORIGIN"), 80);
+    push_origin_vault(&mut out, origin_vault.to_path_buf());
+    if let Some(path) = configured_vector_db {
+        if !path.is_file() {
+            out.push(SearchRoot {
+                label: "vector db".into(),
+                path,
+                specificity: 75,
+                exact_file: false,
+                strips_origin_prefix: false,
+                strips_vault_db_prefix: true,
+            });
+        }
+    }
+    if let Some(auth) = auth {
+        for path in &auth.external_roots {
+            if path.as_os_str().is_empty() {
+                continue;
+            }
+            out.push(SearchRoot {
+                label: "external path".into(),
+                path: path.clone(),
+                specificity: 70,
+                exact_file: false,
+                strips_origin_prefix: false,
+                strips_vault_db_prefix: false,
+            });
+        }
+    }
     for prefix in shared_global_prefixes() {
-        if prefix == "ORIGIN" {
+        if prefix == "ORIGIN"
+            || (prefix == "vault_db" && out.iter().any(|r| r.strips_vault_db_prefix))
+        {
             continue;
         }
         push_existing_dir(
@@ -189,12 +270,14 @@ pub fn build_registry(
                         .join(rest);
                 push_existing_file(&mut out, &format!("SOP {}", sop.id), persona_origin, 110);
             }
-            push_existing_file(
-                &mut out,
-                &format!("SOP {} (shared)", sop.id),
-                shared.join("ORIGIN").join(rest),
-                105,
-            );
+            if let Some(shared_sop) = crate::tools::join_within(origin_vault, Path::new(rest)) {
+                push_existing_file(
+                    &mut out,
+                    &format!("SOP {} (shared)", sop.id),
+                    shared_sop,
+                    105,
+                );
+            }
         }
     }
 
@@ -234,6 +317,23 @@ pub fn resolve_prefixed_path(
     tool_working_dir: &Path,
     normalized: &str,
 ) -> PathBuf {
+    resolve_prefixed_path_with_origin(
+        workspace_root,
+        tool_working_dir,
+        normalized,
+        &workspace_shared_root(workspace_root).join("ORIGIN"),
+        None,
+    )
+}
+
+/// Same as [`resolve_prefixed_path`], with an explicit ORIGIN vault root.
+pub fn resolve_prefixed_path_with_origin(
+    workspace_root: &Path,
+    tool_working_dir: &Path,
+    normalized: &str,
+    origin_vault: &Path,
+    vector_db: Option<&Path>,
+) -> PathBuf {
     let shared_root = workspace_shared_root(workspace_root);
     let first = Path::new(normalized)
         .components()
@@ -248,7 +348,28 @@ pub fn resolve_prefixed_path(
         return shared_root.join(normalized);
     }
 
-    let shared_path = shared_root.join(normalized);
+    let shared_path = if first == "ORIGIN" {
+        let rest = Path::new(normalized)
+            .strip_prefix("ORIGIN")
+            .unwrap_or(Path::new(normalized));
+        match crate::tools::join_within(origin_vault, rest) {
+            Some(path) => path,
+            None => return PathBuf::from(normalized),
+        }
+    } else if first == "vault_db" {
+        if let Some(root) = vector_db {
+            let rest = Path::new(normalized)
+                .strip_prefix("vault_db")
+                .unwrap_or(Path::new(normalized));
+            return match crate::tools::join_within(root, rest) {
+                Some(path) => path,
+                None => PathBuf::from(normalized),
+            };
+        }
+        shared_root.join(normalized)
+    } else {
+        shared_root.join(normalized)
+    };
     let persona_prefix = tool_working_dir.join(first);
     if is_persona_tool_cwd(workspace_root, tool_working_dir) && persona_prefix.is_dir() {
         let persona_path = tool_working_dir.join(normalized);
@@ -441,13 +562,27 @@ fn join_query_under_root(root: &SearchRoot, query: &str) -> PathBuf {
     let q = query.trim_start_matches('/');
     // ORIGIN/foo under a root already named ORIGIN → join foo only.
     if let Some(rest) = q.strip_prefix("ORIGIN/") {
-        if root
-            .path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n == "ORIGIN")
+        if root.strips_origin_prefix
+            || root
+                .path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n == "ORIGIN")
         {
-            return root.path.join(rest);
+            return crate::tools::join_within(&root.path, Path::new(rest))
+                .unwrap_or_else(|| root.path.clone());
+        }
+    }
+    if let Some(rest) = q.strip_prefix("vault_db/") {
+        if root.strips_vault_db_prefix
+            || root
+                .path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n == "vault_db")
+        {
+            return crate::tools::join_within(&root.path, Path::new(rest))
+                .unwrap_or_else(|| root.path.clone());
         }
     }
     // Bare filename under root.
@@ -570,14 +705,23 @@ pub fn load_memory_for_auth(
 pub struct LocateFileTool {
     workspace_root: PathBuf,
     runtime_data_dir: PathBuf,
+    origin_vault: PathBuf,
 }
 
 impl LocateFileTool {
     pub fn new(workspace_root: &str, runtime_data_dir: &str) -> Self {
+        let workspace_root = PathBuf::from(workspace_root);
+        let origin_vault = workspace_root.join("shared").join("ORIGIN");
         Self {
-            workspace_root: PathBuf::from(workspace_root),
+            workspace_root,
             runtime_data_dir: PathBuf::from(runtime_data_dir),
+            origin_vault,
         }
+    }
+
+    pub fn with_origin_vault(mut self, origin_vault: PathBuf) -> Self {
+        self.origin_vault = origin_vault;
+        self
     }
 }
 
@@ -590,9 +734,10 @@ impl Tool for LocateFileTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::new(
             "locate_file",
-            "Locate a file using declared persona/workspace roots (persona ORIGIN, shared ORIGIN, \
-             skills, runtime, Tier-1 Repo paths, SOP pointers) before any wide filesystem scan. \
-             On miss, returns roots tried and instructs you to ask the user — do not escalate to find.",
+            "Locate a file using declared persona/workspace roots (persona ORIGIN, the configured \
+             ORIGIN vault, skills, runtime, Tier-1 Repo paths, SOP pointers) before any wide \
+             filesystem scan. On miss, returns roots tried and instructs you to ask the user — \
+             do not escalate to find.",
             schema_object(
                 json!({
                     "query": {
@@ -613,7 +758,12 @@ impl Tool for LocateFileTool {
         let auth = auth_context_from_input(&input);
         let memory =
             load_memory_for_auth(&self.workspace_root, &self.runtime_data_dir, auth.as_ref());
-        let registry = build_registry(&self.workspace_root, auth.as_ref(), memory.as_ref());
+        let registry = build_registry_with_origin(
+            &self.workspace_root,
+            auth.as_ref(),
+            memory.as_ref(),
+            &self.origin_vault,
+        );
         info!("locate_file query={} roots={}", query, registry.len());
         let result = locate_in_registry(query, &registry);
         let body = json!({
@@ -650,6 +800,8 @@ mod tests {
             control_chat_ids: vec![],
             is_scheduled_task: false,
             session_id: None,
+            vector_db_root: None,
+            external_roots: Vec::new(),
         }
     }
 
@@ -742,10 +894,12 @@ mod tests {
         let repo = root.join("external_repo");
         std::fs::create_dir_all(&repo).unwrap();
         std::fs::create_dir_all(persona_shared_dir(&root, 1, 1)).unwrap();
-        let mut mem = PersonaMemoryState::default();
-        mem.tier1 = Tier1Memory {
-            stable_facts: vec![format!("Repo: {}", repo.display())],
-            workflow_principles: vec![],
+        let mem = PersonaMemoryState {
+            tier1: Tier1Memory {
+                stable_facts: vec![format!("Repo: {}", repo.display())],
+                workflow_principles: vec![],
+            },
+            ..Default::default()
         };
         let a = auth(1, 1);
         let registry = build_registry(&root, Some(&a), Some(&mem));
@@ -789,6 +943,8 @@ mod tests {
             path: root.clone(),
             specificity: 1,
             exact_file: false,
+            strips_origin_prefix: false,
+            strips_vault_db_prefix: false,
         }];
         let result = locate_in_registry("alpha", &registry);
         assert!(!result.found);

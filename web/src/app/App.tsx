@@ -11,7 +11,6 @@ import { CockpitBar } from '../components/cockpit-bar'
 import { CommandPalette, useCommandPaletteOpenState } from '../components/command-palette'
 import { SessionSidebar } from '../components/session-sidebar'
 import { readSidebarMode, SIDEBAR_MODE_TITLES, writeSidebarMode, type SidebarMode } from './sidebar-mode'
-import { asEngineId, type EngineId } from '../lib/agent-engine'
 import { matchGuestPersona } from '../lib/guest-mention'
 import { SubthreadSidePane } from '../components/subthread-side-pane'
 import { SideChatOverlay, useNarrowViewport } from '../components/side-chat-overlay'
@@ -124,25 +123,25 @@ const UI_THEME_OPTIONS: { key: UiTheme; label: string; color: string }[] = [
 ]
 
 function readAppearance(): Appearance {
-  const saved = localStorage.getItem('finally-a-value-bot_appearance')
+  const saved = localStorage.getItem('meido_appearance')
   return saved === 'light' ? 'light' : 'dark'
 }
 
 function saveAppearance(value: Appearance): void {
-  localStorage.setItem('finally-a-value-bot_appearance', value)
+  localStorage.setItem('meido_appearance', value)
 }
 
 function readUiTheme(): UiTheme {
-  const saved = localStorage.getItem('finally-a-value-bot_ui_theme') as UiTheme | null
+  const saved = localStorage.getItem('meido_ui_theme') as UiTheme | null
   return UI_THEME_OPTIONS.some((t) => t.key === saved) ? (saved as UiTheme) : 'linear'
 }
 
 function saveUiTheme(value: UiTheme): void {
-  localStorage.setItem('finally-a-value-bot_ui_theme', value)
+  localStorage.setItem('meido_ui_theme', value)
 }
 
-const DESKTOP_SIDEBAR_OPEN_KEY = 'finally-a-value-bot_desktop_sidebar_open'
-const DESKTOP_SIDEBAR_WIDTH_KEY = 'finally-a-value-bot_desktop_sidebar_width'
+const DESKTOP_SIDEBAR_OPEN_KEY = 'meido_desktop_sidebar_open'
+const DESKTOP_SIDEBAR_WIDTH_KEY = 'meido_desktop_sidebar_width'
 const DESKTOP_SIDEBAR_DEFAULT_WIDTH = 320
 const DESKTOP_SIDEBAR_MIN_WIDTH = 260
 const DESKTOP_SIDEBAR_MAX_WIDTH = 520
@@ -337,7 +336,7 @@ type LoadHistoryFn = (
 ) => Promise<void>
 
 
-const MOBILE_COCKPIT_OPEN_KEY = 'finally-a-value-bot_mobile_cockpit_open'
+const MOBILE_COCKPIT_OPEN_KEY = 'meido_mobile_cockpit_open'
 
 function MobileFocusDisclosure({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(() => {
@@ -474,7 +473,6 @@ export function App({
     handleCreateSession,
     handleDeleteSession,
     onCreatePersona,
-    onSetPersonaEngine,
     onRenamePersona,
     onDeletePersona,
     newSchedulePersonaId,
@@ -779,6 +777,8 @@ export function App({
   const [agentsMdError, setAgentsMdError] = useState('')
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false)
   const [settingsError, setSettingsError] = useState('')
+  const [personaDialogOpen, setPersonaDialogOpen] = useState(false)
+  const [personaError, setPersonaError] = useState('')
   const [installationStatus, setInstallationStatus] = useState<InstallationStatus | null>(null)
   const [restartBusy, setRestartBusy] = useState(false)
   const [restartNotice, setRestartNotice] = useState<string | null>(null)
@@ -795,7 +795,7 @@ export function App({
   const [onboardingDismissed, setOnboardingDismissed] = useState(() => {
     if (typeof sessionStorage === 'undefined') return false
     try {
-      return sessionStorage.getItem('finally-a-value-bot_onboarding_banner_dismissed') === '1'
+      return sessionStorage.getItem('meido_onboarding_banner_dismissed') === '1'
     } catch {
       return false
     }
@@ -912,13 +912,14 @@ export function App({
     setDossierHighlightId(messageId)
     setDossierCursor({ kind: 'around', messageId })
   }, [])
-  const handleCreateTopicSession = useCallback(async () => {
-    const topicId = dossierTopic?.id
-    if (!topicId || chatId == null || activePersonaId == null) {
+  const handleCreateTopicSession = useCallback(async (topicId?: string, title = '') => {
+    const id = topicId?.trim() || dossierTopic?.id
+    if (!id || chatId == null || activePersonaId == null) {
       throw new Error('Choose a persona before starting a session')
     }
-    const created = await handleCreateSession('', false, { sourceTopicId: topicId })
+    const created = await handleCreateSession(title.trim(), false, { sourceTopicId: id })
     if (!created) throw new Error('Could not create a session')
+    setTopicsSheetOpen(false)
     chooseThreadSurface('transcript')
   }, [activePersonaId, chatId, chooseThreadSurface, dossierTopic?.id, handleCreateSession])
   useEffect(() => {
@@ -966,19 +967,6 @@ export function App({
     topics.remove,
     topics.topics,
   ])
-  const handleCreateSection = useCallback(async (topicId: string, title: string, engine: EngineId) => {
-    if (activePersonaId == null) throw new Error('Select a persona before creating a section')
-    await onSetPersonaEngine(engine)
-    const params = new URLSearchParams()
-    if (activeSessionId) params.set('session_id', activeSessionId)
-    const query = params.toString()
-    const res = await api<{ pending?: boolean }>(
-      `/api/personas/${activePersonaId}/topics/${encodeURIComponent(topicId)}/section${query ? `?${query}` : ''}`,
-      { method: 'POST', body: JSON.stringify({ title }) },
-    )
-    await topics.invalidate()
-    toast.success(res.pending ? `Next messages start “${title}”` : `Started “${title}”`)
-  }, [activePersonaId, activeSessionId, onSetPersonaEngine, topics.invalidate])
   const handleSplitTopic = useCallback(async (messageId: string) => {
     if (activePersonaId == null) return
     const params = new URLSearchParams()
@@ -2022,25 +2010,6 @@ export function App({
 
   const runtimeKey = `${chatId ?? 0}-${activePersonaId ?? 0}`
 
-  const activeAgentEngine = useMemo(() => {
-    if (activePersonaId == null) return null
-    const persona = personas.find((p) => p.id === activePersonaId)
-    return asEngineId(persona?.agent_engine_override ?? persona?.agent_engine_effective)
-  }, [activePersonaId, personas])
-
-  const [agentEngineBusy, setAgentEngineBusy] = useState(false)
-  const handleAgentEngineChange = useCallback(
-    async (engine: EngineId) => {
-      setAgentEngineBusy(true)
-      try {
-        await onSetPersonaEngine(engine)
-      } finally {
-        setAgentEngineBusy(false)
-      }
-    },
-    [onSetPersonaEngine],
-  )
-
   const handleMobileThreadScroll = useCallback((opts: {
     collapseHeader: boolean
     source: 'scroll' | 'reset' | 'focus' | 'media-change'
@@ -2062,7 +2031,14 @@ export function App({
   }, [])
 
   const handleOpenSettings = useCallback(() => {
+    setPersonaDialogOpen(false)
     setSettingsDialogOpen(true)
+  }, [])
+
+  const handleOpenPersona = useCallback(() => {
+    setSettingsDialogOpen(false)
+    setPersonaError('')
+    setPersonaDialogOpen(true)
   }, [])
 
   const handleOpenInbox = useCallback(() => {
@@ -2145,7 +2121,7 @@ export function App({
 
   const handleDismissOnboarding = useCallback(() => {
     try {
-      sessionStorage.setItem('finally-a-value-bot_onboarding_banner_dismissed', '1')
+      sessionStorage.setItem('meido_onboarding_banner_dismissed', '1')
     } catch {
       /* ignore */
     }
@@ -2178,7 +2154,7 @@ export function App({
   useKeyboardShortcuts({
     activePendingReply,
     onDismissPendingReply: handleDismissPendingReply,
-    settingsDialogOpen,
+    settingsDialogOpen: settingsDialogOpen || personaDialogOpen,
     mobileOpsOpen,
     shortcutsOpen,
     onOpenShortcuts: handleShowShortcuts,
@@ -2248,6 +2224,7 @@ export function App({
       statusText,
       cockpitExpanded,
       onToggleCockpit: handleToggleCockpit,
+      onOpenPersona: handleOpenPersona,
       onOpenSettings: handleOpenSettings,
       onOpenInbox: handleOpenInbox,
       inboxBadgeCount,
@@ -2268,6 +2245,7 @@ export function App({
       statusText,
       cockpitExpanded,
       handleToggleCockpit,
+      handleOpenPersona,
       handleOpenSettings,
       handleOpenInbox,
       inboxBadgeCount,
@@ -2294,6 +2272,7 @@ export function App({
         chatSessions={chatSessions}
         sideChats={sideChats}
         actions={{
+          onOpenPersona: handleOpenPersona,
           onOpenSettings: handleOpenSettings,
           onOpenInbox: handleOpenInbox,
           onOpenOps: handleOpenMobileOps,
@@ -2463,7 +2442,7 @@ export function App({
                   <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100 mb-2">
                     <div className="flex flex-col gap-2">
                       <span>
-                        Finish setup: configure <code className="text-xs">.env</code> with at least one channel (Telegram or Discord) and LLM keys, then restart the gateway if needed. See Settings for status.
+                        Finish setup: configure <code className="text-xs">.env</code> with at least one channel (Telegram or Discord) and LLM keys, then restart Meido if needed. See Settings for status.
                       </span>
                       <div className="flex gap-2 items-center flex-wrap">
                         <Button size="sm" variant="default" onClick={handleOpenSettings}>
@@ -2523,8 +2502,7 @@ export function App({
                       })
                     }}
                     onDelete={handleDeleteTopic}
-                    onCreateSection={handleCreateSection}
-                    agentEngine={activeAgentEngine}
+                    onCreateSession={handleCreateTopicSession}
                     onRefresh={() => {
                       void topics.refresh().catch((err: unknown) => {
                         toast.error(err instanceof Error ? err.message : 'Could not refresh topics')
@@ -2567,7 +2545,7 @@ export function App({
                   </Button>
                 </div>
                 <ResizablePanelGroup
-                  id="finally-a-value-bot-thread-subthread"
+                  id="meido-thread-subthread"
                   orientation="horizontal"
                   className="mc-thread-with-subthread min-h-0 min-w-0 flex-1"
                 >
@@ -2662,9 +2640,6 @@ export function App({
                           ? statusText
                           : undefined
                       }
-                      agentEngine={activeAgentEngine}
-                      onAgentEngineChange={handleAgentEngineChange}
-                      agentEngineBusy={agentEngineBusy}
                     />
                   </ResizablePanel>
                   {sideChatHost(threadSurface) === 'split' && activeSideChat ? (
@@ -2751,27 +2726,37 @@ export function App({
           </main>
           <MobileTabBar
             active={
-              settingsDialogOpen
-                ? 'settings'
-                : mobileOpsOpen
-                  ? 'ops'
-                  : topicsSheetOpen
-                    ? 'topics'
-                    : 'chat'
+              personaDialogOpen
+                ? 'persona'
+                : settingsDialogOpen
+                  ? 'settings'
+                  : mobileOpsOpen
+                    ? 'ops'
+                    : topicsSheetOpen
+                      ? 'topics'
+                      : 'chat'
             }
             onChat={() => {
               setTopicsSheetOpen(false)
               setMobileOpsOpen(false)
               setSettingsDialogOpen(false)
+              setPersonaDialogOpen(false)
+            }}
+            onPersona={() => {
+              setTopicsSheetOpen(false)
+              setMobileOpsOpen(false)
+              handleOpenPersona()
             }}
             onTopics={() => {
               setMobileOpsOpen(false)
               setSettingsDialogOpen(false)
+              setPersonaDialogOpen(false)
               setTopicsSheetOpen(true)
             }}
             onOps={() => {
               setTopicsSheetOpen(false)
               setSettingsDialogOpen(false)
+              setPersonaDialogOpen(false)
               setMobileOpsOpen(true)
             }}
             onSettings={() => {
@@ -2823,8 +2808,7 @@ export function App({
               })
             }}
             onDelete={handleDeleteTopic}
-            onCreateSection={handleCreateSection}
-            agentEngine={activeAgentEngine}
+            onCreateSession={handleCreateTopicSession}
             onRefresh={() => {
               void topics.refresh().catch((err: unknown) => {
                 toast.error(err instanceof Error ? err.message : 'Could not refresh topics')
@@ -2851,6 +2835,15 @@ export function App({
           bindings,
           updateChannelPersonaPolicy,
           reloadInstallationStatus: loadSettings,
+        }}
+        persona={{
+          open: personaDialogOpen,
+          onOpenChange: (open) => {
+            setPersonaDialogOpen(open)
+            if (!open) setPersonaError('')
+          },
+          error: personaError,
+          setError: setPersonaError,
           onPersonaBulletinChanged: reloadPersonaBulletin,
           onCreatePersona: handleCreatePersonaClick,
           onRenamePersona: handleRenamePersona,

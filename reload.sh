@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Quick reload: build from source, copy binary, restart gateway.
+# Quick reload: build from source, copy binary, restart the running app.
+# A login-service gateway is recycled in place. Otherwise the detached
+# `meido` process is stopped and started again from this repo.
 # Run from project root (where Cargo.toml is). Skips full install flow.
 set -euo pipefail
 
-REPO_ROOT="${FINALLY_A_VALUE_BOT_REPO_ROOT:-.}"
-BIN_NAME="finally-a-value-bot"
+REPO_ROOT="${MEIDO_REPO_ROOT:-${FINALLY_A_VALUE_BOT_REPO_ROOT:-.}}"
+BIN_NAME="meido"
 
 log_info() { printf "\x1b[34m[INFO]\x1b[0m %s\n" "$*"; }
 log_success() { printf "\x1b[32m[SUCCESS]\x1b[0m %s\n" "$*"; }
@@ -16,6 +18,10 @@ need_cmd() {
 }
 
 detect_install_dir() {
+  if [ -n "${MEIDO_INSTALL_DIR:-}" ]; then
+    echo "$MEIDO_INSTALL_DIR"
+    return
+  fi
   if [ -n "${FINALLY_A_VALUE_BOT_INSTALL_DIR:-}" ]; then
     echo "$FINALLY_A_VALUE_BOT_INSTALL_DIR"
     return
@@ -110,7 +116,10 @@ main() {
     "$bot_cmd" gateway start
     log_success "Gateway restarted with new binary."
   else
-    log_info "Gateway not running. If you run the bot manually, restart with: $BIN_NAME start"
+    log_info "Restarting Meido..."
+    "$bot_cmd" stop
+    "$bot_cmd" start
+    log_success "Meido restarted with new binary."
   fi
 }
 

@@ -1,10 +1,10 @@
 param(
-  [string]$InstallDir = $(if ($env:FINALLY_A_VALUE_BOT_INSTALL_DIR) { $env:FINALLY_A_VALUE_BOT_INSTALL_DIR } else { Join-Path $env:USERPROFILE '.local\bin' }),
+  [string]$InstallDir = $(if ($env:MEIDO_INSTALL_DIR) { $env:MEIDO_INSTALL_DIR } elseif ($env:FINALLY_A_VALUE_BOT_INSTALL_DIR) { $env:FINALLY_A_VALUE_BOT_INSTALL_DIR } else { Join-Path $env:USERPROFILE '.local\bin' }),
   [switch]$CleanPath
 )
 
 $ErrorActionPreference = 'Stop'
-$BinName = 'finally-a-value-bot.exe'
+$BinName = 'meido.exe'
 
 function Write-Info([string]$msg) {
   Write-Host $msg
@@ -67,12 +67,12 @@ function Resolve-Targets([string]$installDir, [string]$binName) {
     $targets.Add((Join-Path $installDir $binName))
   }
 
-  $cmd = Get-Command finally-a-value-bot -ErrorAction SilentlyContinue
+  $cmd = Get-Command meido -ErrorAction SilentlyContinue
   if ($cmd -and -not [string]::IsNullOrWhiteSpace($cmd.Source)) {
     $targets.Add($cmd.Source)
   }
 
-  $targets.Add((Join-Path $env:USERPROFILE '.local\bin\finally-a-value-bot.exe'))
+  $targets.Add((Join-Path $env:USERPROFILE '.local\bin\meido.exe'))
 
   $seen = @{}
   foreach ($target in $targets) {
@@ -86,7 +86,7 @@ function Resolve-Targets([string]$installDir, [string]$binName) {
 $removed = 0
 $failed = $false
 
-Write-Info "Uninstalling finally-a-value-bot..."
+Write-Info "Uninstalling Meido..."
 foreach ($target in Resolve-Targets -installDir $InstallDir -binName $BinName) {
   if (Test-Path -LiteralPath $target) {
     try {
@@ -114,12 +114,11 @@ if ($failed) {
 }
 
 if ($removed -eq 0) {
-  Write-Info "finally-a-value-bot binary not found. Nothing to uninstall."
+  Write-Info "meido binary not found. Nothing to uninstall."
   exit 0
 }
 
 Write-Info ""
-Write-Info "finally-a-value-bot has been removed."
+Write-Info "Meido has been removed."
 Write-Info "Optional cleanup (not removed automatically):"
-Write-Info "  Remove-Item -Recurse -Force .\\finally-a-value-bot.data\\runtime"
-Write-Info "  Remove-Item -Force .\\finally-a-value-bot.config.yaml,.\\finally-a-value-bot.config.yml"
+Write-Info "  Meido state is under WORKSPACE_DIR (default .\workspace), not a Finally a Value Bot data directory."

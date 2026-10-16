@@ -129,7 +129,7 @@ impl Tool for AddVaultItemTool {
         let col_json: serde_json::Value = match col_resp.json().await {
             Ok(j) => j,
             Err(e) => {
-                return ToolResult::error(format!("Failed to parse collection response: {e}"))
+                return ToolResult::error(format!("Failed to parse collection response: {e}"));
             }
         };
 

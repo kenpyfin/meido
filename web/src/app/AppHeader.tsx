@@ -37,6 +37,7 @@ export type AppHeaderToolbarProps = {
   statusText: string
   cockpitExpanded?: boolean
   onToggleCockpit: () => void
+  onOpenPersona: () => void
   onOpenSettings: () => void
   onOpenInbox: () => void
   inboxBadgeCount?: number
@@ -98,6 +99,7 @@ export const AppHeader = React.memo(function AppHeader({
     backgroundActiveCount,
     cockpitExpanded = false,
     onToggleCockpit,
+    onOpenPersona,
     onOpenSettings,
     onOpenInbox,
     inboxBadgeCount = 0,
@@ -192,6 +194,9 @@ export const AppHeader = React.memo(function AppHeader({
             <h1 className="font-semibold text-2xl min-w-0 shrink truncate max-md:[font-size:1.125rem]">
               {moduleTitle ?? activePersonaName ?? 'Chat'}
             </h1>
+            <Button size="sm" variant="secondary" className="shrink-0 md:!hidden" onClick={onOpenPersona}>
+              Persona
+            </Button>
             {renderSessionControls('max-md:!hidden')}
           </div>
           {activePersonaId != null && personaModule ? (
@@ -247,6 +252,9 @@ export const AppHeader = React.memo(function AppHeader({
               ) : null}
             </button>
             <span className="mc-toolbar-divider !hidden md:!inline-block" aria-hidden />
+            <Button size="sm" variant="secondary" className="!hidden md:!inline-flex" onClick={onOpenPersona}>
+              Persona
+            </Button>
             <Button size="sm" variant="secondary" className="!hidden md:!inline-flex" onClick={onOpenSettings}>
               Settings
             </Button>

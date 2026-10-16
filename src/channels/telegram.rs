@@ -60,9 +60,7 @@ pub(crate) async fn spawn_dispatchers(
                     Err(e) => {
                         error!(
                             "Telegram dispatcher crashed (instance {}): {}. Retrying in {}s (other channels stay active).",
-                            inst_id,
-                            e,
-                            TELEGRAM_RETRY_DELAY_SECS
+                            inst_id, e, TELEGRAM_RETRY_DELAY_SECS
                         );
                         tokio::time::sleep(std::time::Duration::from_secs(
                             TELEGRAM_RETRY_DELAY_SECS,
@@ -1019,9 +1017,9 @@ pub(crate) async fn handle_message(
                 run_key: None,
                 reply_bot_instance_id: Some(telegram_bot_instance_id_spawn),
                 session_id: None,
-            history_override: None,
-            tool_iteration_cap: None,
-            skip_recall: false,
+                history_override: None,
+                tool_iteration_cap: None,
+                skip_recall: false,
             },
             None,
             images,

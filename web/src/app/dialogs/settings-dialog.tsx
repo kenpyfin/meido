@@ -1,5 +1,4 @@
 import { Button } from '@/components/ui/button'
-import { Switch } from '@/components/ui/switch'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose } from '@/components/ui/dialog'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -8,12 +7,6 @@ import React from 'react'
 import { SettingsPanelSkeleton, OverviewStatusSkeleton } from '../../components/skeleton'
 import type { SettingsDialogProps } from './types'
 
-const SettingsAgentEnginePanel = React.lazy(() =>
-  import('../../components/settings-agent-engine').then((m) => ({ default: m.SettingsAgentEnginePanel })),
-)
-const SettingsPersonaPanel = React.lazy(() =>
-  import('../../components/settings-persona').then((m) => ({ default: m.SettingsPersonaPanel })),
-)
 const SettingsRuntimePanel = React.lazy(() =>
   import('../../components/settings-runtime').then((m) => ({ default: m.SettingsRuntimePanel })),
 )
@@ -26,133 +19,18 @@ const SettingsConnectionsPanel = React.lazy(() =>
 const SettingsTopicsModelPanel = React.lazy(() =>
   import('../../components/settings-topics-model').then((m) => ({ default: m.SettingsTopicsModelPanel })),
 )
-const SettingsHooksPanel = React.lazy(() =>
-  import('../../components/settings-hooks-skills').then((m) => ({ default: m.SettingsHooksPanel })),
+const SettingsLlmPanel = React.lazy(() =>
+  import('../../components/settings-llm').then((m) => ({ default: m.SettingsLlmPanel })),
 )
-const SettingsSkillsPanel = React.lazy(() =>
-  import('../../components/settings-hooks-skills').then((m) => ({ default: m.SettingsSkillsPanel })),
+const SettingsLocalDelegatePanel = React.lazy(() =>
+  import('../../components/settings-local-delegate').then((m) => ({ default: m.SettingsLocalDelegatePanel })),
 )
-
-type VaultSecretRow = {
-  name: string
-  kind: string
-  skill: string | null
-  created_at: string
-  persona_id?: number | null
-  legacy?: boolean
-}
-
-function VaultSecretList({
-  items,
-  busyName,
-  onForget,
-}: {
-  items: VaultSecretRow[]
-  busyName: string | null
-  onForget: (name: string) => void
-}) {
-  return (
-    <ul className="mt-2 space-y-2">
-      {items.map((item) => (
-        <li key={item.name} className="flex items-center justify-between gap-3 text-sm">
-          <span>
-            <code className="text-xs">{item.name}</code>
-            <span className="ml-2 text-xs text-muted-foreground">
-              {item.kind}
-              {item.skill ? ` · ${item.skill}` : ''}
-            </span>
-          </span>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={busyName === item.name}
-            onClick={() => onForget(item.name)}
-          >
-            Forget
-          </Button>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-function VaultedSecretsPanel({
-  api,
-  open,
-  activePersonaId,
-}: {
-  api: SettingsDialogProps['api']
-  open: boolean
-  activePersonaId: number | null
-}) {
-  const [items, setItems] = React.useState<VaultSecretRow[]>([])
-  const [error, setError] = React.useState('')
-  const [busyName, setBusyName] = React.useState<string | null>(null)
-
-  const load = React.useCallback(async () => {
-    try {
-      const path =
-        activePersonaId != null
-          ? `/api/secrets?persona_id=${encodeURIComponent(String(activePersonaId))}`
-          : '/api/secrets'
-      const data = await api<{ secrets: VaultSecretRow[] }>(path)
-      setItems(data.secrets)
-      setError('')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load vaulted secrets')
-    }
-  }, [activePersonaId, api])
-
-  React.useEffect(() => {
-    if (open) void load()
-  }, [open, load])
-
-  async function forget(name: string) {
-    setBusyName(name)
-    try {
-      await api(`/api/secrets?name=${encodeURIComponent(name)}`, { method: 'DELETE' })
-      await load()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not forget that secret')
-    } finally {
-      setBusyName(null)
-    }
-  }
-
-  const personaItems =
-    activePersonaId == null ? items : items.filter((item) => item.legacy !== true)
-  const legacyItems = activePersonaId == null ? [] : items.filter((item) => item.legacy === true)
-
-  return (
-    <section className="mb-4 rounded-lg border border-border p-3">
-      <h3 className="text-sm font-medium">Vaulted secrets</h3>
-      <p className="mt-1 text-xs text-muted-foreground">
-        Names stored for this persona after the agent calls vault_secret. Values stay in the
-        runtime secrets file and are not shown here. Older secrets saved before persona tagging
-        appear under Shared (legacy).
-      </p>
-      {error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}
-      {personaItems.length === 0 && legacyItems.length === 0 ? (
-        <p className="mt-2 text-sm text-muted-foreground">No vaulted secrets for this persona.</p>
-      ) : null}
-      {personaItems.length > 0 ? (
-        <div className="mt-2">
-          {activePersonaId != null ? (
-            <p className="text-xs font-medium text-muted-foreground">This persona</p>
-          ) : null}
-          <VaultSecretList items={personaItems} busyName={busyName} onForget={(name) => void forget(name)} />
-        </div>
-      ) : null}
-      {legacyItems.length > 0 ? (
-        <div className="mt-3">
-          <p className="text-xs font-medium text-muted-foreground">Shared (legacy)</p>
-          <VaultSecretList items={legacyItems} busyName={busyName} onForget={(name) => void forget(name)} />
-        </div>
-      ) : null}
-    </section>
-  )
-}
+const SettingsCursorPanel = React.lazy(() =>
+  import('../../components/settings-cursor').then((m) => ({ default: m.SettingsCursorPanel })),
+)
+const SettingsGeminiAdkPanel = React.lazy(() =>
+  import('../../components/settings-gemini-adk').then((m) => ({ default: m.SettingsGeminiAdkPanel })),
+)
 
 export function SettingsDialog({ appearance, api, activePersonaId, personas, settings }: SettingsDialogProps) {
   const settingsDialogOpen = settings.open
@@ -166,20 +44,17 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
   const bindings = settings.bindings
   const updateChannelPersonaPolicy = settings.updateChannelPersonaPolicy
   const reloadInstallationStatus = settings.reloadInstallationStatus
-  const onPersonaBulletinChanged = settings.onPersonaBulletinChanged
-  const onCreatePersona = settings.onCreatePersona
-  const onRenamePersona = settings.onRenamePersona
-  const onDeletePersona = settings.onDeletePersona
 
   return (
     <Dialog open={settingsDialogOpen} onOpenChange={setSettingsDialogOpen}>
       <DialogContent className="max-w-[920px]">
         <DialogTitle>Web UI configuration</DialogTitle>
         <DialogDescription className="mb-3">
-          Model and engine API keys can live in repo-root <code className="text-xs">.env</code>, or under
-          Connections when they are not in <code className="text-xs">.env</code>. Configure Telegram, Discord,
-          and WhatsApp under Integrations. Restart the gateway after changing channel tokens. Cursor uses a
-          saved key the next time its sidecar starts.
+          Shared setup for every persona. Model and engine API keys can live in repo-root{' '}
+          <code className="text-xs">.env</code>, or under Connections when they are not in{' '}
+          <code className="text-xs">.env</code>. A persona’s engine, hooks, skills, and secrets are on
+          the Persona page. Configure Telegram, Discord, and WhatsApp under Integrations. Restart
+          Meido after changing channel tokens.
         </DialogDescription>
         {settingsError ? (
           <div role="status" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive mb-2">{settingsError}</div>
@@ -190,28 +65,14 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
         <Tabs defaultValue="overview">
           <TabsList className="mc-settings-tabs-sticky mb-3 h-auto flex-wrap">
             <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="agent-engine">Agent engine</TabsTrigger>
-            <TabsTrigger value="topics">Topics</TabsTrigger>
+            <TabsTrigger value="engine">Engine</TabsTrigger>
+            <TabsTrigger value="system-llm">System LLM</TabsTrigger>
             <TabsTrigger value="connections">Connections</TabsTrigger>
-            <TabsTrigger value="hooks">Hooks</TabsTrigger>
-            <TabsTrigger value="skills">Skills</TabsTrigger>
             <TabsTrigger value="integrations">Integrations</TabsTrigger>
             <TabsTrigger value="channels">Channels</TabsTrigger>
           </TabsList>
           <React.Suspense fallback={<SettingsPanelSkeleton />}>
           <TabsContent value="overview">
-            <VaultedSecretsPanel api={api} open={settingsDialogOpen} activePersonaId={activePersonaId} />
-            {onCreatePersona && onRenamePersona && onDeletePersona ? (
-              <div className="mb-3">
-                <SettingsPersonaPanel
-                  activePersonaId={activePersonaId}
-                  personas={personas}
-                  onCreatePersona={onCreatePersona}
-                  onRenamePersona={onRenamePersona}
-                  onDeletePersona={onDeletePersona}
-                />
-              </div>
-            ) : null}
             {installationStatus ? (
               <div className="flex flex-col gap-2 mb-2">
                 <div className="flex gap-2 flex-wrap items-center">
@@ -249,7 +110,7 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
                     disabled={restartBusy}
                     onClick={() => void requestRestart()}
                   >
-                    {restartBusy ? 'Restarting…' : 'Restart gateway'}
+                    {restartBusy ? 'Restarting…' : 'Restart Meido'}
                   </Button>
                 </div>
               </div>
@@ -268,34 +129,28 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
               <SettingsRuntimePanel api={api} onError={setSettingsError} />
             </div>
           </TabsContent>
-          <TabsContent value="agent-engine">
-            <SettingsAgentEnginePanel
-              api={api}
-              onError={setSettingsError}
-              activePersonaId={activePersonaId}
-              personas={personas}
-              onPersonaBulletinChanged={onPersonaBulletinChanged}
-            />
+          <TabsContent value="engine">
+            <div className="flex flex-col gap-4">
+              <span>
+                Defaults shared by every persona. Choose a persona’s engine, model override, Cursor
+                model, and Gemini topology on the Persona page.
+              </span>
+              <SettingsLlmPanel api={api} onError={setSettingsError} />
+              <SettingsLocalDelegatePanel api={api} onError={setSettingsError} />
+              <SettingsCursorPanel api={api} onError={setSettingsError} scope="shared" />
+              <SettingsGeminiAdkPanel
+                api={api}
+                onError={setSettingsError}
+                activePersonaId={null}
+                scope="engine"
+              />
+            </div>
           </TabsContent>
-          <TabsContent value="topics">
+          <TabsContent value="system-llm">
             <SettingsTopicsModelPanel api={api} onError={setSettingsError} />
           </TabsContent>
           <TabsContent value="connections">
             <SettingsConnectionsPanel api={api} onError={setSettingsError} />
-          </TabsContent>
-          <TabsContent value="hooks">
-            <SettingsHooksPanel
-              api={api}
-              onError={setSettingsError}
-              activePersonaId={activePersonaId}
-            />
-          </TabsContent>
-          <TabsContent value="skills">
-            <SettingsSkillsPanel
-              api={api}
-              onError={setSettingsError}
-              activePersonaId={activePersonaId}
-            />
           </TabsContent>
           <TabsContent value="integrations">
             <SettingsIntegrationsPanel

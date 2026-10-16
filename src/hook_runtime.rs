@@ -412,10 +412,8 @@ mod tests {
     use super::*;
 
     fn test_db() -> Arc<Database> {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_hook_runtime_test_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("meido_hook_runtime_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         Arc::new(Database::new(root.to_str().unwrap()).unwrap())
     }

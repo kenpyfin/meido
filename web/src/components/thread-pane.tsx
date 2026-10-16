@@ -22,9 +22,7 @@ import {
   type ThreadMessageLike,
   type ToolCallMessagePartProps,
 } from '@assistant-ui/react'
-import { AgentEngineSelect } from './agent-engine-select'
 import { ThreadWelcomeHints } from './thread-welcome-hints'
-import type { EngineId } from '../lib/agent-engine'
 import { LoadEarlierMessages } from './load-earlier-messages'
 import { LoadNewerMessages } from './load-newer-messages'
 import { JumpToLatestPill } from './jump-to-latest-pill'
@@ -940,10 +938,6 @@ export type ThreadPaneProps = {
   focusSlot?: React.ReactNode
   /** Replaces the composer while focusSlot is shown. */
   composerSlot?: React.ReactNode
-  /** Active persona engine, shown in the conversation composer. */
-  agentEngine?: EngineId | null
-  onAgentEngineChange?: (engine: EngineId) => void | Promise<void>
-  agentEngineBusy?: boolean
 }
 
 /**
@@ -1141,9 +1135,6 @@ export const ThreadPane = React.memo(function ThreadPane({
   hostPersonaId = null,
   focusSlot = null,
   composerSlot = null,
-  agentEngine = null,
-  onAgentEngineChange,
-  agentEngineBusy = false,
 }: ThreadPaneProps) {
   const threadUi = useThreadUiMode()
   const MarkdownTextComponent = threadUi === 'next' ? StreamdownMessageText : LegacyMarkdownText
@@ -1558,19 +1549,6 @@ export const ThreadPane = React.memo(function ThreadPane({
                 }
               >
                 <div className="relative mx-auto w-full max-w-[var(--aui-thread-max-width)] px-2 pb-1 pt-1 md:px-3">
-                  {agentEngine != null && onAgentEngineChange ? (
-                    <div className="mc-convo-engine-row">
-                      <span className="text-xs text-[color:var(--mc-text-muted)]">Agent engine</span>
-                      <AgentEngineSelect
-                        size="sm"
-                        value={agentEngine}
-                        disabled={agentEngineBusy}
-                        onChange={(engine) => {
-                          void onAgentEngineChange(engine)
-                        }}
-                      />
-                    </div>
-                  ) : null}
                   <DraftAwareComposer />
                 </div>
               </div>

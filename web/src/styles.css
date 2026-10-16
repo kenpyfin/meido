@@ -1591,14 +1591,6 @@ html:not(.dark) .mc-upload-hint {
   color: color-mix(in srgb, var(--mc-accent) 70%, #475569);
 }
 
-.mc-convo-engine-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-width: 0;
-  padding: 0.4rem 0 0.15rem;
-}
-
 .mc-thread-composer-stack {
   position: relative;
   flex-shrink: 0;
@@ -3113,7 +3105,7 @@ html.dark *::-webkit-scrollbar-thumb:hover {
   min-width: 0;
 }
 
-/* Settings → Agent engine: run context blocks */
+/* Persona page → Engine: run context blocks */
 .mc-run-context-block {
   border: 1px solid var(--mc-border-soft);
   border-radius: 0.5rem;

@@ -247,10 +247,7 @@ mod tests {
     use serde_json::json;
 
     fn test_dir() -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "finally_a_value_bot_memtool_{}",
-            uuid::Uuid::new_v4()
-        ))
+        std::env::temp_dir().join(format!("meido_memtool_{}", uuid::Uuid::new_v4()))
     }
 
     fn test_tools(dir: &std::path::Path) -> (ReadMemoryTool, WriteMemoryTool) {
@@ -288,7 +285,7 @@ mod tests {
             .execute(json!({
                 "scope": "chat",
                 "content": "user prefers Rust",
-                "__finally_a_value_bot_auth": {
+                "__meido_auth": {
                     "caller_chat_id": 100,
                     "caller_persona_id": 1,
                     "control_chat_ids": [100]
@@ -305,7 +302,7 @@ mod tests {
         let dir = test_dir();
         let (_, write_tool) = test_tools(&dir);
         let auth = json!({
-            "__finally_a_value_bot_auth": {
+            "__meido_auth": {
                 "caller_chat_id": 42,
                 "caller_persona_id": 1,
                 "control_chat_ids": []
@@ -319,11 +316,9 @@ mod tests {
             "date": "2026-04-01",
             "content": "daily note"
         });
-        if let (Some(obj), Some(auth_obj)) = (
-            write_input.as_object_mut(),
-            auth.get("__finally_a_value_bot_auth"),
-        ) {
-            obj.insert("__finally_a_value_bot_auth".to_string(), auth_obj.clone());
+        if let (Some(obj), Some(auth_obj)) = (write_input.as_object_mut(), auth.get("__meido_auth"))
+        {
+            obj.insert("__meido_auth".to_string(), auth_obj.clone());
         }
         let result = write_tool.execute(write_input).await;
         assert!(!result.is_error);
@@ -390,7 +385,7 @@ mod tests {
                 "scope": "chat",
                 "chat_id": 200,
                 "persona_id": 2,
-                "__finally_a_value_bot_auth": {
+                "__meido_auth": {
                     "caller_chat_id": 100,
                     "caller_persona_id": 1,
                     "control_chat_ids": []
@@ -412,7 +407,7 @@ mod tests {
                 "chat_id": 200,
                 "persona_id": 2,
                 "content": "chat200",
-                "__finally_a_value_bot_auth": {
+                "__meido_auth": {
                     "caller_chat_id": 100,
                     "caller_persona_id": 1,
                     "control_chat_ids": [100]

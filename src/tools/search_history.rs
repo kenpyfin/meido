@@ -82,7 +82,7 @@ impl Tool for SearchHistoryTool {
             Some(pid) => pid,
             None => {
                 return ToolResult::error(
-                    "Missing auth context (__finally_a_value_bot_auth) with caller_persona_id for this chat"
+                    "Missing auth context (__meido_auth) with caller_persona_id for this chat"
                         .into(),
                 )
                 .with_error_type("auth_required");
@@ -183,10 +183,7 @@ mod tests {
     use serde_json::json;
 
     fn test_db() -> (Arc<Database>, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_search_hist_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let dir = std::env::temp_dir().join(format!("meido_search_hist_{}", uuid::Uuid::new_v4()));
         let db = Arc::new(Database::new(dir.to_str().unwrap()).unwrap());
         (db, dir)
     }
@@ -232,7 +229,7 @@ mod tests {
             .execute(json!({
                 "query": "secret",
                 "chat_id": 100,
-                "__finally_a_value_bot_auth": {
+                "__meido_auth": {
                     "caller_chat_id": 100,
                     "caller_persona_id": pid_a,
                     "control_chat_ids": []

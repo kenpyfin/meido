@@ -18,7 +18,7 @@ REPO_DIR="$ROOT_DIR"
 TAP_DIR_DEFAULT="$ROOT_DIR/../../github/homebrew-tap"
 TAP_DIR="${TAP_DIR:-$TAP_DIR_DEFAULT}"
 TAP_REPO="kenpyfin/homebrew-tap"
-FORMULA_PATH="Formula/finally-a-value-bot.rb"
+FORMULA_PATH="Formula/meido.rb"
 GITHUB_REPO="kenpyfin/meido"
 
 require_cmd() {
@@ -142,7 +142,7 @@ fi
 echo "Building release binary..."
 cargo build --release
 
-BINARY="target/release/finally-a-value-bot"
+BINARY="target/release/meido"
 if [ ! -f "$BINARY" ]; then
   echo "Binary not found: $BINARY" >&2
   exit 1
@@ -150,10 +150,10 @@ fi
 
 # --- Create tarball ---
 ARCH="$(detect_arch)"
-TARBALL_NAME="finally-a-value-bot-$NEW_VERSION-${ARCH}-apple-darwin.tar.gz"
+TARBALL_NAME="meido-$NEW_VERSION-${ARCH}-apple-darwin.tar.gz"
 TARBALL_PATH="target/release/$TARBALL_NAME"
 
-tar -czf "$TARBALL_PATH" -C target/release finally-a-value-bot
+tar -czf "$TARBALL_PATH" -C target/release meido
 echo "Created tarball: $TARBALL_PATH"
 
 SHA256=$(shasum -a 256 "$TARBALL_PATH" | awk '{print $1}')
@@ -201,17 +201,17 @@ class Microclaw < Formula
   license "MIT"
 
   def install
-    bin.install "finally-a-value-bot"
+    bin.install "meido"
   end
 
   test do
-    assert_match "Meido", shell_output("#{bin}/finally-a-value-bot help")
+    assert_match "Meido", shell_output("#{bin}/meido help")
   end
 end
 RUBY
 
 git add .
-git commit -m "finally-a-value-bot homebrew release $NEW_VERSION"
+git commit -m "meido homebrew release $NEW_VERSION"
 git push
 
 echo ""
@@ -219,4 +219,4 @@ echo "Done! Released $TAG and updated Homebrew tap."
 echo ""
 echo "Users can install with:"
 echo "  brew tap kenpyfin/tap"
-echo "  brew install finally-a-value-bot"
+echo "  brew install meido"

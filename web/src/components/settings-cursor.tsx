@@ -15,6 +15,8 @@ type Props = {
   api: <T>(path: string, init?: RequestInit) => Promise<T>
   onError: (message: string) => void
   activePersonaId?: number | null
+  /** model: this persona's SDK model. shared: MCP, CLI, and timeouts. */
+  scope?: 'all' | 'model' | 'shared'
 }
 
 function statusColor(ok: boolean | undefined): 'green' | 'orange' | 'gray' {
@@ -80,7 +82,7 @@ function parseModelCatalog(
     .filter((model) => Boolean(model.id))
 }
 
-export function SettingsCursorPanel({ api, onError, activePersonaId = null }: Props) {
+export function SettingsCursorPanel({ api, onError, activePersonaId = null, scope = 'all' }: Props) {
   const [config, setConfig] = useState<CursorEngineConfigResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -244,22 +246,34 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null }: Pr
     try {
       const secs = Number.parseInt(timeoutSecs, 10)
       const interactiveSecs = Number.parseInt(interactiveTimeoutSecs, 10)
+      const personaModel = scope !== 'shared'
+      const sharedFields = scope !== 'model'
+      if (personaModel && activePersonaId == null) {
+        onError('Select a persona to save its Cursor model.')
+        setSaving(false)
+        return
+      }
       const res = await api<CursorEngineConfigResponse>('/api/cursor-engine', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...(activePersonaId != null ? { persona_id: activePersonaId } : {}),
-          sdk_model: sdkModel,
-          sdk_model_params: sdkModelParams,
-          cli_path: cliPath,
-          cli_model: cliModel,
-          cli_runner_url: cliRunnerUrl,
-          timeout_secs: Number.isFinite(secs) ? secs : 3600,
-          interactive_timeout_secs: Number.isFinite(interactiveSecs) ? interactiveSecs : 900,
-          tmux_enabled: tmuxEnabled,
-          mcp_tools_enabled: mcpToolsEnabled,
-          mcp_expose_send_message: mcpExposeSendMessage,
-          delegation_slim_prompt: delegationSlimPrompt,
+          ...(personaModel && activePersonaId != null ? { persona_id: activePersonaId } : {}),
+          ...(personaModel
+            ? { sdk_model: sdkModel, sdk_model_params: sdkModelParams }
+            : {}),
+          ...(sharedFields
+            ? {
+                cli_path: cliPath,
+                cli_model: cliModel,
+                cli_runner_url: cliRunnerUrl,
+                timeout_secs: Number.isFinite(secs) ? secs : 3600,
+                interactive_timeout_secs: Number.isFinite(interactiveSecs) ? interactiveSecs : 900,
+                tmux_enabled: tmuxEnabled,
+                mcp_tools_enabled: mcpToolsEnabled,
+                mcp_expose_send_message: mcpExposeSendMessage,
+                delegation_slim_prompt: delegationSlimPrompt,
+              }
+            : {}),
         }),
       })
       setSaveNotice(res.message ?? 'Saved.')
@@ -304,6 +318,7 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null }: Pr
         </span>
       </div>
 
+      {scope !== 'shared' ? (
       <div className="rounded-md border p-3" style={{ borderColor: 'var(--gray-6)' }}>
         <span className="font-semibold mb-1 block">
           Cursor SDK engine
@@ -411,7 +426,15 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null }: Pr
           ) : null}
         </div>
       </div>
+      ) : (
+        <span>
+          Sidecar, MCP, and timeouts apply to every persona. Each persona’s Cursor model is on the
+          Persona page.
+        </span>
+      )}
 
+      {scope !== 'model' ? (
+      <>
       <div className="rounded-md border p-3" style={{ borderColor: 'var(--gray-6)' }}>
         <span className="font-semibold mb-1 block">
           Bot tools (MCP)
@@ -496,10 +519,12 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null }: Pr
           </div>
         </div>
       </div>
+      </>
+      ) : null}
 
       <div className="flex gap-2 items-center flex-wrap">
         <Button size="default" className="cursor-pointer" disabled={saving} onClick={() => void save()}>
-          {saving ? 'Saving…' : 'Save Cursor settings'}
+          {saving ? 'Saving…' : scope === 'model' ? 'Save Cursor model' : 'Save Cursor settings'}
         </Button>
       </div>
 

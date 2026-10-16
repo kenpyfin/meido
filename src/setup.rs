@@ -400,21 +400,6 @@ impl SetupApp {
                     required: false,
                     secret: false,
                 },
-                // ── Orchestrator ──
-                Field {
-                    key: "ORCHESTRATOR_ENABLED",
-                    label: "Enable orchestrator (plan-first)",
-                    value: existing.get("ORCHESTRATOR_ENABLED").cloned().unwrap_or_else(|| "true".into()),
-                    required: false,
-                    secret: false,
-                },
-                Field {
-                    key: "ORCHESTRATOR_MODEL",
-                    label: "Orchestrator model override",
-                    value: existing.get("ORCHESTRATOR_MODEL").cloned().unwrap_or_default(),
-                    required: false,
-                    secret: false,
-                },
                 // ── Discord ──
                 Field {
                     key: "DISCORD_BOT_TOKEN",
@@ -980,7 +965,6 @@ impl SetupApp {
             "MAX_HISTORY_MESSAGES" => "50".into(),
             "RECENT_HISTORY_MIN_USER_MESSAGES" => "2".into(),
             "RECENT_HISTORY_MIN_ASSISTANT_MESSAGES" => "2".into(),
-            "ORCHESTRATOR_ENABLED" => "true".into(),
             "WHATSAPP_WEBHOOK_PORT" => "8080".into(),
             "WEB_ENABLED" => "true".into(),
             "WEB_HOST" => "0.0.0.0".into(),
@@ -1026,7 +1010,6 @@ impl SetupApp {
                 | "MAX_HISTORY_MESSAGES"
                 | "RECENT_HISTORY_MIN_USER_MESSAGES"
                 | "RECENT_HISTORY_MIN_ASSISTANT_MESSAGES" => "Runtime",
-                "ORCHESTRATOR_ENABLED" | "ORCHESTRATOR_MODEL" => "Orchestrator",
                 "DISCORD_BOT_TOKEN" | "DISCORD_ALLOWED_CHANNELS" => "Discord",
                 "WHATSAPP_ACCESS_TOKEN"
                 | "WHATSAPP_PHONE_NUMBER_ID"
@@ -1322,15 +1305,6 @@ fn save_config_env(
         false
     );
 
-    // Orchestrator
-    emit!(
-        "Orchestrator",
-        "ORCHESTRATOR_ENABLED",
-        get("ORCHESTRATOR_ENABLED"),
-        false
-    );
-    emit!("", "ORCHESTRATOR_MODEL", get("ORCHESTRATOR_MODEL"), false);
-
     // Discord
     emit!(
         "Discord",
@@ -1474,11 +1448,12 @@ fn draw_ui(frame: &mut ratatui::Frame<'_>, app: &SetupApp) {
             )),
             Line::from(""),
             Line::from("Next steps:"),
-            Line::from("  1) Run in foreground:"),
-            Line::from("     finally-a-value-bot start"),
+            Line::from("  1) Start Meido and the web UI (returns immediately):"),
+            Line::from("     meido start"),
             Line::from(""),
-            Line::from("  2) Run in background (systemd service):"),
-            Line::from("     finally-a-value-bot gateway install"),
+            Line::from("  2) Optional, macOS and Linux — start at login and"),
+            Line::from("     restart if the process exits. Not required for the web UI:"),
+            Line::from("     meido gateway install"),
             Line::from(""),
             Line::from("Press Enter to finish."),
         ])
@@ -1815,7 +1790,7 @@ mod tests {
     #[test]
     fn test_save_config_yaml() {
         let yaml_path = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_setup_test_{}.yaml",
+            "meido_setup_test_{}.yaml",
             Utc::now().timestamp_nanos_opt().unwrap_or_default()
         ));
 

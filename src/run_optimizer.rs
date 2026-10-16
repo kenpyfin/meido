@@ -236,6 +236,8 @@ async fn run_restricted_memory_loop(
         control_chat_ids: state.config.control_chat_ids.clone(),
         is_scheduled_task: false,
         session_id: None,
+        vector_db_root: state.config.vector_db_root(),
+        external_roots: state.external_roots_for_persona(persona_id),
     };
 
     let mut messages = vec![Message {

@@ -12,8 +12,8 @@ use crate::config::Config;
 const HEALTH_POLL_INTERVAL_MS: u64 = 500;
 const HEALTH_WAIT_MAX_SECS: u64 = 90;
 const DOCKER_COMMAND_TIMEOUT_SECS: u64 = 120;
-const DEFAULT_STEEL_VOLUME: &str = "finally-a-value-bot-steel-cache";
-const DEFAULT_STEEL_PROFILE_VOLUME: &str = "finally-a-value-bot-steel-profile";
+const DEFAULT_STEEL_VOLUME: &str = "meido-steel-cache";
+const DEFAULT_STEEL_PROFILE_VOLUME: &str = "meido-steel-profile";
 
 pub struct SteelBrowserHandle {
     pub managed_locally: bool,
@@ -42,8 +42,7 @@ fn is_local_steel_url(url: &str, port: u16) -> bool {
 }
 
 fn in_docker() -> bool {
-    std::env::var("FINALLY_A_VALUE_BOT_IN_DOCKER").as_deref() == Ok("1")
-        || Path::new("/.dockerenv").exists()
+    crate::meido_env::is_flag_one(crate::meido_env::IN_DOCKER) || Path::new("/.dockerenv").exists()
 }
 
 fn configured_api_url(config: &Config) -> String {

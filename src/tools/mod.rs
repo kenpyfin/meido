@@ -155,6 +155,11 @@ pub struct ToolAuthContext {
     pub is_scheduled_task: bool,
     /// Focused web session for this run (`None` = main chat).
     pub session_id: Option<String>,
+    /// `VAULT_VECTOR_DB_PATH` when set. Absent means `{workspace}/shared/vault_db`.
+    pub vector_db_root: Option<PathBuf>,
+    /// Absolute paths this persona may read and write outside the workspace.
+    /// Empty means no extra paths. The model cannot set this; `inject_auth_context` overwrites it.
+    pub external_roots: Vec<PathBuf>,
 }
 
 /// Trim and drop empty session ids so they store as main chat (`NULL`).
@@ -185,7 +190,7 @@ impl ToolAuthContext {
     }
 }
 
-const AUTH_CONTEXT_KEY: &str = "__finally_a_value_bot_auth";
+const AUTH_CONTEXT_KEY: &str = "__meido_auth";
 
 /// When the tool targets the same chat as the agent run, prefer the run's persona (`caller_persona_id`)
 /// over DB active/default (e.g. `get_or_create_default_persona`).
@@ -231,6 +236,26 @@ pub fn auth_context_from_input(input: &serde_json::Value) -> Option<ToolAuthCont
         control_chat_ids,
         is_scheduled_task,
         session_id,
+        vector_db_root: ctx
+            .get("vector_db_root")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from),
+        external_roots: ctx
+            .get("external_roots")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| {
+                        item.as_str().and_then(|path| {
+                            crate::persona_external_paths::normalize_absolute(path).ok()
+                        })
+                    })
+                    .take(32)
+                    .collect()
+            })
+            .unwrap_or_default(),
     })
 }
 
@@ -278,6 +303,8 @@ pub fn inject_auth_context(input: serde_json::Value, auth: &ToolAuthContext) -> 
             "is_scheduled_task": auth.is_scheduled_task,
             "session_id": auth.session_id,
             "run_id": auth.run_id,
+            "vector_db_root": auth.vector_db_root.as_ref().map(|p| p.to_string_lossy().to_string()),
+            "external_roots": auth.external_roots.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
         }),
     );
     serde_json::Value::Object(obj)
@@ -385,6 +412,29 @@ pub fn path_under_root(path: &Path, root: &Path) -> bool {
     resolved_path.starts_with(&resolved_root)
 }
 
+/// Join `rel` onto `root` and refuse a result that leaves `root` via `..`.
+pub fn join_within(root: &Path, rel: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut out = root.to_path_buf();
+    for component in rel.components() {
+        match component {
+            Component::Normal(name) => out.push(name),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if out.as_path() == root || !out.pop() {
+                    return None;
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    if out.starts_with(root) {
+        Some(out)
+    } else {
+        None
+    }
+}
+
 fn is_under(path: &Path, root: &Path) -> bool {
     path_under_root(path, root)
 }
@@ -454,6 +504,27 @@ fn resolves_under_workspace_data_root(_tool_shared_dir: &Path, normalized: &str)
 }
 
 pub fn resolve_tool_path(workspace_root: &Path, tool_working_dir: &Path, path: &str) -> PathBuf {
+    resolve_tool_path_with_origin(
+        workspace_root,
+        tool_working_dir,
+        path,
+        &workspace_shared_root(workspace_root).join("ORIGIN"),
+        None,
+    )
+}
+
+/// Resolve a tool path.
+///
+/// `ORIGIN/…` lands in `origin_vault` (`VAULT_ORIGIN_VAULT_PATH`).
+/// `vault_db/…` lands in `vector_db` when that root is set (`VAULT_VECTOR_DB_PATH`).
+/// When `vector_db` is `None`, `vault_db/…` stays `{workspace}/shared/vault_db`.
+pub fn resolve_tool_path_with_origin(
+    workspace_root: &Path,
+    tool_working_dir: &Path,
+    path: &str,
+    origin_vault: &Path,
+    vector_db: Option<&Path>,
+) -> PathBuf {
     let candidate = PathBuf::from(path);
     if candidate.is_absolute() {
         return candidate;
@@ -478,6 +549,15 @@ pub fn resolve_tool_path(workspace_root: &Path, tool_working_dir: &Path, path: &
                 _ => None,
             })
             .unwrap_or_default();
+        if first == "ORIGIN" || (first == "vault_db" && vector_db.is_some()) {
+            return locate::resolve_prefixed_path_with_origin(
+                workspace_root,
+                tool_working_dir,
+                rest,
+                origin_vault,
+                vector_db,
+            );
+        }
         if shared_global_prefixes().contains(&first) || first == "skills" {
             return shared_root.join(rest);
         }
@@ -493,8 +573,13 @@ pub fn resolve_tool_path(workspace_root: &Path, tool_working_dir: &Path, path: &
         })
         .unwrap_or_default();
     if shared_global_prefixes().contains(&first) {
-        // Persona-local ORIGIN (etc.) wins when present; otherwise shared.
-        return locate::resolve_prefixed_path(workspace_root, tool_working_dir, &normalized);
+        return locate::resolve_prefixed_path_with_origin(
+            workspace_root,
+            tool_working_dir,
+            &normalized,
+            origin_vault,
+            vector_db,
+        );
     }
 
     if resolves_under_workspace_data_root(tool_working_dir, &normalized) {
@@ -534,6 +619,23 @@ pub fn assert_persona_tool_path_allowed(
     auth: Option<&ToolAuthContext>,
     is_write: bool,
 ) -> Result<(), String> {
+    assert_persona_tool_path_allowed_with_origin(
+        workspace_root,
+        resolved_path,
+        auth,
+        is_write,
+        &workspace_shared_root(workspace_root).join("ORIGIN"),
+    )
+}
+
+/// Like [`assert_persona_tool_path_allowed`], using `origin_vault` as the ORIGIN root.
+pub fn assert_persona_tool_path_allowed_with_origin(
+    workspace_root: &Path,
+    resolved_path: &Path,
+    auth: Option<&ToolAuthContext>,
+    is_write: bool,
+    origin_vault: &Path,
+) -> Result<(), String> {
     let memory = auth.and_then(|a| {
         locate::load_memory_for_auth(workspace_root, &workspace_root.join("runtime"), Some(a))
     });
@@ -543,6 +645,7 @@ pub fn assert_persona_tool_path_allowed(
         auth,
         is_write,
         memory.as_ref(),
+        origin_vault,
     )
 }
 
@@ -554,11 +657,12 @@ pub fn assert_persona_tool_path_allowed_with_memory(
     auth: Option<&ToolAuthContext>,
     is_write: bool,
     memory: Option<&crate::memory::PersonaMemoryState>,
+    origin_vault: &Path,
 ) -> Result<(), String> {
     if is_write && crate::self_repo::is_self_repo_source_path(workspace_root, resolved_path) {
         return Err(format!(
             "Write blocked: '{}' is inside the bot's own source checkout. \
-             Persona Tier-1 target repos (`Repo: …`) are allowed; the finally-a-value-bot \
+             Persona Tier-1 target repos (`Repo: …`) are allowed; the Meido \
              install/source tree is not.",
             resolved_path.display()
         ));
@@ -581,7 +685,8 @@ pub fn assert_persona_tool_path_allowed_with_memory(
         );
     }
 
-    let registry = locate::build_registry(workspace_root, Some(auth), memory);
+    let registry =
+        locate::build_registry_with_origin(workspace_root, Some(auth), memory, origin_vault);
     let mut allowed_labels: Vec<String> = locate::directory_roots(&registry)
         .iter()
         .map(|r| format!("{} (`{}`)", r.label, r.path.display()))
@@ -675,6 +780,7 @@ impl ToolRegistry {
             );
         }
         let skills_data_dir = config.skills_data_dir();
+        let origin_vault = config.origin_vault_root();
         let recall = Arc::new(crate::recall::RecallService::new(config, db.clone()));
         let tools: Vec<Box<dyn Tool>> = vec![
             Box::new(
@@ -685,32 +791,48 @@ impl ToolRegistry {
                     runtime_toggles.clone(),
                     env_redactor.clone(),
                 )
-                .with_runtime_data_dir(config.runtime_data_dir()),
+                .with_runtime_data_dir(config.runtime_data_dir())
+                .with_origin_vault(origin_vault.clone()),
             ),
-            Box::new(read_file::ReadFileTool::new(config.working_dir())),
-            Box::new(read_repo_map::ReadRepoMapTool::new(config.working_dir())),
+            Box::new(
+                read_file::ReadFileTool::new(config.working_dir())
+                    .with_origin_vault(origin_vault.clone()),
+            ),
+            Box::new(
+                read_repo_map::ReadRepoMapTool::new(config.working_dir())
+                    .with_origin_vault(origin_vault.clone()),
+            ),
             Box::new(
                 write_file::WriteFileTool::new(config.working_dir())
-                    .with_redactor(env_redactor.clone()),
+                    .with_redactor(env_redactor.clone())
+                    .with_origin_vault(origin_vault.clone()),
             ),
             Box::new(
                 edit_file::EditFileTool::new(config.working_dir())
-                    .with_redactor(env_redactor.clone()),
+                    .with_redactor(env_redactor.clone())
+                    .with_origin_vault(origin_vault.clone()),
             ),
-            Box::new(apply_search_replace::ApplySearchReplaceTool::new(
-                config.working_dir(),
-                config.allow_fuzzy_search_replace,
-            )),
-            Box::new(symbol_edit::SymbolEditTool::new(
-                config.working_dir(),
-                config.symbol_edit_enabled,
-            )),
-            Box::new(glob::GlobTool::new(config.working_dir())),
-            Box::new(grep::GrepTool::new(config.working_dir())),
-            Box::new(locate::LocateFileTool::new(
-                config.working_dir(),
-                &config.runtime_data_dir(),
-            )),
+            Box::new(
+                apply_search_replace::ApplySearchReplaceTool::new(
+                    config.working_dir(),
+                    config.allow_fuzzy_search_replace,
+                )
+                .with_origin_vault(origin_vault.clone()),
+            ),
+            Box::new(
+                symbol_edit::SymbolEditTool::new(config.working_dir(), config.symbol_edit_enabled)
+                    .with_origin_vault(origin_vault.clone()),
+            ),
+            Box::new(
+                glob::GlobTool::new(config.working_dir()).with_origin_vault(origin_vault.clone()),
+            ),
+            Box::new(
+                grep::GrepTool::new(config.working_dir()).with_origin_vault(origin_vault.clone()),
+            ),
+            Box::new(
+                locate::LocateFileTool::new(config.working_dir(), &config.runtime_data_dir())
+                    .with_origin_vault(origin_vault.clone()),
+            ),
             Box::new(memory::ReadMemoryTool::new(
                 &config.runtime_data_dir(),
                 config.working_dir(),
@@ -727,14 +849,20 @@ impl ToolRegistry {
                 &config.runtime_data_dir(),
                 config.working_dir(),
             )),
-            Box::new(memory_state::WriteMemoryStateTool::new(
-                &config.runtime_data_dir(),
-                config.working_dir(),
-            )),
-            Box::new(memory_state::PatchMemoryStateTool::new(
-                &config.runtime_data_dir(),
-                config.working_dir(),
-            )),
+            Box::new(
+                memory_state::WriteMemoryStateTool::new(
+                    &config.runtime_data_dir(),
+                    config.working_dir(),
+                )
+                .with_origin_vault(origin_vault.clone()),
+            ),
+            Box::new(
+                memory_state::PatchMemoryStateTool::new(
+                    &config.runtime_data_dir(),
+                    config.working_dir(),
+                )
+                .with_origin_vault(origin_vault.clone()),
+            ),
             Box::new(web_fetch::WebFetchTool),
             Box::new(web_search::WebSearchTool::new(
                 config.tavily_api_key.clone(),
@@ -786,9 +914,10 @@ impl ToolRegistry {
             Box::new(tiered_memory::ReadTieredMemoryTool::new(
                 &config.runtime_data_dir(),
             )),
-            Box::new(tiered_memory::WriteTieredMemoryTool::new(
-                &config.runtime_data_dir(),
-            )),
+            Box::new(
+                tiered_memory::WriteTieredMemoryTool::new(&config.runtime_data_dir())
+                    .with_origin_vault(origin_vault.clone()),
+            ),
             Box::new(bulletin::UpdateBulletinFocusTool::new(db.clone())),
             Box::new(persona_todo::AddTodoTool::new(db.clone())),
             Box::new(persona_todo::ListTodosTool::new(db.clone())),
@@ -812,6 +941,7 @@ impl ToolRegistry {
         for operation in ["publish_artifact", "find_artifacts", "get_artifact"] {
             tools.push(Box::new(artifacts::ArtifactTool {
                 root: config.workspace_root_absolute(),
+                origin_vault: origin_vault.clone(),
                 operation,
                 db: db.clone(),
             }));
@@ -1055,7 +1185,7 @@ mod tests {
     #[test]
     fn test_default_persona_id_for_chat_matches_run() {
         let input = json!({
-            "__finally_a_value_bot_auth": {
+            "__meido_auth": {
                 "caller_chat_id": 50,
                 "caller_persona_id": 9,
                 "control_chat_ids": []
@@ -1064,7 +1194,7 @@ mod tests {
         assert_eq!(default_persona_id_for_chat(&input, 50), Some(9));
         assert_eq!(default_persona_id_for_chat(&input, 51), None);
         let no_pid = json!({
-            "__finally_a_value_bot_auth": {
+            "__meido_auth": {
                 "caller_chat_id": 50,
                 "caller_persona_id": 0,
                 "control_chat_ids": []
@@ -1076,7 +1206,7 @@ mod tests {
     #[test]
     fn test_auth_context_from_input() {
         let input = json!({
-            "__finally_a_value_bot_auth": {
+            "__meido_auth": {
                 "caller_channel": "telegram",
                 "caller_chat_id": 123,
                 "control_chat_ids": [123, 999]
@@ -1100,12 +1230,14 @@ mod tests {
             control_chat_ids: vec![],
             is_scheduled_task: false,
             session_id: Some("sess-abc".into()),
+            vector_db_root: None,
+            external_roots: Vec::new(),
         };
         let injected = inject_auth_context(json!({"command": "echo"}), &auth);
         let parsed = auth_context_from_input(&injected).unwrap();
         assert_eq!(parsed.chat_session_id().as_deref(), Some("sess-abc"));
         let blank = json!({
-            "__finally_a_value_bot_auth": {
+            "__meido_auth": {
                 "caller_chat_id": 10,
                 "session_id": "  "
             }
@@ -1119,7 +1251,7 @@ mod tests {
     #[test]
     fn test_authorize_chat_access_denied() {
         let input = json!({
-            "__finally_a_value_bot_auth": {
+            "__meido_auth": {
                 "caller_channel": "telegram",
                 "caller_chat_id": 100,
                 "control_chat_ids": []
@@ -1174,10 +1306,7 @@ mod tests {
 
     #[test]
     fn test_check_shadow_workspace_write_blocks_nested_tree() {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_shadow_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("meido_shadow_{}", uuid::Uuid::new_v4()));
         let shadow_file = root.join("shared").join("workspace").join("nested.txt");
         std::fs::create_dir_all(shadow_file.parent().unwrap()).unwrap();
         std::fs::write(&shadow_file, "x").unwrap();
@@ -1198,10 +1327,7 @@ mod tests {
 
     #[test]
     fn test_resolve_tool_working_dir_for_auth_persona() {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_tool_cwd_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("meido_tool_cwd_{}", uuid::Uuid::new_v4()));
         let auth = ToolAuthContext {
             run_id: None,
             caller_channel: "web".to_string(),
@@ -1210,6 +1336,8 @@ mod tests {
             control_chat_ids: vec![],
             is_scheduled_task: false,
             session_id: None,
+            vector_db_root: None,
+            external_roots: Vec::new(),
         };
         let cwd = resolve_tool_working_dir_for_auth(&root, Some(&auth));
         assert_eq!(
@@ -1222,10 +1350,7 @@ mod tests {
 
     #[test]
     fn test_assert_persona_tool_path_allowed_rejects_other_persona() {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_tool_scope_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("meido_tool_scope_{}", uuid::Uuid::new_v4()));
         let auth = ToolAuthContext {
             run_id: None,
             caller_channel: "web".to_string(),
@@ -1234,6 +1359,8 @@ mod tests {
             control_chat_ids: vec![],
             is_scheduled_task: false,
             session_id: None,
+            vector_db_root: None,
+            external_roots: Vec::new(),
         };
         let mine = persona_shared_dir(&root, 10, 2).join("x.txt");
         let other = persona_shared_dir(&root, 10, 3).join("x.txt");
@@ -1248,10 +1375,7 @@ mod tests {
 
     #[test]
     fn test_assert_persona_tool_path_allowed_rejects_flat_shared_writes() {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_tool_scope2_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("meido_tool_scope2_{}", uuid::Uuid::new_v4()));
         let auth = ToolAuthContext {
             run_id: None,
             caller_channel: "web".to_string(),
@@ -1260,6 +1384,8 @@ mod tests {
             control_chat_ids: vec![],
             is_scheduled_task: false,
             session_id: None,
+            vector_db_root: None,
+            external_roots: Vec::new(),
         };
         let flat = root.join("shared").join("scripts").join("a.py");
         std::fs::create_dir_all(flat.parent().unwrap()).unwrap();
@@ -1273,10 +1399,7 @@ mod tests {
 
     #[test]
     fn test_resolve_tool_path_prefers_persona_origin() {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_origin_res_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("meido_origin_res_{}", uuid::Uuid::new_v4()));
         let persona = persona_shared_dir(&root, 10, 2);
         let persona_file = persona.join("ORIGIN").join("ops").join("sop.md");
         let shared_file = root
@@ -1294,11 +1417,28 @@ mod tests {
     }
 
     #[test]
-    fn test_assert_persona_allows_missing_file_under_allowed_root() {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_missing_scope_{}",
-            uuid::Uuid::new_v4()
-        ));
+    fn test_origin_paths_follow_configured_vault() {
+        let root = std::env::temp_dir().join(format!("meido_vault_root_{}", uuid::Uuid::new_v4()));
+        let vault = std::env::temp_dir().join(format!("meido_vault_ext_{}", uuid::Uuid::new_v4()));
+        let persona = persona_shared_dir(&root, 10, 2);
+        std::fs::create_dir_all(&persona).unwrap();
+        std::fs::create_dir_all(vault.join("Operations")).unwrap();
+        let note = vault.join("Operations").join("note.md");
+        std::fs::write(&note, "vault").unwrap();
+
+        let resolved = resolve_tool_path_with_origin(
+            &root,
+            &persona,
+            "ORIGIN/Operations/note.md",
+            &vault,
+            None,
+        );
+        assert_eq!(resolved, note);
+
+        let escaped =
+            resolve_tool_path_with_origin(&root, &persona, "ORIGIN/../../secret.txt", &vault, None);
+        assert!(!path_under_root(&escaped, &vault) || escaped == vault);
+
         let auth = ToolAuthContext {
             run_id: None,
             caller_channel: "web".to_string(),
@@ -1307,6 +1447,169 @@ mod tests {
             control_chat_ids: vec![],
             is_scheduled_task: false,
             session_id: None,
+            vector_db_root: None,
+            external_roots: Vec::new(),
+        };
+        assert!(assert_persona_tool_path_allowed_with_origin(
+            &root,
+            &note,
+            Some(&auth),
+            true,
+            &vault
+        )
+        .is_ok());
+        let local = root.join("shared").join("ORIGIN").join("note.md");
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        std::fs::write(&local, "local").unwrap();
+        assert!(assert_persona_tool_path_allowed_with_origin(
+            &root,
+            &local,
+            Some(&auth),
+            true,
+            &vault
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    #[test]
+    fn test_vector_db_path_follows_configured_root_only_when_set() {
+        let root = std::env::temp_dir().join(format!("meido_vdb_root_{}", uuid::Uuid::new_v4()));
+        let db = std::env::temp_dir().join(format!("meido_vdb_ext_{}", uuid::Uuid::new_v4()));
+        let persona = persona_shared_dir(&root, 10, 2);
+        let origin = root.join("shared").join("ORIGIN");
+        std::fs::create_dir_all(&persona).unwrap();
+        std::fs::create_dir_all(db.join("chroma")).unwrap();
+        let index = db.join("chroma").join("index");
+        std::fs::write(&index, "db").unwrap();
+
+        let unset =
+            resolve_tool_path_with_origin(&root, &persona, "vault_db/chroma/index", &origin, None);
+        assert_eq!(
+            unset,
+            root.join("shared")
+                .join("vault_db")
+                .join("chroma")
+                .join("index")
+        );
+
+        let set = resolve_tool_path_with_origin(
+            &root,
+            &persona,
+            "vault_db/chroma/index",
+            &origin,
+            Some(db.as_path()),
+        );
+        assert_eq!(set, index);
+
+        let escaped = resolve_tool_path_with_origin(
+            &root,
+            &persona,
+            "vault_db/../../secret.txt",
+            &origin,
+            Some(db.as_path()),
+        );
+        assert!(!path_under_root(&escaped, &db) || escaped == db);
+
+        let auth = ToolAuthContext {
+            run_id: None,
+            caller_channel: "web".to_string(),
+            caller_chat_id: 10,
+            caller_persona_id: 2,
+            control_chat_ids: vec![],
+            is_scheduled_task: false,
+            session_id: None,
+            vector_db_root: Some(db.clone()),
+            external_roots: Vec::new(),
+        };
+        assert!(assert_persona_tool_path_allowed_with_origin(
+            &root,
+            &index,
+            Some(&auth),
+            false,
+            &origin
+        )
+        .is_ok());
+        let local = root.join("shared").join("vault_db").join("index");
+        std::fs::create_dir_all(local.parent().unwrap()).unwrap();
+        std::fs::write(&local, "local").unwrap();
+        assert!(assert_persona_tool_path_allowed_with_origin(
+            &root,
+            &local,
+            Some(&auth),
+            false,
+            &origin
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&db);
+    }
+
+    #[test]
+    fn test_external_roots_allow_only_the_configured_absolute_path() {
+        let root = std::env::temp_dir().join(format!("meido_ext_ws_{}", uuid::Uuid::new_v4()));
+        let allowed = std::env::temp_dir().join(format!("meido_ext_ok_{}", uuid::Uuid::new_v4()));
+        let denied = std::env::temp_dir().join(format!("meido_ext_no_{}", uuid::Uuid::new_v4()));
+        let persona = persona_shared_dir(&root, 10, 2);
+        let origin = root.join("shared").join("ORIGIN");
+        std::fs::create_dir_all(&persona).unwrap();
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&denied).unwrap();
+        let note = allowed.join("note.md");
+        let other = denied.join("note.md");
+        std::fs::write(&note, "ok").unwrap();
+        std::fs::write(&other, "no").unwrap();
+
+        let auth = ToolAuthContext {
+            run_id: None,
+            caller_channel: "web".to_string(),
+            caller_chat_id: 10,
+            caller_persona_id: 2,
+            control_chat_ids: vec![],
+            is_scheduled_task: false,
+            session_id: None,
+            vector_db_root: None,
+            external_roots: vec![allowed.clone()],
+        };
+        assert!(assert_persona_tool_path_allowed_with_origin(
+            &root,
+            &note,
+            Some(&auth),
+            true,
+            &origin
+        )
+        .is_ok());
+        assert!(assert_persona_tool_path_allowed_with_origin(
+            &root,
+            &other,
+            Some(&auth),
+            false,
+            &origin
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&allowed);
+        let _ = std::fs::remove_dir_all(&denied);
+    }
+
+    #[test]
+    fn test_assert_persona_allows_missing_file_under_allowed_root() {
+        let root =
+            std::env::temp_dir().join(format!("meido_missing_scope_{}", uuid::Uuid::new_v4()));
+        let auth = ToolAuthContext {
+            run_id: None,
+            caller_channel: "web".to_string(),
+            caller_chat_id: 10,
+            caller_persona_id: 2,
+            control_chat_ids: vec![],
+            is_scheduled_task: false,
+            session_id: None,
+            vector_db_root: None,
+            external_roots: Vec::new(),
         };
         let persona = persona_shared_dir(&root, 10, 2);
         std::fs::create_dir_all(persona.join("ORIGIN")).unwrap();
@@ -1326,10 +1629,7 @@ mod tests {
 
     #[test]
     fn test_path_under_root_handles_nonexistent_relative() {
-        let root = std::env::temp_dir().join(format!(
-            "finally_a_value_bot_under_{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("meido_under_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("shared").join("ORIGIN")).unwrap();
         let missing = root.join("shared").join("ORIGIN").join("missing.md");
         assert!(path_under_root(

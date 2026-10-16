@@ -12,9 +12,17 @@ type Props = {
   onSaved?: (model: string) => void
   /** When set, load/save classic strategy LLM for this persona. */
   activePersonaId?: number | null
+  /** Thinking toggles are shared. Persona pages omit them. */
+  includeThinking?: boolean
 }
 
-export function SettingsLlmPanel({ api, onError, onSaved, activePersonaId = null }: Props) {
+export function SettingsLlmPanel({
+  api,
+  onError,
+  onSaved,
+  activePersonaId = null,
+  includeThinking = true,
+}: Props) {
   const [llm, setLlm] = useState<LlmConfigResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [selectedProvider, setSelectedProvider] = useState('')
@@ -250,8 +258,9 @@ export function SettingsLlmPanel({ api, onError, onSaved, activePersonaId = null
           provider,
           model,
           custom: useCustom,
-          thinking_enabled: thinkingEnabled,
-          show_thinking: showThinking,
+          ...(includeThinking
+            ? { thinking_enabled: thinkingEnabled, show_thinking: showThinking }
+            : {}),
           ...(isLocalProvider ? { base_url: serverUrl.trim() } : {}),
           ...(activePersonaId != null && activePersonaId > 0
             ? { persona_id: activePersonaId }
@@ -300,7 +309,8 @@ export function SettingsLlmPanel({ api, onError, onSaved, activePersonaId = null
           <>all personas that have not set an override</>
         )}
         . Model lists load live from the provider API; curated cost hints are shown when the id
-        matches. Thinking toggles stay shared across personas.
+        matches.
+        {includeThinking ? ' Thinking toggles stay shared across personas.' : ' Thinking toggles are in Settings → Engine.'}
       </span>
 
       <div className="flex flex-col gap-2">
@@ -451,6 +461,7 @@ export function SettingsLlmPanel({ api, onError, onSaved, activePersonaId = null
         </div>
       ) : null}
 
+      {includeThinking ? (
       <div className="rounded-md border p-3" style={{ borderColor: 'var(--gray-6)' }}>
         <span className="font-semibold mb-1 block">
           Thinking
@@ -491,6 +502,7 @@ export function SettingsLlmPanel({ api, onError, onSaved, activePersonaId = null
           </div>
         </div>
       </div>
+      ) : null}
 
       <div className="flex gap-2 items-center flex-wrap">
         <Button
