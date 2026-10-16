@@ -26,6 +26,7 @@ pub mod db;
 pub mod db_collab;
 pub mod dense_delivery_guard;
 pub mod doctor;
+pub mod dotenv_sync;
 pub mod engine_connections;
 pub mod error;
 pub mod final_delivery_dedupe;

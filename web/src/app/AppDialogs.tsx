@@ -26,6 +26,7 @@ import { ArtifactsDialog } from './dialogs/artifacts-dialog'
 import { MemoryDialog } from './dialogs/memory-dialog'
 import { AgentHistoryDialog } from './dialogs/agent-history-dialog'
 import { TerminalDialog } from './dialogs/terminal-dialog'
+import { SetupWizardDialog } from '../components/setup-wizard-dialog'
 
 export function AppDialogs(props: AppDialogsProps) {
   const {
@@ -46,6 +47,30 @@ export function AppDialogs(props: AppDialogsProps) {
     agentHistory,
     terminal,
   } = props
+  const [wizardOpen, setWizardOpen] = React.useState(false)
+  const wizardDismissed = React.useRef(false)
+  React.useEffect(() => {
+    if (wizardDismissed.current) return
+    if (!settings.installationStatus?.needs_initialization) return
+    try {
+      if (sessionStorage.getItem('meido_setup_wizard_dismissed') === '1') return
+    } catch {
+      return
+    }
+    setWizardOpen(true)
+  }, [settings.installationStatus?.needs_initialization])
+
+  function setWizard(open: boolean) {
+    setWizardOpen(open)
+    if (!open) {
+      wizardDismissed.current = true
+      try {
+        sessionStorage.setItem('meido_setup_wizard_dismissed', '1')
+      } catch {
+        /* session storage can be unavailable */
+      }
+    }
+  }
 
   return (
     <>
@@ -56,6 +81,14 @@ export function AppDialogs(props: AppDialogsProps) {
         activePersonaId={activePersonaId}
         personas={personas}
         settings={settings}
+        onRunSetupWizard={() => setWizardOpen(true)}
+      />
+      <SetupWizardDialog
+        api={api}
+        open={wizardOpen}
+        onOpenChange={setWizard}
+        onRestart={() => void settings.requestRestart()}
+        restartBusy={settings.restartBusy}
       />
       <PersonaDialog
         api={api}

@@ -1,4 +1,5 @@
 mod artifacts_api;
+mod env_config;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -7809,9 +7810,13 @@ async fn api_connections_patch(
             if body.clear {
                 crate::engine_connections::clear_secret(&data_dir, name)
                     .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+                env_config::persist_pairs(&[(name, None)])
+                    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
             } else {
                 let secret = body.secret.unwrap_or_default();
                 crate::engine_connections::write_secret(&data_dir, name, &secret)
+                    .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+                env_config::persist_pairs(&[(name, Some(secret.trim()))])
                     .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
                 state.app_state.env_redactor.register_trusted(secret.trim());
             }
@@ -7832,7 +7837,7 @@ async fn api_connections_patch(
     }
     let mut payload = connections_json(&state.app_state);
     payload["message"] = json!(
-        "Connection saved. A key in .env still wins. Cursor uses a saved key the next time its sidecar starts."
+        "Connection saved in .env. A key already in .env is the one Meido uses. Cursor uses a saved key the next time its sidecar starts."
     );
     Ok(Json(payload))
 }
@@ -7992,11 +7997,18 @@ async fn api_topics_model_patch(
         ));
     };
     let stored_source = source.clone();
+    let provider_for_env = stored_source.clone();
+    let model_for_env = stored_model.clone();
     call_blocking(state.app_state.db.clone(), move |db| {
         crate::topics::save_system_llm_settings(db, &stored_source, &stored_model)
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    env_config::persist_pairs(&[
+        ("SYSTEM_LLM_PROVIDER", Some(provider_for_env.as_str())),
+        ("SYSTEM_LLM_MODEL", Some(model_for_env.as_str())),
+    ])
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let (choice, saved, provider, strategy_model, local_base_url) =
         read_topics_model(&state.app_state).await?;
     Ok(Json(topics_model_json(
@@ -8167,6 +8179,30 @@ async fn api_runtime_patch(
             StatusCode::BAD_REQUEST,
             "No runtime toggle fields provided".to_string(),
         ));
+    }
+    let engine_name = engine.as_str();
+    let debug_value = if toggles.tool_output_debug() {
+        "true"
+    } else {
+        "false"
+    };
+    let pte_value = if toggles.post_tool_evaluator_enabled() {
+        "true"
+    } else {
+        "false"
+    };
+    let pdqe_value = if toggles.response_quality_evaluator_enabled() {
+        "true"
+    } else {
+        "false"
+    };
+    if let Err(err) = env_config::persist_pairs(&[
+        ("TOOL_OUTPUT_DEBUG", Some(debug_value)),
+        ("POST_TOOL_EVALUATOR_ENABLED", Some(pte_value)),
+        ("RESPONSE_QUALITY_EVALUATOR_ENABLED", Some(pdqe_value)),
+        ("AGENT_ENGINE", Some(engine_name)),
+    ]) {
+        warnings.push(format!("Saved in the app. Could not update .env: {err}"));
     }
 
     Ok(Json(json!({
@@ -9703,8 +9739,8 @@ async fn api_settings_get(
             "agent_engine": agent_engine.as_str(),
             "cost_routing_effective": crate::local_delegate::cost_routing_effective(agent_engine, &mm_cfg),
             "web_enabled": cfg.web_enabled,
-            // PATCH /api/settings is disabled; no in-app "pending restart" until we track real diffs.
-            "requires_restart_for_env_changes": false,
+            "needs_initialization": env_config::installation_needs_initialization(&state).await,
+            "requires_restart_for_env_changes": env_config::note_disk_changes(&state).await,
             "runtime_env_merge_from_app_settings": true,
             "llm_model_from_app_settings": true,
             "tool_output_debug": state.app_state.runtime_toggles.tool_output_debug(),
@@ -10662,6 +10698,11 @@ fn build_router(web_state: WebState) -> Router {
             "/api/settings",
             get(api_settings_get).patch(api_settings_patch),
         )
+        .route(
+            "/api/env-config",
+            get(env_config::api_env_config_get).patch(env_config::api_env_config_patch),
+        )
+        .route("/api/setup/action", post(env_config::api_setup_action_post))
         .route("/api/llm", get(api_llm_get).patch(api_llm_patch))
         .route(
             "/api/secrets",

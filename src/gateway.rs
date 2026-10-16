@@ -141,6 +141,14 @@ fn install() -> Result<()> {
     Ok(())
 }
 
+pub fn install_login_service() -> Result<()> {
+    install()
+}
+
+pub fn uninstall_login_service() -> Result<()> {
+    uninstall()
+}
+
 fn uninstall() -> Result<()> {
     if cfg!(target_os = "macos") {
         uninstall_macos()

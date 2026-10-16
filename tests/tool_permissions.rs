@@ -19,6 +19,8 @@ fn test_auth_context_control_chat() {
         control_chat_ids: vec![100, 200],
         is_scheduled_task: false,
         session_id: None,
+        vector_db_root: None,
+        external_roots: Vec::new(),
     };
     assert!(auth.is_control_chat());
     assert!(auth.can_access_chat(999)); // control can access any chat
@@ -34,6 +36,8 @@ fn test_auth_context_regular_chat() {
         control_chat_ids: vec![100, 200],
         is_scheduled_task: false,
         session_id: None,
+        vector_db_root: None,
+        external_roots: Vec::new(),
     };
     assert!(!auth.is_control_chat());
     assert!(auth.can_access_chat(300)); // can access own chat
@@ -50,6 +54,8 @@ fn test_auth_context_empty_control_list() {
         control_chat_ids: vec![],
         is_scheduled_task: false,
         session_id: None,
+        vector_db_root: None,
+        external_roots: Vec::new(),
     };
     assert!(!auth.is_control_chat());
     assert!(auth.can_access_chat(100)); // can access own

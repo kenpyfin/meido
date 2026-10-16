@@ -207,6 +207,7 @@ export type SettingsDialogProps = {
   activePersonaId: number | null
   personas: Persona[]
   settings: AppDialogsSettingsProps
+  onRunSetupWizard?: () => void
 }
 
 export type PersonaDialogProps = {
