@@ -94,4 +94,81 @@ export function IconSplit({ className }: { className?: string }) {
   return <Split className={base(className, 'size-4 shrink-0')} aria-hidden />
 }
 
+function MaidSvg({
+  className,
+  fallback,
+  children,
+}: {
+  className?: string
+  fallback: string
+  children: React.ReactNode
+}) {
+  return (
+    <svg
+      className={base(className, fallback)}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      {children}
+    </svg>
+  )
+}
+
+/** Maid headdress (katyusha) with a centered bow. */
+export function IconMeidoCrest({ className }: { className?: string }) {
+  return (
+    <MaidSvg className={className} fallback="size-6 shrink-0">
+      <path d="M3.5 10.2C5.2 6.2 8.2 4.2 12 4.2s6.8 2 8.5 6" />
+      <path d="M3 10.2h18" />
+      <path d="M12 10.2c-1.15.1-2.35 1.05-2.7 2.45-.25.95.45 1.55 1.35 1.15L12 12.7" />
+      <path d="M12 10.2c1.15.1 2.35 1.05 2.7 2.45.25.95-.45 1.55-1.35 1.15L12 12.7" />
+      <path d="M11.15 13.35 9.1 17.4" />
+      <path d="M12.85 13.35 14.9 17.4" />
+      <circle cx="12" cy="8.15" r="0.7" fill="currentColor" stroke="none" />
+    </MaidSvg>
+  )
+}
+
+/** Collar ribbon, used on the active persona row. */
+export function IconRibbonBow({ className }: { className?: string }) {
+  return (
+    <MaidSvg className={className} fallback="size-3.5 shrink-0">
+      <path d="M12 10.5 8.2 7.6c-.7-.5-1.7.1-1.5.9.4 1.5 1.6 2.6 3.1 2.8" />
+      <path d="M12 10.5 15.8 7.6c.7-.5 1.7.1 1.5.9-.4 1.5-1.6 2.6-3.1 2.8" />
+      <path d="M10.6 12.2 8.4 17" />
+      <path d="M13.4 12.2 15.6 17" />
+      <circle cx="12" cy="11.2" r="0.9" fill="currentColor" stroke="none" />
+    </MaidSvg>
+  )
+}
+
+/** Parlor service bell for the inbox. */
+export function IconServiceBell({ className }: { className?: string }) {
+  return (
+    <MaidSvg className={className} fallback="size-4 shrink-0">
+      <path d="M12 4.5v1.2" />
+      <path d="M6.2 15.2a6.2 6.2 0 0 1 11.6 0" />
+      <path d="M5 15.2h14" />
+      <path d="M9.2 15.4a2.8 2.8 0 0 0 5.6 0" />
+      <path d="M8 18.6h8" />
+    </MaidSvg>
+  )
+}
+
+/** Teacup on a saucer, for the empty-thread welcome. */
+export function IconTeacup({ className }: { className?: string }) {
+  return (
+    <MaidSvg className={className} fallback="size-4 shrink-0">
+      <path d="M6 8.5h9.2v4.2a4.2 4.2 0 0 1-4.2 4.2H9.6A3.6 3.6 0 0 1 6 13.3Z" />
+      <path d="M15.2 9.4h1.4a2 2 0 0 1 0 4h-1.4" />
+      <path d="M5 19.2h14" />
+    </MaidSvg>
+  )
+}
+
 export type { LucideProps }

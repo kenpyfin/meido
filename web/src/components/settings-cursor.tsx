@@ -17,6 +17,7 @@ type Props = {
   activePersonaId?: number | null
   /** model: this persona's SDK model. shared: MCP, CLI, and timeouts. */
   scope?: 'all' | 'model' | 'shared'
+  onSaved?: () => void
 }
 
 function statusColor(ok: boolean | undefined): 'green' | 'orange' | 'gray' {
@@ -82,7 +83,7 @@ function parseModelCatalog(
     .filter((model) => Boolean(model.id))
 }
 
-export function SettingsCursorPanel({ api, onError, activePersonaId = null, scope = 'all' }: Props) {
+export function SettingsCursorPanel({ api, onError, activePersonaId = null, scope = 'all', onSaved }: Props) {
   const [config, setConfig] = useState<CursorEngineConfigResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -279,6 +280,7 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
       setSaveNotice(res.message ?? 'Saved.')
       setConfig(res)
       setSdkModelParams(res.sdk_model_params ?? sdkModelParams)
+      onSaved?.()
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
     } finally {

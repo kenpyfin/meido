@@ -19,6 +19,7 @@ type Props = {
   activePersonaId: number | null
   /** engine: shared default model. topology: this persona's agent graph. */
   scope?: 'all' | 'engine' | 'topology'
+  onSaved?: () => void
 }
 
 const AGENT_KINDS: AdkAgentKind[] = ['llm', 'sequential', 'parallel', 'loop']
@@ -38,7 +39,7 @@ function emptyAgent(id: string): AdkAgent {
   }
 }
 
-export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 'all' }: Props) {
+export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 'all', onSaved }: Props) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [engine, setEngine] = useState<GeminiAdkConfigResponse | null>(null)
@@ -48,6 +49,7 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null)
   const [defaultModelDraft, setDefaultModelDraft] = useState('')
+  const [maxIterationsDraft, setMaxIterationsDraft] = useState('40')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -56,6 +58,7 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 
       const status = await api<GeminiAdkConfigResponse>('/api/gemini-adk')
       setEngine(status)
       setDefaultModelDraft(status.default_model ?? '')
+      setMaxIterationsDraft(String(status.max_iterations ?? 40))
 
       const q =
         activePersonaId != null
@@ -89,6 +92,30 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 
     })
   }
 
+  async function saveMaxIterations() {
+    const max = Number.parseInt(maxIterationsDraft, 10)
+    if (!Number.isFinite(max) || max < 1) {
+      onError('Max agent iterations must be at least 1.')
+      return
+    }
+    setSaving(true)
+    setSaveNotice(null)
+    try {
+      const res = await api<GeminiAdkConfigResponse>('/api/gemini-adk', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ max_iterations: max }),
+      })
+      setEngine(res)
+      setMaxIterationsDraft(String(res.max_iterations ?? max))
+      setSaveNotice(res.message ?? 'Iteration limit saved.')
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
   async function saveEngineSettings() {
     setSaving(true)
     setSaveNotice(null)
@@ -99,7 +126,9 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 
         body: JSON.stringify({ default_model: defaultModelDraft }),
       })
       setEngine(res)
+      setMaxIterationsDraft(String(res.max_iterations ?? maxIterationsDraft))
       setSaveNotice(res.message ?? 'Engine settings saved.')
+      onSaved?.()
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -135,6 +164,7 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 
       if (res.profile) setProfile(res.profile)
       setUsesDefault(res.uses_default === true)
       setSaveNotice(res.message ?? 'Topology saved.')
+      onSaved?.()
       await load()
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
@@ -156,14 +186,46 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 
   return (
     <div className="flex flex-col gap-4">
       {engine && !engine.api_key_configured ? (
-        <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100">
+        <div role="status" className="mc-notice-owed">
             The Gemini key is not set. Add it under Settings → Connections. The Gemini ADK engine
             cannot run until a key is configured.
           </div>
       ) : null}
 
       {saveNotice ? (
-        <div role="status" className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-900 dark:text-green-100">{saveNotice}</div>
+        <span className="text-xs text-muted-foreground" role="status">{saveNotice}</span>
+      ) : null}
+
+      {scope === 'topology' ? (
+        <section className="mc-pipeline-section">
+          <span className="font-semibold mb-2 block">Engine limit</span>
+          <div className="flex gap-2 flex-wrap items-end">
+            <label className="mc-pipeline-field">
+              <span>Max agent iterations</span>
+              <Input
+                type="number"
+                min={1}
+                value={maxIterationsDraft}
+                onChange={(e) => setMaxIterationsDraft(e.target.value)}
+              />
+            </label>
+            <Button
+              size="default"
+              disabled={
+                saving ||
+                !Number.isFinite(Number.parseInt(maxIterationsDraft, 10)) ||
+                Number.parseInt(maxIterationsDraft, 10) < 1 ||
+                Number.parseInt(maxIterationsDraft, 10) === engine?.max_iterations
+              }
+              onClick={() => void saveMaxIterations()}
+            >
+              {saving ? 'Saving…' : 'Save iteration limit'}
+            </Button>
+          </div>
+          <span className="mt-2 block">
+            Shared across personas. An empty specialist model uses this persona’s topology default model.
+          </span>
+        </section>
       ) : null}
 
       {scope !== 'topology' ? (
@@ -196,14 +258,12 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 
       <>
       <section className="mc-pipeline-section">
         <span className="font-semibold mb-2 block">
-          Topology {activePersonaId != null ? '(this persona)' : '(global default)'}
+          Topology {activePersonaId != null ? '(this persona)' : ''}
         </span>
         <span className="mb-3 block">
           {activePersonaId == null
-            ? 'Select a persona to edit a per-persona topology. Saving without a persona updates the global default.'
-            : usesDefault
-              ? 'This persona inherits the global topology. Saving creates a persona override.'
-              : 'This persona has a custom topology override.'}
+            ? 'Select a persona to edit its Gemini topology.'
+            : 'This persona owns this topology. An empty default model stops the turn.'}
         </span>
 
         <div className="flex gap-2 flex-wrap mb-3">
@@ -218,16 +278,6 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 
           >
             Reset to defaults
           </Button>
-          {activePersonaId != null && !usesDefault ? (
-            <Button
-              size="default"
-              variant="secondary"
-              disabled={saving}
-              onClick={() => void saveTopology({ clearPersonaOverride: true })}
-            >
-              Clear persona override
-            </Button>
-          ) : null}
           <Button
             size="default"
             variant="ghost"

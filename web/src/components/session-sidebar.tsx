@@ -5,9 +5,10 @@ import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { SidebarMode } from '../app/sidebar-mode'
+import { IconMeidoCrest, IconRibbonBow } from './icons'
 import type { Persona } from '../types'
 
-const PRIMARY_THEME_KEYS = new Set(['green', 'slate', 'blue'])
+const PRIMARY_THEME_KEYS = new Set(['meido', 'sakura', 'matcha', 'royal'])
 
 function IconPalette({ className }: { className?: string }) {
   return (
@@ -157,11 +158,13 @@ export const SessionSidebar = React.memo(function SessionSidebar({
     >
       <div className="flex justify-between items-center mb-4">
         <div className="min-w-0">
-          <span className="text-xl font-semibold tracking-tight">
+          <span className="mc-display-title flex items-center gap-2 text-2xl leading-none">
+            <IconMeidoCrest className="size-6 text-[color:var(--mc-accent)]" />
             Meido
           </span>
-          <span className="mt-0.5 block text-xs text-[color:var(--mc-text-muted)]">
-            Finally a helpful one.
+          <span className="mc-katyusha-lace mt-2 block h-2" aria-hidden />
+          <span className="mt-1.5 block text-xs text-[color:var(--mc-text-muted)]">
+            At your service, always. · メイド
           </span>
           <span className="mt-0.5 block">
             {mode === 'personas' ? 'Personas & sessions' : mode}
@@ -209,7 +212,7 @@ export const SessionSidebar = React.memo(function SessionSidebar({
           {themeMenuOpen ? (
             <div
               ref={themeMenuRef}
-              className="absolute right-0 top-10 z-50 w-56 rounded-lg border border-[color:var(--mc-border-soft)] bg-[color:var(--mc-bg-sidebar)] p-2"
+              className="absolute right-0 top-10 z-50 w-64 rounded-lg border border-[color:var(--mc-border-soft)] bg-[color:var(--mc-bg-sidebar)] p-2"
             >
               <span>Theme</span>
               <div className="mt-2 grid grid-cols-2 gap-1">
@@ -329,10 +332,13 @@ export const SessionSidebar = React.memo(function SessionSidebar({
                       onCloseRequest?.()
                     }}
                   >
+                    {selectedPersonaId === p.id ? (
+                      <IconRibbonBow className="size-3.5 shrink-0 text-[color:var(--mc-accent)]" />
+                    ) : null}
                     <span className="min-w-0 truncate">{p.name}</span>
                     {personaHasNew?.[p.id] ? (
                       <span
-                        className="h-2 w-2 shrink-0 rounded-full bg-[color:var(--mc-accent)]"
+                        className="h-2 w-2 shrink-0 rounded-full bg-[color:var(--mc-accent-brass)] ring-1 ring-[color:var(--mc-accent)]"
                         aria-label="New messages"
                         title="New messages"
                       />

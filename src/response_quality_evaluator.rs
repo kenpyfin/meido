@@ -283,7 +283,7 @@ pub struct QualityEvalOutcome {
 pub async fn evaluate_delivery_quality(
     pdqe_enabled: bool,
     config: &Config,
-    multimodel: Option<&crate::local_delegate::LocalDelegateConfig>,
+    system_llm: Option<&crate::llm::DirectLlmTarget>,
     env_redactor: &EnvSecretRedactor,
     ctx: &PostDeliveryEvalContext,
 ) -> Result<QualityEvalOutcome, FinallyAValueBotError> {
@@ -306,7 +306,7 @@ pub async fn evaluate_delivery_quality(
         });
     }
 
-    let provider_bundle = llm::create_evaluator_provider(config, multimodel)?;
+    let provider_bundle = llm::create_evaluator_provider(config, system_llm)?;
     let provider_label = provider_bundle.label.clone();
     let system = build_pdqe_system_prompt(&ctx.principles_excerpt);
     let user = build_pdqe_user_prompt(ctx);

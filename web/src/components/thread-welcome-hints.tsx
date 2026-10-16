@@ -1,6 +1,7 @@
 import React from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { IconMeidoCrest, IconTeacup } from './icons'
 
 /** Empty thread welcome with keyboard shortcut hints. */
 export function ThreadWelcomeHints({
@@ -10,12 +11,19 @@ export function ThreadWelcomeHints({
 }) {
   return (
     <div className="mc-thread-welcome-hints px-3 py-8 text-center">
-      <p className="text-sm text-[color:var(--mc-text-muted)]">
-        Send a message to start. Attach files by dragging them into the composer.
+      <div className="mc-crest-medallion" aria-hidden>
+        <IconMeidoCrest className="size-8" />
+      </div>
+      <p className="mc-display-title text-2xl text-[color:var(--mc-text-primary)]">
+        Okaerinasaimase — Welcome back.
+      </p>
+      <p className="mx-auto mt-2 max-w-md text-sm text-[color:var(--mc-text-muted)]">
+        How may I attend to your tasks today? Send a request below, or drop files onto the tray to begin.
       </p>
       <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
         <Badge variant="outline" className="font-normal text-[color:var(--mc-text-faint)]">
-          Tip: drag files into the composer
+          <IconTeacup className="mr-1 size-3.5" />
+          The tray accepts files
         </Badge>
       </div>
       <p className="mt-2 text-xs text-[color:var(--mc-text-faint)]">

@@ -295,8 +295,7 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
       <section className="flex flex-col gap-2 rounded-md border p-3" style={{ borderColor: 'var(--gray-6)' }}>
         <span className="font-medium">Local model server</span>
         <span className="text-xs text-muted-foreground">
-          OpenAI-compatible server. The system LLM can use a model from this server. Cost routing uses it when that
-          engine is selected.
+          OpenAI-compatible server. System LLM uses this URL when its provider is local. Cost routing stores its own URL on the Persona page.
         </span>
         <Input
           value={localUrl}

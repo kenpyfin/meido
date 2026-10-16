@@ -274,7 +274,7 @@ export const CockpitBar = React.memo(function CockpitBar({
       <div className="space-y-3">
         <div className={`${controlsPanelClass} space-y-3`}>
           <div>
-            <span className="font-medium">
+            <span className="mc-ledger-title text-lg">
               Operator memo
             </span>
             <span className="mt-1 block leading-snug">
@@ -342,7 +342,7 @@ export const CockpitBar = React.memo(function CockpitBar({
         </div>
 
         <div className={controlsPanelClass}>
-          <span className="font-medium">
+          <span className="mc-ledger-title text-lg">
             Bookmarks
           </span>
           {bookmarks.length > 0 ? (
@@ -419,8 +419,8 @@ export const CockpitBar = React.memo(function CockpitBar({
             </div>
           ) : (
             <EmptyState
-              title="No bookmarks yet"
-              description="Bookmark messages from the thread to jump back to them here."
+              title="Nothing pinned on the tray"
+              description="Bookmark a message in the thread to keep it on this ledger."
               className="mt-2"
             />
           )}
@@ -434,7 +434,7 @@ export const CockpitBar = React.memo(function CockpitBar({
       <MobileSheet
         open={expanded}
         onOpenChange={setExpanded}
-        title="Session status"
+        title="Household ledger"
         description="Queue, background jobs, memo, and bookmarks."
       >
         {body}
@@ -447,9 +447,9 @@ export const CockpitBar = React.memo(function CockpitBar({
   return (
     <div
       ref={expandedRootRef}
-      className="mc-cockpit mc-cockpit-dropdown absolute left-0 right-0 top-full z-30 mt-1 max-h-[min(70vh,560px)] overflow-y-auto overscroll-contain rounded-xl border border-[color:var(--mc-border-soft)] bg-[color:var(--mc-bg-main)]/95 py-2 shadow-lg backdrop-blur"
+      className="mc-cockpit mc-cockpit-dropdown absolute left-0 right-0 top-full z-30 mt-1 max-h-[min(70vh,560px)] overflow-y-auto overscroll-contain rounded-xl border border-[color:var(--mc-border-soft)] bg-[color:var(--mc-bg-main)]/95 py-2 shadow-lg ring-1 ring-inset ring-[color:var(--mc-border-lace)] backdrop-blur"
       role="region"
-      aria-label="Session status"
+      aria-label="Household ledger"
     >
       {body}
     </div>

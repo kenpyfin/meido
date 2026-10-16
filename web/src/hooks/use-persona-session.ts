@@ -409,13 +409,24 @@ export function usePersonaSession({
   )
 
   const onCreatePersona = useCallback(
-    async (name: string, engine: EngineId) => {
+    async (input: { name: string; engine: EngineId; llm_provider?: string; llm_model?: string; llm_base_url?: string; local_base_url?: string; local_model?: string; cursor_sdk_model?: string; gemini_default_model?: string }) => {
       if (chatId == null) return
-      const trimmed = name.trim()
+      const trimmed = input.name.trim()
       if (!trimmed) throw new Error('Persona name cannot be empty')
       await api('/api/personas/create', {
         method: 'POST',
-        body: JSON.stringify({ chat_id: chatId, name: trimmed, agent_engine: engine }),
+        body: JSON.stringify({
+          chat_id: chatId,
+          name: trimmed,
+          agent_engine: input.engine,
+          llm_provider: input.llm_provider,
+          llm_model: input.llm_model,
+          llm_base_url: input.llm_base_url,
+          local_base_url: input.local_base_url,
+          local_model: input.local_model,
+          cursor_sdk_model: input.cursor_sdk_model,
+          gemini_default_model: input.gemini_default_model,
+        }),
       })
       await loadPersonas(chatId)
       setStatusText(`Persona "${trimmed}" created`)

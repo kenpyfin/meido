@@ -152,21 +152,19 @@ async fn load_topology_for_run(
     .await
     .unwrap_or(None);
 
-    if let Some(raw) = persona_json.filter(|s| !s.trim().is_empty()) {
-        match crate::gemini_adk::profile::parse_topology_json(&raw) {
-            Ok(p) => return Ok(p),
-            Err(e) => {
-                warn!(error = %e, "persona gemini_adk_topology invalid; falling back to global");
-            }
-        }
+    let Some(raw) = persona_json.filter(|s| !s.trim().is_empty()) else {
+        anyhow::bail!(
+            "This persona has no Gemini topology. Set a default model on the Persona page."
+        );
+    };
+    let profile = crate::gemini_adk::profile::parse_topology_json(&raw)
+        .map_err(|e| anyhow::anyhow!("This persona's Gemini topology is invalid: {e}"))?;
+    if profile.default_model.trim().is_empty() {
+        anyhow::bail!(
+            "This persona's Gemini topology has no default model. Set it on the Persona page."
+        );
     }
-
-    let global = state
-        .gemini_adk_profile
-        .read()
-        .map_err(|_| anyhow::anyhow!("gemini_adk_profile lock poisoned"))?
-        .clone();
-    Ok(global)
+    Ok(profile)
 }
 
 fn gemini_provider_for_model(config: &Config, model: &str) -> Box<dyn LlmProvider> {

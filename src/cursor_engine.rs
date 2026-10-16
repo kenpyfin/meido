@@ -1130,8 +1130,19 @@ pub async fn run_cursor_engine(
             model.as_deref(),
             params.as_deref(),
         ),
-        None => global_settings,
+        None => {
+            return Ok(cursor_engine_unavailable_result(
+                &context,
+                "This persona has no Cursor model. Set it on the Persona page.",
+            ));
+        }
     };
+    if settings.sdk_model.trim().is_empty() {
+        return Ok(cursor_engine_unavailable_result(
+            &context,
+            "This persona has no Cursor model. Set it on the Persona page.",
+        ));
+    }
     let base_url = settings.sdk_runner_url.trim();
 
     if base_url.is_empty() {

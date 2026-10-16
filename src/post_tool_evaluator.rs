@@ -264,7 +264,7 @@ fn build_pte_user_prompt(
 pub async fn evaluate_completion(
     enabled: bool,
     config: &Config,
-    multimodel: Option<&crate::local_delegate::LocalDelegateConfig>,
+    system_llm: Option<&crate::llm::DirectLlmTarget>,
     env_redactor: &EnvSecretRedactor,
     principles_content: &str,
     memory_context: &str,
@@ -316,7 +316,7 @@ pub async fn evaluate_completion(
         content: MessageContent::Text(user_prompt),
     }];
 
-    let provider_bundle = match llm::create_evaluator_provider(config, multimodel) {
+    let provider_bundle = match llm::create_evaluator_provider(config, system_llm) {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!("PTE skipped: {e}");

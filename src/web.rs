@@ -523,8 +523,21 @@ struct PersonasSwitchRequest {
 struct PersonaCreateRequest {
     chat_id: Option<i64>,
     name: String,
-    /// Persona engine. Omitted values keep the create default (`classic`).
-    agent_engine: Option<String>,
+    agent_engine: String,
+    #[serde(default)]
+    llm_provider: Option<String>,
+    #[serde(default)]
+    llm_model: Option<String>,
+    #[serde(default)]
+    llm_base_url: Option<String>,
+    #[serde(default)]
+    local_base_url: Option<String>,
+    #[serde(default)]
+    local_model: Option<String>,
+    #[serde(default)]
+    cursor_sdk_model: Option<String>,
+    #[serde(default)]
+    gemini_default_model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -6649,11 +6662,14 @@ async fn api_persona_agent_history_optimize(
         return Err((StatusCode::NOT_FOUND, "persona not found".into()));
     }
 
-    let mm = state.app_state.llm.local_delegate_config();
-    if mm.tier2_base_url.trim().is_empty() || mm.tier2_model.trim().is_empty() {
+    if crate::topics::system_llm_target(
+        crate::topics::load_job_choice(&state.app_state, crate::topics::SystemLlmJob::Learn).await,
+    )
+    .is_none()
+    {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            "Tier 2 (Knowledge) base URL and model must be configured in Settings → Multi-model."
+            "System LLM is not configured. Set a provider and model under Settings → System LLM."
                 .into(),
         ));
     }
@@ -6736,40 +6752,145 @@ async fn api_personas_create(
         ));
     }
     let name_owned = name.to_string();
-    let engine = match body
-        .agent_engine
+    let engine = crate::runtime_toggles::AgentEngine::parse_override(body.agent_engine.trim())
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "agent_engine must be classic, classic_cost_routing, cursor, or gemini_adk".to_string(),
+        ))?;
+    let provider = body
+        .llm_provider
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-    {
-        None => None,
-        Some(raw) => {
-            let parsed = crate::runtime_toggles::AgentEngine::parse_override(raw).ok_or((
-                StatusCode::BAD_REQUEST,
-                "agent_engine must be classic, classic_cost_routing, cursor, or gemini_adk"
-                    .to_string(),
-            ))?;
-            Some(parsed.as_str().to_string())
+        .map(str::to_string);
+    let model = body
+        .llm_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let base_url = body
+        .llm_base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let local_url = body
+        .local_base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let local_model = body
+        .local_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let cursor_model = body
+        .cursor_sdk_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let gemini_model = body
+        .gemini_default_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    match engine {
+        crate::runtime_toggles::AgentEngine::Classic
+        | crate::runtime_toggles::AgentEngine::ClassicCostRouting => {
+            if provider.is_none() || model.is_none() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "Provider and model are required.".into(),
+                ));
+            }
+            if provider
+                .as_deref()
+                .is_some_and(crate::llm_catalog::is_local_provider)
+                && base_url.is_none()
+            {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "A local provider needs a base URL.".into(),
+                ));
+            }
+            if engine == crate::runtime_toggles::AgentEngine::ClassicCostRouting
+                && (local_url.is_none() || local_model.is_none())
+            {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "Cost routing needs a local URL and model.".into(),
+                ));
+            }
         }
-    };
-    let persona_id = call_blocking(state.app_state.db.clone(), move |db| {
-        db.create_persona(chat_id, &name_owned, None)
+        crate::runtime_toggles::AgentEngine::Cursor => {
+            if cursor_model.is_none() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "A Cursor model is required.".into(),
+                ));
+            }
+        }
+        crate::runtime_toggles::AgentEngine::GeminiAdk => {
+            if gemini_model.is_none() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "A Gemini default model is required.".into(),
+                ));
+            }
+        }
+    }
+    let engine_str = engine.as_str().to_string();
+    let gemini_topology = gemini_model.map(|model| {
+        let mut profile = crate::gemini_adk::AdkTopologyProfile::default_profile();
+        profile.default_model = model;
+        serde_json::to_string(&profile).unwrap_or_else(|_| "{}".into())
+    });
+    let persona_id = call_blocking(state.app_state.db.clone(), {
+        let engine_str = engine_str.clone();
+        let provider = provider.clone();
+        let model = model.clone();
+        let base_url = base_url.clone();
+        let local_url = local_url.clone();
+        let local_model = local_model.clone();
+        let cursor_model = cursor_model.clone();
+        let gemini_topology = gemini_topology.clone();
+        move |db| {
+            let persona_id = db.create_persona(chat_id, &name_owned, model.as_deref())?;
+            db.set_persona_engine_override(chat_id, persona_id, Some(&engine_str))?;
+            if provider.is_some() || model.is_some() || base_url.is_some() {
+                db.set_persona_llm_selection(
+                    chat_id,
+                    persona_id,
+                    provider.as_deref(),
+                    model.as_deref(),
+                    base_url.as_deref(),
+                )?;
+            }
+            if local_url.is_some() || local_model.is_some() {
+                db.set_persona_local_delegate(
+                    chat_id,
+                    persona_id,
+                    local_url.as_deref(),
+                    local_model.as_deref(),
+                    Some(false),
+                )?;
+            }
+            if let Some(cursor_model) = cursor_model.as_deref() {
+                db.set_persona_cursor_sdk_model(chat_id, persona_id, Some(cursor_model), None)?;
+            }
+            if let Some(topology) = gemini_topology.as_deref() {
+                db.set_persona_gemini_adk_topology(chat_id, persona_id, Some(topology))?;
+            }
+            Ok(persona_id)
+        }
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if let Some(engine) = engine {
-        let saved = call_blocking(state.app_state.db.clone(), move |db| {
-            db.set_persona_engine_override(chat_id, persona_id, Some(engine.as_str()))
-        })
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        if !saved {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "persona engine was not saved".into(),
-            ));
-        }
-    }
     crate::tools::ensure_persona_shared_dir(
         std::path::Path::new(state.app_state.config.working_dir()),
         chat_id,
@@ -6781,6 +6902,80 @@ async fn api_personas_create(
         "ok": true,
         "persona_id": persona_id,
         "message": format!("Persona '{}' created", name),
+    })))
+}
+
+#[derive(Deserialize)]
+struct PersonaLocalQuery {
+    persona_id: i64,
+}
+
+#[derive(Deserialize)]
+struct PersonaLocalPatch {
+    persona_id: i64,
+    base_url: String,
+    model: String,
+}
+
+async fn api_persona_local_get(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Query(query): Query<PersonaLocalQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_auth(&headers, state.auth_token.as_deref())?;
+    let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
+    let pid = query.persona_id;
+    let persona = call_blocking(state.app_state.db.clone(), move |db| db.get_persona(pid))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .filter(|persona| persona.chat_id == chat_id)
+        .ok_or((StatusCode::NOT_FOUND, "persona not found".to_string()))?;
+    Ok(Json(json!({
+        "ok": true,
+        "base_url": persona.local_delegate_base_url.unwrap_or_default(),
+        "model": persona.local_delegate_model.unwrap_or_default(),
+        "tools_ok": persona.local_delegate_tools_ok.unwrap_or(false),
+    })))
+}
+
+async fn api_persona_local_patch(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Json(body): Json<PersonaLocalPatch>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_auth(&headers, state.auth_token.as_deref())?;
+    let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
+    let base_url = crate::local_delegate::normalize_base_url_for_provider(body.base_url.trim(), "");
+    let model = body.model.trim().to_string();
+    if base_url.is_empty() || model.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Local URL and model are required.".into(),
+        ));
+    }
+    let pid = body.persona_id;
+    let base_saved = base_url.clone();
+    let model_saved = model.clone();
+    let saved = call_blocking(state.app_state.db.clone(), move |db| {
+        db.set_persona_local_delegate(
+            chat_id,
+            pid,
+            Some(&base_saved),
+            Some(&model_saved),
+            Some(false),
+        )
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if !saved {
+        return Err((StatusCode::NOT_FOUND, "persona not found".into()));
+    }
+    Ok(Json(json!({
+        "ok": true,
+        "base_url": base_url,
+        "model": model,
+        "tools_ok": false,
+        "message": "Local URL and model saved. Run Test before the next cost-routing turn.",
     })))
 }
 
@@ -7687,17 +7882,18 @@ fn connection_secret_from_env(
 
 fn connections_json(state: &crate::agent::AppState) -> serde_json::Value {
     let data_dir = state.config.runtime_data_dir();
-    let mm = state.llm.local_delegate_config();
-    let local_url = if !mm.tier2_base_url.trim().is_empty() {
-        mm.tier2_base_url.clone()
-    } else {
-        mm.local_base_url.clone()
-    };
-    let local_model = if !mm.tier2_model.trim().is_empty() {
-        mm.tier2_model.clone()
-    } else {
-        mm.local_model.clone()
-    };
+    let local_url = state
+        .db
+        .get_app_setting("LOCAL_SERVER_URL")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let local_model = state
+        .db
+        .get_app_setting("LOCAL_SERVER_MODEL")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     let connections: Vec<serde_json::Value> = crate::engine_connections::CONNECTIONS
         .iter()
         .filter(|def| def.supported)
@@ -7786,42 +7982,22 @@ async fn api_connections_patch(
                     "Enter an http or https URL for the local model server.".into(),
                 ));
             }
-            let mut cfg = state.app_state.llm.local_delegate_config();
-            let mut changed =
-                cfg.local_base_url != url || cfg.tier1_base_url != url || cfg.tier2_base_url != url;
-            cfg.local_base_url = url.clone();
-            cfg.tier1_base_url = url.clone();
-            cfg.tier2_base_url = url;
-            if let Some(model) = body.model {
-                let model = model.trim().to_string();
-                if model.is_empty() {
-                    return Err((StatusCode::BAD_REQUEST, "Enter a local model name.".into()));
-                }
-                changed = changed
-                    || cfg.local_model != model
-                    || cfg.tier1_model != model
-                    || cfg.tier2_model != model;
-                cfg.local_model = model.clone();
-                cfg.tier1_model = model.clone();
-                cfg.tier2_model = model;
-            }
-            if changed {
-                cfg.local_tools_ok = false;
-                cfg.tier1_tools_ok = false;
-                cfg.tier2_tools_ok = false;
-            }
-            let cfg = cfg.normalize();
-            call_blocking(state.app_state.db.clone(), {
-                let cfg_db = cfg.clone();
-                move |db| crate::local_delegate::persist_to_db(db, &cfg_db)
+            let model = body
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .ok_or((StatusCode::BAD_REQUEST, "Enter a local model name.".into()))?;
+            let url_saved = url.clone();
+            let model_saved = model.clone();
+            call_blocking(state.app_state.db.clone(), move |db| {
+                db.set_app_setting("LOCAL_SERVER_URL", &url_saved)?;
+                db.set_app_setting("LOCAL_SERVER_MODEL", &model_saved)?;
+                Ok(())
             })
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            state
-                .app_state
-                .llm
-                .apply_local_delegate_config(cfg)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
         }
         crate::engine_connections::ConnectionKind::Secret => {
             let name = def.secret_name.ok_or((
@@ -7875,6 +8051,15 @@ async fn api_connections_patch(
 }
 
 #[derive(Debug, Deserialize)]
+struct TopicsModelJobPatch {
+    id: String,
+    #[serde(default)]
+    provider: String,
+    #[serde(default)]
+    model: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct TopicsModelPatch {
     #[serde(default)]
     source: String,
@@ -7882,6 +8067,8 @@ struct TopicsModelPatch {
     provider: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    jobs: Vec<TopicsModelJobPatch>,
 }
 
 fn topics_model_json(
@@ -7890,6 +8077,7 @@ fn topics_model_json(
     strategy_provider: &str,
     strategy_model: &str,
     local_base_url: &str,
+    jobs: Vec<serde_json::Value>,
     message: Option<&str>,
 ) -> serde_json::Value {
     let (source, provider, model, base_url) = match choice {
@@ -7905,12 +8093,7 @@ fn topics_model_json(
             Some(model.as_str()),
             None,
         ),
-        crate::topics::SystemLlmChoice::Strategy => (
-            "strategy",
-            strategy_provider,
-            Some(strategy_model).filter(|model| !model.is_empty()),
-            None,
-        ),
+        crate::topics::SystemLlmChoice::Missing => ("missing", "", None, None),
     };
     json!({
         "ok": true,
@@ -7922,8 +8105,42 @@ fn topics_model_json(
         "strategy_provider": strategy_provider,
         "strategy_model": strategy_model,
         "local_base_url": local_base_url,
+        "jobs": jobs,
         "message": message,
     })
+}
+
+async fn system_llm_job_rows(
+    state: &crate::agent::AppState,
+) -> Result<Vec<serde_json::Value>, (StatusCode, String)> {
+    let hook_fallback = state.config.hook_prompt_model.clone();
+    call_blocking(state.db.clone(), move |db| {
+        let mut rows = Vec::new();
+        for job in crate::topics::SystemLlmJob::ALL {
+            let (provider, model) = crate::topics::read_system_llm_job(db, job)?;
+            let provider = provider.unwrap_or_default();
+            let model = model.unwrap_or_default();
+            let using_default = provider.trim().is_empty();
+            let legacy_model = if job == crate::topics::SystemLlmJob::PromptHooks && using_default {
+                let stored = db.get_app_setting(crate::topics::APP_SETTING_HOOK_PROMPT_MODEL)?;
+                crate::topics::effective_hook_prompt_model(stored.as_deref(), &hook_fallback)
+            } else {
+                None
+            };
+            rows.push(json!({
+                "id": job.id(),
+                "label": job.label(),
+                "detail": job.detail(),
+                "provider": provider,
+                "model": model,
+                "using_default": using_default && legacy_model.is_none(),
+                "legacy_model": legacy_model,
+            }));
+        }
+        Ok(rows)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 async fn read_topics_model(
@@ -7933,22 +8150,23 @@ async fn read_topics_model(
     let saved = call_blocking(db, crate::topics::read_system_llm_settings)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let mm = state.llm.local_delegate_config();
+    let db = state.db.clone();
+    let local_server = call_blocking(db, |db| {
+        Ok((
+            db.get_app_setting("LOCAL_SERVER_URL")?.unwrap_or_default(),
+            db.get_app_setting("LOCAL_SERVER_MODEL")?
+                .unwrap_or_default(),
+        ))
+    })
+    .await
+    .unwrap_or_default();
     let choice = crate::topics::resolve_system_llm_choice(crate::topics::SystemLlmInputs {
         saved_source: saved.0.as_deref(),
         saved_model: saved.1.as_deref(),
-        prefer_tier2: state.config.topics_prefer_tier2,
-        tier2_base_url: &mm.tier2_base_url,
-        tier2_model: &mm.tier2_model,
-        tier2_tools_ok: mm.tier2_tools_ok,
-        local_base_url: &mm.local_base_url,
-        local_model: &mm.local_model,
+        local_server_url: &local_server.0,
+        local_server_model: &local_server.1,
     });
-    let local_base_url = if !mm.tier2_base_url.trim().is_empty() {
-        mm.tier2_base_url.clone()
-    } else {
-        mm.local_base_url.clone()
-    };
+    let local_base_url = local_server.0;
     let saved_choice = saved.0.as_deref().is_some_and(|s| !s.trim().is_empty());
     Ok((
         choice,
@@ -7966,12 +8184,14 @@ async fn api_topics_model_get(
     require_auth(&headers, state.auth_token.as_deref())?;
     let (choice, saved, provider, model, local_base_url) =
         read_topics_model(&state.app_state).await?;
+    let jobs = system_llm_job_rows(&state.app_state).await?;
     Ok(Json(topics_model_json(
         &choice,
         saved,
         &provider,
         &model,
         &local_base_url,
+        jobs,
         None,
     )))
 }
@@ -8028,28 +8248,78 @@ async fn api_topics_model_patch(
             "Unknown system LLM provider.".into(),
         ));
     };
+    let mut job_writes = Vec::new();
+    let mut hook_model_env: Option<Option<String>> = None;
+    for job in &body.jobs {
+        let Some(parsed_job) = crate::topics::SystemLlmJob::from_id(&job.id) else {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Unknown system LLM row {}.", job.id.trim()),
+            ));
+        };
+        let write =
+            crate::topics::parse_system_llm_job_write(parsed_job, &job.provider, &job.model)
+                .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+        if parsed_job == crate::topics::SystemLlmJob::PromptHooks {
+            hook_model_env = Some(match &write {
+                crate::topics::SystemLlmJobWrite::Clear => None,
+                crate::topics::SystemLlmJobWrite::ModelOnly(model) => Some(model.clone()),
+                crate::topics::SystemLlmJobWrite::Pair { model, .. } => Some(model.clone()),
+            });
+        }
+        if matches!(
+            &write,
+            crate::topics::SystemLlmJobWrite::Pair { provider, .. }
+                if crate::llm_catalog::is_local_provider(provider) || provider == "local"
+        ) {
+            let mm = state.app_state.llm.local_delegate_config();
+            if mm.tier2_base_url.trim().is_empty() && mm.local_base_url.trim().is_empty() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "Set a local server URL under Settings → Connections before using a local model for {}.",
+                        parsed_job.label()
+                    ),
+                ));
+            }
+        }
+        job_writes.push((parsed_job, write));
+    }
     let stored_source = source.clone();
     let provider_for_env = stored_source.clone();
     let model_for_env = stored_model.clone();
     call_blocking(state.app_state.db.clone(), move |db| {
-        crate::topics::save_system_llm_settings(db, &stored_source, &stored_model)
+        crate::topics::save_system_llm_settings(db, &stored_source, &stored_model)?;
+        for (job, write) in &job_writes {
+            crate::topics::apply_system_llm_job_write(db, *job, write)?;
+        }
+        Ok(())
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    env_config::persist_pairs(&[
+    let mut env_pairs = vec![
         ("SYSTEM_LLM_PROVIDER", Some(provider_for_env.as_str())),
         ("SYSTEM_LLM_MODEL", Some(model_for_env.as_str())),
-    ])
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    ];
+    let hook_env_owned = hook_model_env.clone();
+    if hook_model_env.is_some() {
+        env_pairs.push((
+            "HOOK_PROMPT_MODEL",
+            hook_env_owned.as_ref().and_then(|value| value.as_deref()),
+        ));
+    }
+    env_config::persist_pairs(&env_pairs).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let (choice, saved, provider, strategy_model, local_base_url) =
         read_topics_model(&state.app_state).await?;
+    let jobs = system_llm_job_rows(&state.app_state).await?;
     Ok(Json(topics_model_json(
         &choice,
         saved,
         &provider,
         &strategy_model,
         &local_base_url,
-        Some("System LLM saved. Topic split, bulletin, and learning use it on the next pass."),
+        jobs,
+        Some("System LLM saved. Blank rows use the shared default on the next pass. No restart."),
     )))
 }
 
@@ -8612,74 +8882,85 @@ async fn api_llm_get(
         }
     };
 
-    let (strategy, provider_source, model_source, base_url_source) =
-        if let Some(pid) = query.persona_id {
-            let persona = call_blocking(state.app_state.db.clone(), move |db| db.get_persona(pid))
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            let Some(persona) = persona.filter(|p| p.chat_id == chat_id) else {
-                return Err((StatusCode::NOT_FOUND, "persona not found".into()));
-            };
-            let strategy = state
-                .app_state
-                .llm
-                .resolve_strategy_selection(Some(&persona))
-                .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-            persona_id_out = Some(pid);
-            let (provider_source, model_source, base_url_source) = if strategy.from_persona {
-                model_scope = "persona";
-                let provider_source = if persona
-                    .llm_provider_override
-                    .as_deref()
-                    .map(str::trim)
-                    .is_some_and(|s| !s.is_empty())
-                {
-                    "persona"
-                } else {
-                    source_from_settings(settings_provider)
-                };
-                let model_source = if persona
-                    .model_override
-                    .as_deref()
-                    .map(str::trim)
-                    .is_some_and(|s| !s.is_empty())
-                {
-                    "persona"
-                } else {
-                    source_from_settings(settings_model)
-                };
-                let base_url_source = if persona
-                    .llm_base_url_override
-                    .as_deref()
-                    .map(str::trim)
-                    .is_some_and(|s| !s.is_empty())
-                {
-                    "persona"
-                } else {
-                    source_from_settings(settings_base_url)
-                };
-                (provider_source, model_source, base_url_source)
+    let (strategy, provider_source, model_source, base_url_source) = if let Some(pid) =
+        query.persona_id
+    {
+        let persona = call_blocking(state.app_state.db.clone(), move |db| db.get_persona(pid))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let Some(persona) = persona.filter(|p| p.chat_id == chat_id) else {
+            return Err((StatusCode::NOT_FOUND, "persona not found".into()));
+        };
+        let strategy = state
+            .app_state
+            .llm
+            .resolve_strategy_selection(Some(&persona))
+            .unwrap_or_else(|_| crate::llm::StrategyLlmSelection {
+                provider_id: persona.llm_provider_override.clone().unwrap_or_default(),
+                model: persona.model_override.clone().unwrap_or_default(),
+                base_url: persona.llm_base_url_override.clone(),
+                endpoint: String::new(),
+                client: std::sync::Arc::from(crate::llm::create_provider(&state.app_state.config)),
+                from_persona: true,
+            });
+        persona_id_out = Some(pid);
+        let (provider_source, model_source, base_url_source) = if strategy.from_persona {
+            model_scope = "persona";
+            let provider_source = if persona
+                .llm_provider_override
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|s| !s.is_empty())
+            {
+                "persona"
             } else {
-                (
-                    source_from_settings(settings_provider),
-                    source_from_settings(settings_model),
-                    source_from_settings(settings_base_url),
-                )
+                source_from_settings(settings_provider)
             };
-            (strategy, provider_source, model_source, base_url_source)
+            let model_source = if persona
+                .model_override
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|s| !s.is_empty())
+            {
+                "persona"
+            } else {
+                source_from_settings(settings_model)
+            };
+            let base_url_source = if persona
+                .llm_base_url_override
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|s| !s.is_empty())
+            {
+                "persona"
+            } else {
+                source_from_settings(settings_base_url)
+            };
+            (provider_source, model_source, base_url_source)
         } else {
-            let strategy = state
-                .app_state
-                .llm
-                .resolve_strategy_selection(None)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
             (
-                strategy,
                 source_from_settings(settings_provider),
                 source_from_settings(settings_model),
                 source_from_settings(settings_base_url),
             )
         };
+        (strategy, provider_source, model_source, base_url_source)
+    } else {
+        let strategy = crate::llm::StrategyLlmSelection {
+            provider_id: String::new(),
+            model: String::new(),
+            base_url: None,
+            endpoint: String::new(),
+            client: std::sync::Arc::from(crate::llm::create_provider(&state.app_state.config)),
+            from_persona: false,
+        };
+        (
+            strategy,
+            source_from_settings(settings_provider),
+            source_from_settings(settings_model),
+            source_from_settings(settings_base_url),
+        )
+    };
 
     let provider_id = strategy.provider_id.clone();
     let current_model = strategy.model.clone();
@@ -8853,7 +9134,10 @@ async fn api_llm_patch(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     require_auth(&headers, state.auth_token.as_deref())?;
     let model = body.model.trim().to_string();
-    if model.is_empty() {
+    let thinking_only = body.persona_id.is_none()
+        && model.is_empty()
+        && (body.thinking_enabled.is_some() || body.show_thinking.is_some());
+    if model.is_empty() && !thinking_only {
         return Err((StatusCode::BAD_REQUEST, "model is required".into()));
     }
     if model.len() > 256 {
@@ -8969,62 +9253,18 @@ async fn api_llm_patch(
         })));
     }
 
-    let (provider_saved, model_saved) = state
-        .app_state
-        .llm
-        .apply_selection(provider_id.clone(), model.clone(), local_base_url)
-        .map_err(|e| {
-            if e.contains("No API key") || e.contains("base_url") {
-                (StatusCode::BAD_REQUEST, e)
-            } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, e)
-            }
-        })?;
-
-    let provider_db = provider_saved.clone();
-    let model_db = model_saved.clone();
-    let base_url_db = if crate::llm_catalog::is_local_provider(&provider_saved) {
-        state
-            .app_state
-            .llm
-            .current_base_url()
-            .map(|url| crate::llm_catalog::normalize_local_base_url(&url, &provider_saved))
-    } else {
-        None
-    };
-    let base_url_response = base_url_db.clone();
-    call_blocking(state.app_state.db.clone(), move |db| {
-        db.set_app_setting(crate::llm_catalog::APP_SETTING_LLM_PROVIDER, &provider_db)?;
-        db.set_app_setting(crate::llm_catalog::APP_SETTING_LLM_MODEL, &model_db)?;
-        if let Some(ref url) = base_url_db {
-            db.set_app_setting(crate::llm_catalog::APP_SETTING_LLM_BASE_URL, url)?;
-        } else {
-            db.set_app_setting(crate::llm_catalog::APP_SETTING_LLM_BASE_URL, "")?;
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(Json(json!({
-        "ok": true,
-        "provider": {
-            "id": provider_saved,
-        },
-        "model": model_saved,
-        "base_url": base_url_response,
-        "thinking_enabled": thinking_enabled,
-        "show_thinking": show_thinking,
-        "provider_source": "app_settings",
-        "model_source": "app_settings",
-        "model_scope": "global",
-        "base_url_source": if base_url_response.is_some() {
-            "app_settings"
-        } else {
-            "n/a"
-        },
-        "message": "Provider and model updated. New agent runs use this selection immediately.",
-    })))
+    if thinking_only {
+        return Ok(Json(json!({
+            "ok": true,
+            "thinking_enabled": thinking_enabled,
+            "show_thinking": show_thinking,
+            "message": "Thinking settings saved.",
+        })));
+    }
+    Err((
+        StatusCode::BAD_REQUEST,
+        "Set the chat model on the Persona page.".into(),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -9032,6 +9272,8 @@ struct MultimodelTestRequest {
     tier: String,
     base_url: String,
     model: String,
+    #[serde(default)]
+    persona_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -9216,17 +9458,30 @@ async fn api_multimodel_test_post(
     }
     match crate::llm::test_local_delegate_tools(&test_cfg, model, tier).await {
         Ok(()) => {
-            call_blocking(state.app_state.db.clone(), move |db| {
-                crate::local_delegate::persist_tier_tools_ok(db, tier, true)
-            })
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            if let Ok(cfg) = call_blocking(state.app_state.db.clone(), |db| {
-                crate::local_delegate::load_from_db(db)
-            })
-            .await
-            {
-                let _ = state.app_state.llm.apply_local_delegate_config(cfg);
+            if let Some(pid) = body.persona_id {
+                let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
+                let base_for_db = base_url.clone();
+                let model_for_db = model.to_string();
+                let saved = call_blocking(state.app_state.db.clone(), move |db| {
+                    db.set_persona_local_delegate(
+                        chat_id,
+                        pid,
+                        Some(&base_for_db),
+                        Some(&model_for_db),
+                        Some(true),
+                    )
+                })
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                if !saved {
+                    return Err((StatusCode::NOT_FOUND, "persona not found".into()));
+                }
+            } else {
+                call_blocking(state.app_state.db.clone(), move |db| {
+                    crate::local_delegate::persist_tier_tools_ok(db, tier, true)
+                })
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             }
             Ok(Json(json!({
                 "ok": true,
@@ -10862,6 +11117,10 @@ fn build_router(web_state: WebState) -> Router {
         .route("/api/personas/read", post(api_personas_read))
         .route("/api/personas/switch", post(api_personas_switch))
         .route("/api/personas/create", post(api_personas_create))
+        .route(
+            "/api/personas/local-delegate",
+            get(api_persona_local_get).patch(api_persona_local_patch),
+        )
         .route("/api/personas/delete", post(api_personas_delete))
         .route("/api/personas/rename", post(api_personas_rename))
         .route(

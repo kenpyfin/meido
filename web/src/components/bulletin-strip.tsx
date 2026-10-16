@@ -16,7 +16,7 @@ export type BulletinStripProps = {
 }
 
 function bulletinFullText(focus: PersonaBulletinFocus | null): string {
-  if (!focus) return 'No bulletin focus yet.'
+  if (!focus) return 'No active briefing on the tray yet.'
   return `${focus.title ? `${focus.title}\n` : ''}${focus.content}`
 }
 
@@ -40,12 +40,12 @@ export const BulletinStrip = React.memo(function BulletinStrip({
   }, [])
 
   const fullText = bulletinFullText(bulletinFocus)
-  const title = bulletinFocus?.title?.trim() || (bulletinFocus ? 'Bulletin' : 'No bulletin focus yet.')
+  const title = bulletinFocus?.title?.trim() || (bulletinFocus ? 'Household bulletin' : 'No active briefing on the tray yet.')
   const body = bulletinFocus?.content?.trim() ?? ''
   const collapsedPreview =
     body.length > COLLAPSED_PREVIEW_CHARS
       ? `${body.slice(0, COLLAPSED_PREVIEW_CHARS).trim()}…`
-      : body || (bulletinFocus ? '' : 'Focus updates after each run.')
+      : body || (bulletinFocus ? '' : 'The service ledger fills in after each run.')
   const needsTruncate = fullText.length > COLLAPSED_PREVIEW_CHARS || body.length > COLLAPSED_PREVIEW_CHARS
 
   const openMobileSheet = useCallback(() => {
@@ -62,7 +62,7 @@ export const BulletinStrip = React.memo(function BulletinStrip({
 
   return (
     <>
-      <div className="mc-bulletin-strip" data-expanded={desktopExpanded && !isMobile ? 'true' : 'false'}>
+      <div className="mc-bulletin-strip mc-katyusha-lace" data-expanded={desktopExpanded && !isMobile ? 'true' : 'false'}>
         <button
           type="button"
           className="mc-bulletin-strip-main"
@@ -79,8 +79,9 @@ export const BulletinStrip = React.memo(function BulletinStrip({
           aria-expanded={isMobile ? sheetOpen : desktopExpanded}
         >
           <div className="mc-bulletin-strip-head">
+            <span className="mc-bulletin-mark" aria-hidden />
             <span className="mc-bulletin-strip-label text-xs font-medium">
-              Bulletin
+              Service briefing
             </span>
             <span className="mc-bulletin-strip-title">{title}</span>
             {!isMobile && needsTruncate ? (
@@ -125,7 +126,7 @@ export const BulletinStrip = React.memo(function BulletinStrip({
         <MobileSheet
           open={sheetOpen}
           onOpenChange={setSheetOpen}
-          title="Bulletin"
+          title="Service briefing"
           description="Current persona focus for this session."
         >
           <div className="mc-bulletin-sheet-body whitespace-pre-wrap text-sm leading-relaxed text-[color:var(--mc-text-primary)]">

@@ -19,18 +19,6 @@ const SettingsConnectionsPanel = React.lazy(() =>
 const SettingsTopicsModelPanel = React.lazy(() =>
   import('../../components/settings-topics-model').then((m) => ({ default: m.SettingsTopicsModelPanel })),
 )
-const SettingsLlmPanel = React.lazy(() =>
-  import('../../components/settings-llm').then((m) => ({ default: m.SettingsLlmPanel })),
-)
-const SettingsLocalDelegatePanel = React.lazy(() =>
-  import('../../components/settings-local-delegate').then((m) => ({ default: m.SettingsLocalDelegatePanel })),
-)
-const SettingsCursorPanel = React.lazy(() =>
-  import('../../components/settings-cursor').then((m) => ({ default: m.SettingsCursorPanel })),
-)
-const SettingsGeminiAdkPanel = React.lazy(() =>
-  import('../../components/settings-gemini-adk').then((m) => ({ default: m.SettingsGeminiAdkPanel })),
-)
 const SettingsEnvironmentPanel = React.lazy(() =>
   import('../../components/settings-environment').then((m) => ({ default: m.SettingsEnvironmentPanel })),
 )
@@ -67,7 +55,6 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
           <TabsList className="mc-settings-tabs-sticky mb-3 h-auto flex-wrap">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="environment">Environment</TabsTrigger>
-            <TabsTrigger value="engine">Engine</TabsTrigger>
             <TabsTrigger value="system-llm">System LLM</TabsTrigger>
             <TabsTrigger value="connections">Connections</TabsTrigger>
             <TabsTrigger value="integrations">Integrations</TabsTrigger>
@@ -95,12 +82,6 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
                     Cursor engine:{' '}
                     {installationStatus.cursor_engine_ready ? 'ready' : 'not ready'}
                   </span>
-                  {installationStatus.agent_engine === 'classic_cost_routing' ? (
-                    <span>
-                      Local delegate:{' '}
-                      {installationStatus.local_delegate_ready ? 'verified' : 'not verified'}
-                    </span>
-                  ) : null}
                   {installationStatus.needs_initialization ? (
                     <span>Setup wizard: open</span>
                   ) : null}
@@ -146,23 +127,6 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
                 Runtime toggles
               </span>
               <SettingsRuntimePanel api={api} onError={setSettingsError} />
-            </div>
-          </TabsContent>
-          <TabsContent value="engine">
-            <div className="flex flex-col gap-4">
-              <span>
-                Defaults shared by every persona. Choose a persona’s engine, model override, Cursor
-                model, and Gemini topology on the Persona page.
-              </span>
-              <SettingsLlmPanel api={api} onError={setSettingsError} />
-              <SettingsLocalDelegatePanel api={api} onError={setSettingsError} />
-              <SettingsCursorPanel api={api} onError={setSettingsError} scope="shared" />
-              <SettingsGeminiAdkPanel
-                api={api}
-                onError={setSettingsError}
-                activePersonaId={null}
-                scope="engine"
-              />
             </div>
           </TabsContent>
           <TabsContent value="system-llm">

@@ -1568,7 +1568,7 @@ impl Config {
         crate::channel_integration_config::merge_into_config(self, db)
     }
 
-    /// Apply Web UI `LLM_PROVIDER` / `LLM_MODEL` / local `LLM_BASE_URL` from `app_settings`.
+    /// Apply process-wide thinking toggles. The chat model lives on the persona.
     pub fn merge_llm_selection_from_app_settings(
         &mut self,
         db: &crate::db::Database,
@@ -1578,152 +1578,12 @@ impl Config {
             .into_iter()
             .map(|s| (s.key, s.value))
             .collect();
-        let mut had_provider_setting = false;
-        let mut had_model_setting = false;
-        let mut had_base_url_setting = false;
-        for (key, value) in &settings {
-            if key.eq_ignore_ascii_case(crate::llm_catalog::APP_SETTING_LLM_PROVIDER) {
-                let v = value.trim();
-                if !v.is_empty() {
-                    self.llm_provider = crate::llm_catalog::resolve_catalog_provider_id(v);
-                    had_provider_setting = true;
-                }
-            }
-        }
-        for (key, value) in &settings {
-            if key.eq_ignore_ascii_case(crate::llm_catalog::APP_SETTING_LLM_MODEL) {
-                let v = value.trim();
-                if !v.is_empty() {
-                    self.model = v.to_string();
-                    had_model_setting = true;
-                }
-                break;
-            }
-        }
-
         for (key, value) in &settings {
             if key.eq_ignore_ascii_case(crate::llm_catalog::APP_SETTING_LLM_THINKING_ENABLED) {
                 self.llm_thinking_enabled = parse_bool_setting(value);
             }
             if key.eq_ignore_ascii_case(crate::llm_catalog::APP_SETTING_SHOW_THINKING) {
                 self.show_thinking = parse_bool_setting(value);
-            }
-        }
-
-        let mut persist_defaults = false;
-        let env_provider = Self::env("LLM_PROVIDER")
-            .map(|value| crate::llm_catalog::resolve_catalog_provider_id(value.trim()))
-            .filter(|value| !value.is_empty());
-        let env_model = Self::env("LLM_MODEL").filter(|value| !value.trim().is_empty());
-        let provider_ready = |provider: &str, cfg: &Self| {
-            !provider.trim().is_empty()
-                && (crate::llm_catalog::is_local_provider(provider)
-                    || !crate::llm_catalog::resolve_api_key_for_provider_with_config(
-                        provider,
-                        Some(cfg),
-                    )
-                    .is_empty())
-        };
-        // The installer writes LLM_PROVIDER. It replaces a saved provider that has no key.
-        if let Some(env_provider) = env_provider {
-            if !provider_ready(&self.llm_provider, self) {
-                if self.llm_provider != env_provider {
-                    tracing::info!(
-                        "LLM provider {} is not usable; using {} from LLM_PROVIDER.",
-                        if self.llm_provider.is_empty() {
-                            "(none)"
-                        } else {
-                            self.llm_provider.as_str()
-                        },
-                        env_provider
-                    );
-                }
-                self.llm_provider = env_provider;
-                self.model = env_model.clone().unwrap_or_default();
-                had_provider_setting = false;
-                had_model_setting = env_model.is_some();
-                persist_defaults = true;
-            }
-        }
-        if !self.llm_provider.is_empty() && !provider_ready(&self.llm_provider, self) {
-            if let Some(provider) = crate::llm_catalog::first_cloud_provider_with_api_key() {
-                tracing::info!(
-                    "LLM provider {} has no API key; using {}.",
-                    self.llm_provider,
-                    provider
-                );
-                self.llm_provider = provider.to_string();
-                self.model.clear();
-                had_provider_setting = false;
-                had_model_setting = false;
-                persist_defaults = true;
-            } else {
-                tracing::info!(
-                    "LLM provider {} has no API key; leaving the provider unset.",
-                    self.llm_provider
-                );
-                self.llm_provider.clear();
-                self.model.clear();
-                had_provider_setting = false;
-                had_model_setting = false;
-                persist_defaults = true;
-            }
-        }
-        if self.llm_provider.is_empty() {
-            if let Some(p) = crate::llm_catalog::first_cloud_provider_with_api_key() {
-                self.llm_provider = p.to_string();
-                persist_defaults = true;
-            }
-        }
-        let provider_selected = !self.llm_provider.trim().is_empty();
-        if provider_selected && self.model.is_empty() {
-            self.model = crate::llm_catalog::default_model_for_provider(&self.llm_provider).into();
-            persist_defaults = true;
-        }
-
-        self.sync_active_llm_provider_from_env()?;
-
-        if crate::llm_catalog::is_local_provider(&self.llm_provider) {
-            if let Some(url) =
-                crate::llm_catalog::local_base_url_from_app_settings(&settings, &self.llm_provider)
-            {
-                self.llm_base_url = Some(url);
-                had_base_url_setting = true;
-            } else {
-                let url = crate::llm_catalog::effective_local_base_url(&self.llm_provider, None);
-                self.llm_base_url = Some(url.clone());
-                persist_defaults = true;
-            }
-        }
-
-        if provider_selected
-            && !crate::llm_catalog::is_local_provider(&self.llm_provider)
-            && crate::llm_catalog::resolve_api_key_for_provider_with_config(
-                &self.llm_provider,
-                Some(self),
-            )
-            .is_empty()
-        {
-            let hints =
-                crate::llm_catalog::provider_api_key_env_hints(&self.llm_provider).join(", ");
-            tracing::warn!(
-                "No API key in .env for LLM provider {}. Set one of: {hints}. The web UI still starts; add a key under Settings → Connections or switch to the Cursor engine.",
-                self.llm_provider
-            );
-        }
-
-        if provider_selected && (persist_defaults || !had_provider_setting || !had_model_setting) {
-            db.set_app_setting(
-                crate::llm_catalog::APP_SETTING_LLM_PROVIDER,
-                &self.llm_provider,
-            )?;
-            db.set_app_setting(crate::llm_catalog::APP_SETTING_LLM_MODEL, &self.model)?;
-        }
-        if crate::llm_catalog::is_local_provider(&self.llm_provider)
-            && (persist_defaults || !had_base_url_setting)
-        {
-            if let Some(ref url) = self.llm_base_url {
-                db.set_app_setting(crate::llm_catalog::APP_SETTING_LLM_BASE_URL, url)?;
             }
         }
         Ok(())

@@ -298,18 +298,12 @@ export function SettingsLlmPanel({
   return (
     <div className="flex flex-col gap-3">
       <span>
-        Add provider keys under Settings → Connections. Provider and model are saved for{' '}
-        {activePersonaId != null && activePersonaId > 0 ? (
-          <>
-            this persona
-            {llm.model_scope === 'persona' ? ' (persona override active)' : ' (inherits global until saved)'}
-          </>
-        ) : (
-          <>all personas that have not set an override</>
-        )}
-        . Model lists load live from the provider API; curated cost hints are shown when the id
-        matches.
-        {includeThinking ? ' Thinking toggles stay shared across personas.' : ' Thinking toggles are in Settings → Engine.'}
+        Add provider keys under Settings → Connections. Provider and model are saved on this
+        persona. A missing model stops the turn. Model lists load live from the provider API;
+        curated cost hints are shown when the id matches.
+        {includeThinking
+          ? ' Thinking toggles stay shared across personas.'
+          : ' Thinking toggles are on Settings → System LLM.'}
       </span>
 
       <div className="flex flex-col gap-2">
@@ -514,16 +508,14 @@ export function SettingsLlmPanel({
             {llm.provider?.label ?? llm.provider?.id} / {llm.model}
             {llm.is_local_provider && llm.base_url ? ` @ ${llm.base_url}` : ''}
           </span>
-          {llm.model_scope === 'persona' || llm.provider_source === 'persona'
-            ? ' (saved for this persona)'
-            : llm.provider_source === 'app_settings' && llm.model_source === 'app_settings'
-              ? ' (saved in app)'
-              : ' (auto-selected - save to confirm)'}
+          {llm.model?.trim()
+            ? ' (saved on this persona)'
+            : ' (set a model before the next turn)'}
         </span>
       </div>
 
       {saveNotice ? (
-        <div role="status" className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-900 dark:text-green-100">{saveNotice}</div>
+        <span className="text-xs text-muted-foreground" role="status">{saveNotice}</span>
       ) : null}
     </div>
   )

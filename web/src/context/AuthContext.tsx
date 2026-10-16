@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { AUTH_REQUIRED_EVENT, sanitizeHttpHeaderValue, setStoredAuthToken } from '../api/client'
+import { IconMeidoCrest } from '../components/icons'
 
 type AuthContextValue = {
   authRequired: boolean
@@ -75,9 +76,12 @@ export function AuthDialog() {
     <Dialog open={authRequired} onOpenChange={(open) => !open && setAuthRequired(false)}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>API token required</DialogTitle>
+          <div className="mc-crest-medallion mx-auto" aria-hidden>
+            <IconMeidoCrest className="size-8" />
+          </div>
+          <DialogTitle className="mc-display-title text-2xl">The parlor gate</DialogTitle>
           <DialogDescription>
-            This server requires an API token. Use the same value as <code>WEB_AUTH_TOKEN</code> in
+            This house asks for a token before entry. Use the same value as <code>WEB_AUTH_TOKEN</code> in
             your .env.
           </DialogDescription>
         </DialogHeader>

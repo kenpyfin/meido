@@ -325,13 +325,41 @@ pub async fn execute_command_hook(
     }
 }
 
+/// Model chosen on Settings → System LLM for prompt hooks.
+/// `provider_id` empty means the model stays on the process provider.
+#[derive(Debug, Clone)]
+pub struct PagePromptModel {
+    pub provider_id: Option<String>,
+    pub model: String,
+    pub base_url: Option<String>,
+}
+
 pub async fn execute_prompt_hook(
     config: &Config,
     env_redactor: &EnvSecretRedactor,
     payload: &HookPromptPayload,
     hook_input_json: &str,
+    page_model: Option<&PagePromptModel>,
 ) -> Result<HookOutput, FinallyAValueBotError> {
     let mut llm_config = config.clone();
+    if let Some(page) = page_model {
+        if let Some(provider_id) = page
+            .provider_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            llm_config.apply_llm_provider_switch(
+                provider_id,
+                page.model.trim(),
+                page.base_url.as_deref(),
+            );
+        } else if !page.model.trim().is_empty() {
+            llm_config.model = page.model.trim().to_string();
+        }
+    } else if !config.hook_prompt_model.trim().is_empty() {
+        llm_config.model = config.hook_prompt_model.trim().to_string();
+    }
     if let Some(model) = payload
         .model
         .as_deref()
@@ -339,8 +367,6 @@ pub async fn execute_prompt_hook(
         .filter(|s| !s.is_empty())
     {
         llm_config.model = model.to_string();
-    } else if !config.hook_prompt_model.trim().is_empty() {
-        llm_config.model = config.hook_prompt_model.trim().to_string();
     }
 
     let timeout_secs = payload

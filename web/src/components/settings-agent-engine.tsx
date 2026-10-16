@@ -1,4 +1,7 @@
 import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { asEngineId, engineLabel, ENGINE_OPTIONS, type EngineId } from '../lib/agent-engine'
 import { SettingsPanelSkeleton } from './skeleton'
 import { SettingsLlmPanel } from './settings-llm'
@@ -12,6 +15,58 @@ import type {
   PersonaAgentEngineInfo,
   RuntimeConfigResponse,
 } from '../types'
+
+type Api = <T>(path: string, init?: RequestInit) => Promise<T>
+
+async function missingModelNotice(
+  api: Api,
+  personaId: number | null,
+  engine: EngineId,
+): Promise<string | null> {
+  if (personaId == null) return null
+  if (engine === 'classic' || engine === 'classic_cost_routing') {
+    const llm = await api<{
+      model?: string
+      provider?: { id?: string }
+      base_url?: string | null
+    }>(`/api/llm?persona_id=${personaId}`)
+    const provider = llm.provider?.id?.trim() ?? ''
+    const model = llm.model?.trim() ?? ''
+    if (!provider || !model) {
+      return 'Set this persona’s provider and model below before the next turn.'
+    }
+    const local = provider === 'ollama' || provider === 'llama' || provider === 'llamacpp'
+    if (local && !llm.base_url?.trim()) {
+      return 'Set this persona’s server URL below before the next turn.'
+    }
+    if (engine === 'classic_cost_routing') {
+      const delegate = await api<{ base_url?: string; model?: string; tools_ok?: boolean }>(
+        `/api/personas/local-delegate?persona_id=${personaId}`,
+      )
+      if (!delegate.base_url?.trim() || !delegate.model?.trim() || delegate.tools_ok !== true) {
+        return 'Set this persona’s local URL, model, and tool-call check below before the next turn.'
+      }
+    }
+    return null
+  }
+  if (engine === 'cursor') {
+    const cursor = await api<{ sdk_model?: string }>(`/api/cursor-engine?persona_id=${personaId}`)
+    if (!cursor.sdk_model?.trim()) {
+      return 'Set this persona’s Cursor model below before the next turn.'
+    }
+    return null
+  }
+  if (engine === 'gemini_adk') {
+    const topo = await api<{ profile?: { default_model?: string } | null }>(
+      `/api/gemini-adk/topology?persona_id=${personaId}`,
+    )
+    if (!topo.profile?.default_model?.trim()) {
+      return 'Set this persona’s Gemini default model below before the next turn.'
+    }
+    return null
+  }
+  return null
+}
 
 type Props = {
   api: <T>(path: string, init?: RequestInit) => Promise<T>
@@ -31,9 +86,9 @@ class ConfigPanelErrorBoundary extends Component<{ children: ReactNode }, { mess
   render() {
     if (this.state.message) {
       return (
-        <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100">
+        <div role="status" className="mc-notice-owed">
             Engine knobs failed to render ({this.state.message}). The engine selection above is
-            unchanged — pick another engine or reload Settings.
+            unchanged. Pick another engine or reload the Persona page.
           </div>
       )
     }
@@ -55,6 +110,7 @@ export function SettingsAgentEnginePanel({
   const [loading, setLoading] = useState(true)
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
+  const [modelGap, setModelGap] = useState<string | null>(null)
   const loadOnceRef = useRef(false)
 
   const activePersona = personas.find((p) => p.id === activePersonaId) ?? null
@@ -127,6 +183,11 @@ export function SettingsAgentEnginePanel({
         } else {
           setGeminiStatus(null)
         }
+        try {
+          setModelGap(await missingModelNotice(api, activePersonaId, effective))
+        } catch {
+          setModelGap(null)
+        }
       } catch (e) {
         onError(e instanceof Error ? e.message : String(e))
         if (!opts?.silent) {
@@ -179,18 +240,20 @@ export function SettingsAgentEnginePanel({
     }
   }
 
-  if (loading) {
-    return <SettingsPanelSkeleton />
-  }
-
   const selectedEngine = asEngineId(
     personaEngine?.override ?? personaEngine?.effective ?? runtime?.agent_engine,
   )
-  const costRoutingSelected = selectedEngine === 'classic_cost_routing'
-  const localConfigured = runtime?.local_delegate_configured === true
-  const toolsOk = runtime?.local_delegate_tools_ok === true
-  const localReady = runtime?.local_delegate_ready === true
   const busy = savingKey != null
+
+  const refreshModelGap = useCallback(() => {
+    void missingModelNotice(api, activePersonaId, selectedEngine)
+      .then(setModelGap)
+      .catch(() => setModelGap(null))
+  }, [activePersonaId, api, selectedEngine])
+
+  if (loading) {
+    return <SettingsPanelSkeleton />
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -238,21 +301,15 @@ export function SettingsAgentEnginePanel({
         </div>
 
         {saveNotice ? (
-          <div role="status" className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-900 dark:text-green-100">{saveNotice}</div>
+          <span className="text-xs text-muted-foreground" role="status">{saveNotice}</span>
         ) : null}
 
-        {costRoutingSelected && !localReady ? (
-          <div role="alert" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100">
-              {!localConfigured
-                ? 'Cost routing is selected but no local URL/model is configured. Runs use the cloud model only until you configure Local delegate below.'
-                : !toolsOk
-                  ? 'Cost routing is selected but local tool calling is not verified. Runs use the cloud model only until you run Test in Local delegate.'
-                  : 'Cost routing is selected but the local delegate is not ready. Runs use the cloud model only.'}
-            </div>
+        {modelGap ? (
+          <div role="status" className="mc-notice-owed">{modelGap}</div>
         ) : null}
 
         {selectedEngine === 'cursor' && cursorStatus && !cursorStatus.engine_ready ? (
-          <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100">
+          <div role="status" className="mc-notice-owed">
               Cursor engine is active but not ready ({cursorStatus.sidecar_reachable ? 'sidecar up' : 'sidecar down'}
               , API key {cursorStatus.api_key_configured ? 'ok' : 'missing'}, health{' '}
               {cursorStatus.sdk_runner_ok ? 'verified' : 'not verified'}). Finish setup in the Cursor
@@ -261,7 +318,7 @@ export function SettingsAgentEnginePanel({
         ) : null}
 
         {selectedEngine === 'gemini_adk' && geminiStatus && !geminiStatus.engine_ready ? (
-          <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100">
+          <div role="status" className="mc-notice-owed">
               Gemini ADK is active but not ready (API key{' '}
               {geminiStatus.api_key_configured ? 'ok' : 'missing'}). Add the Gemini key under
               Settings → Connections, then finish setup in the Gemini ADK panel below.
@@ -276,6 +333,7 @@ export function SettingsAgentEnginePanel({
             onError={onError}
             activePersonaId={activePersonaId}
             includeThinking={false}
+            onSaved={refreshModelGap}
           />
         ) : null}
         {selectedEngine === 'classic_cost_routing' ? (
@@ -285,19 +343,27 @@ export function SettingsAgentEnginePanel({
               onError={onError}
               activePersonaId={activePersonaId}
               includeThinking={false}
+              onSaved={refreshModelGap}
             />
-            <span>
-              The local delegate used by cost routing is in Settings → Engine.
-            </span>
+            <PersonaLocalDelegate
+              api={api}
+              onError={onError}
+              personaId={activePersonaId}
+              onSaved={refreshModelGap}
+            />
           </div>
         ) : null}
         {selectedEngine === 'cursor' ? (
-          <SettingsCursorPanel
-            api={api}
-            onError={onError}
-            activePersonaId={activePersonaId}
-            scope="model"
-          />
+          <div className="flex flex-col gap-3">
+            <SettingsCursorPanel
+              api={api}
+              onError={onError}
+              activePersonaId={activePersonaId}
+              scope="model"
+              onSaved={refreshModelGap}
+            />
+            <AdvancedCursorDialog api={api} onError={onError} />
+          </div>
         ) : null}
         {selectedEngine === 'gemini_adk' ? (
           <SettingsGeminiAdkPanel
@@ -305,9 +371,140 @@ export function SettingsAgentEnginePanel({
             onError={onError}
             activePersonaId={activePersonaId}
             scope="topology"
+            onSaved={refreshModelGap}
           />
         ) : null}
       </ConfigPanelErrorBoundary>
     </div>
+  )
+}
+
+function PersonaLocalDelegate({
+  api,
+  onError,
+  personaId,
+  onSaved,
+}: {
+  api: <T>(path: string, init?: RequestInit) => Promise<T>
+  onError: (message: string) => void
+  personaId: number | null
+  onSaved?: () => void
+}) {
+  const [baseUrl, setBaseUrl] = useState('')
+  const [model, setModel] = useState('')
+  const [toolsOk, setToolsOk] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    if (personaId == null) return
+    try {
+      const data = await api<{ base_url?: string; model?: string; tools_ok?: boolean }>(
+        `/api/personas/local-delegate?persona_id=${personaId}`,
+      )
+      setBaseUrl(data.base_url ?? '')
+      setModel(data.model ?? '')
+      setToolsOk(data.tools_ok === true)
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e))
+    }
+  }, [api, onError, personaId])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  async function save() {
+    if (personaId == null) return
+    setBusy(true)
+    setNotice(null)
+    try {
+      const data = await api<{ message?: string; tools_ok?: boolean }>('/api/personas/local-delegate', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ persona_id: personaId, base_url: baseUrl.trim(), model: model.trim() }),
+      })
+      setToolsOk(data.tools_ok === true)
+      setNotice(data.message ?? 'Saved.')
+      onSaved?.()
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function test() {
+    if (personaId == null) return
+    setBusy(true)
+    setNotice(null)
+    try {
+      const data = await api<{ message?: string; tools_ok?: boolean }>('/api/multimodel/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tier: 'local',
+          base_url: baseUrl.trim(),
+          model: model.trim(),
+          persona_id: personaId,
+        }),
+      })
+      setToolsOk(data.tools_ok === true)
+      setNotice(data.message ?? 'Tool calling verified.')
+      onSaved?.()
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e))
+      setToolsOk(false)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const ready = baseUrl.trim().length > 0 && model.trim().length > 0 && toolsOk
+  return (
+    <div className="flex flex-col gap-2 rounded-md border p-3" style={{ borderColor: 'var(--mc-border-soft)' }}>
+      <span className="font-medium">Local delegate</span>
+      <span className="text-xs text-muted-foreground">
+        This persona’s local server. The turn stops until the URL, model, and tool-call check are set.
+        {ready ? ' Tool calling is verified.' : ' Run Test after saving.'}
+      </span>
+      <Input value={baseUrl} placeholder="http://127.0.0.1:8080/v1" aria-label="Local server URL" onChange={(e) => setBaseUrl(e.target.value)} />
+      <Input value={model} placeholder="Model id" aria-label="Local model" onChange={(e) => setModel(e.target.value)} />
+      <div className="flex gap-2">
+        <Button type="button" size="sm" disabled={busy || personaId == null} onClick={() => void save()}>
+          {busy ? 'Saving…' : 'Save local delegate'}
+        </Button>
+        <Button type="button" size="sm" variant="outline" disabled={busy || personaId == null} onClick={() => void test()}>
+          Test tool calling
+        </Button>
+      </div>
+      {notice ? <span className="text-xs text-muted-foreground" role="status">{notice}</span> : null}
+    </div>
+  )
+}
+
+function AdvancedCursorDialog({
+  api,
+  onError,
+}: {
+  api: <T>(path: string, init?: RequestInit) => Promise<T>
+  onError: (message: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>
+        Advanced Cursor Configuration
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-[720px]">
+          <DialogTitle>Advanced Cursor Configuration</DialogTitle>
+          <DialogDescription>
+            Shared sidecar, CLI, and timeouts. The model this persona runs is saved above. Close does not save.
+          </DialogDescription>
+          <SettingsCursorPanel api={api} onError={onError} scope="shared" />
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }

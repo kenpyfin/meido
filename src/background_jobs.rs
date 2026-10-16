@@ -18,8 +18,6 @@ use crate::db::call_blocking;
 use crate::job_heartbeat::{
     signal_from_agent_event, spawn_shared_heartbeat, HeartbeatSignal, JobType,
 };
-use crate::llm::LlmProvider;
-
 type JobCancel = Arc<AtomicBool>;
 type JobRegistryValue = (i64, JobCancel);
 type JobRegistry = HashMap<String, JobRegistryValue>;
@@ -386,15 +384,23 @@ pub fn spawn_background_job(
             )
         };
 
-        let final_result = state
-            .llm
-            .send_message(
+        let wrap_choice = crate::topics::system_llm_direct(
+            crate::topics::load_job_choice(&state, crate::topics::SystemLlmJob::BackgroundWrapup)
+                .await,
+        );
+        let final_result = match wrap_choice {
+            Some((provider_id, model, base)) => crate::topics::send_direct_llm(
+                &state,
+                &provider_id,
+                &model,
+                base.as_deref(),
                 "You are a concise assistant writing final user-facing replies.",
                 vec![Message {
                     role: "user".into(),
                     content: MessageContent::Text(format_prompt),
                 }],
                 None,
+                crate::llm::LlmSendOptions::default(),
             )
             .await
             .map(|resp| {
@@ -406,7 +412,12 @@ pub fn spawn_background_job(
                     })
                     .collect::<Vec<_>>()
                     .join("")
-            });
+            }),
+            None => Err(
+                "System LLM is not configured. Set a provider and model under Settings → System LLM."
+                    .into(),
+            ),
+        };
 
         match final_result {
             Ok(final_text) => {

@@ -697,7 +697,7 @@ const ComposerInput = forwardRef<
   React.ComponentProps<typeof ComposerPrimitive.Input>
 >((props, ref) => {
   const {
-    strings: { composer: { input: { placeholder = 'Write a message...' } = {} } = {} } = {},
+    strings: { composer: { input: { placeholder = 'Give your instructions, or press / to summon…' } = {} } = {} } = {},
   } = useThreadConfig()
   return <ComposerInputStyled placeholder={placeholder} {...props} ref={ref} />
 })

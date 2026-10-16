@@ -53,8 +53,31 @@ pub(super) async fn load_env(state: &WebState) -> Result<LoadedEnv, ApiError> {
                 .get("SYSTEM_LLM_MODEL")
                 .cloned()
                 .unwrap_or_default();
+            let chat_id = state.app_state.config.operator_inbox_chat_id();
             let _ = call_blocking(state.app_state.db.clone(), move |db| {
-                crate::topics::save_system_llm_settings(db, &provider, &model)
+                crate::topics::save_system_llm_settings(db, &provider, &model)?;
+                if !provider.trim().is_empty() && !model.trim().is_empty() {
+                    let personas = db.list_personas(chat_id)?;
+                    if let Some(persona) = personas.iter().find(|item| item.name == "default") {
+                        let missing = persona
+                            .model_override
+                            .as_deref()
+                            .map(str::trim)
+                            .unwrap_or("")
+                            .is_empty();
+                        if missing {
+                            db.set_persona_engine_override(chat_id, persona.id, Some("classic"))?;
+                            db.set_persona_llm_selection(
+                                chat_id,
+                                persona.id,
+                                Some(provider.as_str()),
+                                Some(model.as_str()),
+                                None,
+                            )?;
+                        }
+                    }
+                }
+                Ok(())
             })
             .await;
         }

@@ -95,6 +95,10 @@ type Appearance = 'dark' | 'light'
 
 type PendingRun = { runId: string; personaId: number }
 type UiTheme =
+  | 'meido'
+  | 'sakura'
+  | 'matcha'
+  | 'royal'
   | 'linear'
   | 'green'
   | 'blue'
@@ -109,6 +113,10 @@ type UiTheme =
 
 
 const UI_THEME_OPTIONS: { key: UiTheme; label: string; color: string }[] = [
+  { key: 'meido', label: 'Kuro-Meido', color: '#d94f70' },
+  { key: 'sakura', label: 'Sakura Cafe', color: '#f472b6' },
+  { key: 'matcha', label: 'Matcha Parlor', color: '#4ade80' },
+  { key: 'royal', label: 'Victorian Parlour', color: '#7aa2f7' },
   { key: 'linear', label: 'Linear', color: '#5e6ad2' },
   { key: 'green', label: 'Green', color: '#34d399' },
   { key: 'blue', label: 'Blue', color: '#60a5fa' },
@@ -133,7 +141,7 @@ function saveAppearance(value: Appearance): void {
 
 function readUiTheme(): UiTheme {
   const saved = localStorage.getItem('meido_ui_theme') as UiTheme | null
-  return UI_THEME_OPTIONS.some((t) => t.key === saved) ? (saved as UiTheme) : 'linear'
+  return UI_THEME_OPTIONS.some((t) => t.key === saved) ? (saved as UiTheme) : 'meido'
 }
 
 function saveUiTheme(value: UiTheme): void {

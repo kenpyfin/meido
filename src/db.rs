@@ -104,7 +104,7 @@ const MAIN_CHAT_MESSAGE_VISIBILITY: &str = "(
     )
 )";
 
-const PERSONA_SELECT_COLS: &str = "id, chat_id, name, model_override, recent_history_min_user, recent_history_min_assistant, operator_memo, dense_delivery_enabled, dense_delivery_messaging_max_chars, dense_delivery_web_max_chars, dense_delivery_summary_chars, agent_engine_override, gemini_adk_topology, cursor_sdk_model, cursor_sdk_model_params, llm_provider_override, llm_base_url_override";
+const PERSONA_SELECT_COLS: &str = "id, chat_id, name, model_override, recent_history_min_user, recent_history_min_assistant, operator_memo, dense_delivery_enabled, dense_delivery_messaging_max_chars, dense_delivery_web_max_chars, dense_delivery_summary_chars, agent_engine_override, gemini_adk_topology, cursor_sdk_model, cursor_sdk_model_params, llm_provider_override, llm_base_url_override, local_delegate_base_url, local_delegate_model, local_delegate_tools_ok";
 
 fn persona_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Persona> {
     Ok(Persona {
@@ -125,6 +125,9 @@ fn persona_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Persona> {
         cursor_sdk_model_params: row.get(14)?,
         llm_provider_override: row.get(15)?,
         llm_base_url_override: row.get(16)?,
+        local_delegate_base_url: row.get(17)?,
+        local_delegate_model: row.get(18)?,
+        local_delegate_tools_ok: row.get::<_, Option<i64>>(19)?.map(|value| value != 0),
     })
 }
 
@@ -193,16 +196,22 @@ pub struct Persona {
     /// Per-persona agent engine (`classic` / `classic_cost_routing` / `cursor` / `gemini_adk`).
     /// New personas default to `classic`. NULL/empty falls back to Classic (no inherit UI).
     pub agent_engine_override: Option<String>,
-    /// Optional per-persona Gemini ADK topology JSON. NULL inherits global `GEMINI_ADK_TOPOLOGY_CONFIG`.
+    /// Gemini ADK topology JSON for this persona. Empty stops a Gemini turn.
     pub gemini_adk_topology: Option<String>,
-    /// Per-persona Cursor SDK model id. NULL falls back to global `CURSOR_SDK_MODEL`.
+    /// Cursor SDK model id for this persona. Empty stops a Cursor turn.
     pub cursor_sdk_model: Option<String>,
     /// Per-persona Cursor SDK model params JSON array. NULL falls back to global params.
     pub cursor_sdk_model_params: Option<String>,
-    /// Per-persona classic strategy LLM provider id. NULL falls back to global `LLM_PROVIDER`.
+    /// Classic or cost-routing chat provider. Empty stops the turn.
     pub llm_provider_override: Option<String>,
-    /// Per-persona local OpenAI-compatible base URL. NULL falls back to global `LLM_BASE_URL`.
+    /// Local OpenAI-compatible base URL for this persona's chat provider.
     pub llm_base_url_override: Option<String>,
+    /// Cost-routing local server URL. Empty stops a cost-routing turn.
+    pub local_delegate_base_url: Option<String>,
+    /// Cost-routing local model. Empty stops a cost-routing turn.
+    pub local_delegate_model: Option<String>,
+    /// Cost-routing tool-call check. `None` or false stops a cost-routing turn.
+    pub local_delegate_tools_ok: Option<bool>,
 }
 
 /// Maximum `operator_memo` length (characters) for storage and prompt injection.
@@ -1188,6 +1197,7 @@ impl Database {
         Self::migrate_gemini_adk_and_retire_deterministic(&conn)?;
         Self::migrate_persona_explicit_engine_and_cursor_model(&conn)?;
         Self::migrate_persona_llm_selection(&conn)?;
+        Self::migrate_persona_owned_chat_llm(&conn)?;
         Self::migrate_hook_policy_schema(&conn)?;
         Self::ensure_builtin_hook_definitions(&conn)?;
         Self::migrate_chat_sessions_schema(&conn)?;
@@ -2029,6 +2039,263 @@ impl Database {
                 [],
             )?;
         }
+        Ok(())
+    }
+
+    /// Copy the process chat pair onto personas and System LLM, then delete it.
+    ///
+    /// A row that is still incomplete stays incomplete. This does not invent a model.
+    fn migrate_persona_owned_chat_llm(conn: &Connection) -> Result<(), FinallyAValueBotError> {
+        if !Self::column_exists(conn, "personas", "local_delegate_base_url")? {
+            conn.execute(
+                "ALTER TABLE personas ADD COLUMN local_delegate_base_url TEXT",
+                [],
+            )?;
+        }
+        if !Self::column_exists(conn, "personas", "local_delegate_model")? {
+            conn.execute(
+                "ALTER TABLE personas ADD COLUMN local_delegate_model TEXT",
+                [],
+            )?;
+        }
+        if !Self::column_exists(conn, "personas", "local_delegate_tools_ok")? {
+            conn.execute(
+                "ALTER TABLE personas ADD COLUMN local_delegate_tools_ok INTEGER",
+                [],
+            )?;
+        }
+        use rusqlite::OptionalExtension;
+        let already: Option<String> = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE lower(trim(key)) = 'persona_owned_chat_llm_v1' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if already
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Ok(());
+        }
+
+        let setting = |key: &str| -> Result<Option<String>, FinallyAValueBotError> {
+            let value: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM app_settings WHERE lower(trim(key)) = lower(?1) LIMIT 1",
+                    params![key],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(value
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty()))
+        };
+        let agent_engine = setting("AGENT_ENGINE")?.unwrap_or_else(|| "classic".to_string());
+        let llm_provider = setting("LLM_PROVIDER")?;
+        let llm_model = setting("LLM_MODEL")?;
+        let llm_base_url = setting("LLM_BASE_URL")?;
+        let shared_local_url = setting("MULTIMODEL_LOCAL_BASE_URL")?;
+        let shared_local_model = setting("MULTIMODEL_LOCAL_MODEL")?;
+        let shared_local_tools_ok = setting("MULTIMODEL_LOCAL_TOOLS_OK")?
+            .map(|value| {
+                matches!(
+                    value.to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false);
+        let cursor_model = setting("CURSOR_SDK_MODEL")?
+            .or_else(|| Some(crate::config::default_cursor_sdk_model()));
+        let gemini_default = setting("GEMINI_ADK_DEFAULT_MODEL")?;
+        let gemini_topology = setting("GEMINI_ADK_TOPOLOGY_CONFIG")?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, agent_engine_override, llm_provider_override, model_override, llm_base_url_override, local_delegate_base_url, local_delegate_model, local_delegate_tools_ok, cursor_sdk_model, gemini_adk_topology FROM personas",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<i64>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+            ))
+        })?;
+        let personas: Vec<_> = rows.collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        let nonempty = |value: &Option<String>| {
+            value
+                .as_deref()
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(str::to_string)
+        };
+
+        for (
+            id,
+            engine,
+            provider,
+            model,
+            base_url,
+            local_url,
+            local_model,
+            local_tools,
+            cursor,
+            topology,
+        ) in personas
+        {
+            let engine = nonempty(&engine).unwrap_or_else(|| agent_engine.clone());
+            let classic = engine == "classic" || engine == "classic_cost_routing";
+            let mut provider = nonempty(&provider);
+            let mut model = nonempty(&model);
+            let mut base_url = nonempty(&base_url);
+            if classic {
+                if provider.is_none() {
+                    provider = llm_provider.clone();
+                }
+                if model.is_none() {
+                    model = llm_model.clone();
+                }
+                let provider_is_local = provider
+                    .as_deref()
+                    .is_some_and(crate::llm_catalog::is_local_provider);
+                if provider_is_local && base_url.is_none() {
+                    base_url = llm_base_url.clone();
+                }
+            }
+            let mut local_url = nonempty(&local_url);
+            let mut local_model = nonempty(&local_model);
+            let mut local_tools = local_tools;
+            if engine == "classic_cost_routing" {
+                if local_url.is_none() {
+                    local_url = shared_local_url.clone();
+                }
+                if local_model.is_none() {
+                    local_model = shared_local_model.clone();
+                }
+                if local_tools.is_none() {
+                    local_tools = Some(if shared_local_tools_ok { 1 } else { 0 });
+                }
+            }
+            let mut cursor = nonempty(&cursor);
+            if engine == "cursor" && cursor.is_none() {
+                cursor = cursor_model.clone();
+            }
+            let mut topology = nonempty(&topology);
+            if engine == "gemini_adk" {
+                if topology.is_none() {
+                    topology = gemini_topology.clone().or_else(|| {
+                        serde_json::to_string(
+                            &crate::gemini_adk::AdkTopologyProfile::default_profile(),
+                        )
+                        .ok()
+                    });
+                }
+                if let Some(raw) = topology.clone() {
+                    if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&raw) {
+                        let current = value
+                            .get("default_model")
+                            .and_then(|item| item.as_str())
+                            .map(str::trim)
+                            .unwrap_or("");
+                        if current.is_empty() {
+                            if let Some(model) = gemini_default.clone().or_else(|| {
+                                Some(
+                                    crate::gemini_adk::config::DEFAULT_GEMINI_ADK_MODEL.to_string(),
+                                )
+                            }) {
+                                if let Some(object) = value.as_object_mut() {
+                                    object.insert(
+                                        "default_model".into(),
+                                        serde_json::Value::String(model),
+                                    );
+                                    topology = serde_json::to_string(&value).ok();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            conn.execute(
+                "UPDATE personas SET agent_engine_override = ?1, llm_provider_override = ?2, model_override = ?3, llm_base_url_override = ?4, local_delegate_base_url = ?5, local_delegate_model = ?6, local_delegate_tools_ok = ?7, cursor_sdk_model = ?8, gemini_adk_topology = ?9 WHERE id = ?10",
+                params![
+                    engine,
+                    provider,
+                    model,
+                    base_url,
+                    local_url,
+                    local_model,
+                    local_tools,
+                    cursor,
+                    topology,
+                    id
+                ],
+            )?;
+        }
+
+        let (system_provider, system_model) = (
+            setting("SYSTEM_LLM_PROVIDER")?,
+            setting("SYSTEM_LLM_MODEL")?,
+        );
+        if system_provider.is_none() || system_model.is_none() {
+            if let (Some(provider), Some(model)) = (llm_provider.clone(), llm_model.clone()) {
+                let now = Utc::now().to_rfc3339();
+                for (key, value) in [
+                    ("SYSTEM_LLM_PROVIDER", provider.as_str()),
+                    ("SYSTEM_LLM_MODEL", model.as_str()),
+                ] {
+                    conn.execute(
+                        "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+                         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                        params![key, value, now],
+                    )?;
+                }
+            }
+        }
+        if setting("LOCAL_SERVER_URL")?.is_none() {
+            if let Some(url) = shared_local_url.clone() {
+                let now = Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO app_settings (key, value, updated_at) VALUES ('LOCAL_SERVER_URL', ?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    params![url, now],
+                )?;
+            }
+        }
+        if setting("LOCAL_SERVER_MODEL")?.is_none() {
+            if let Some(model) = shared_local_model.clone() {
+                let now = Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO app_settings (key, value, updated_at) VALUES ('LOCAL_SERVER_MODEL', ?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    params![model, now],
+                )?;
+            }
+        }
+
+        conn.execute(
+            "DELETE FROM app_settings WHERE lower(trim(key)) IN (
+                'llm_provider', 'llm_model', 'llm_base_url',
+                'multimodel_enabled', 'multimodel_local_base_url', 'multimodel_local_model',
+                'multimodel_local_tools_ok', 'multimodel_tier1_base_url', 'multimodel_tier1_model',
+                'multimodel_tier1_tools_ok', 'multimodel_tier2_base_url', 'multimodel_tier2_model',
+                'multimodel_tier2_tools_ok', 'topics_prefer_tier2'
+            )",
+            [],
+        )?;
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES ('persona_owned_chat_llm_v1', '1', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            params![now],
+        )?;
         Ok(())
     }
 
@@ -7893,6 +8160,17 @@ impl Database {
         Ok(personas)
     }
 
+    pub fn list_personas_for_doctor(&self) -> Result<Vec<Persona>, FinallyAValueBotError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {PERSONA_SELECT_COLS} FROM personas ORDER BY id"
+        ))?;
+        let personas = stmt
+            .query_map([], persona_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(personas)
+    }
+
     /// Latest persisted user or assistant message, including sessions and side chats.
     pub fn list_persona_last_message_at(
         &self,
@@ -8237,6 +8515,26 @@ impl Database {
             "UPDATE personas SET llm_provider_override = ?1, model_override = ?2, llm_base_url_override = ?3
              WHERE id = ?4 AND chat_id = ?5",
             params![provider_v, model_v, base_v, persona_id, chat_id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn set_persona_local_delegate(
+        &self,
+        chat_id: i64,
+        persona_id: i64,
+        base_url: Option<&str>,
+        model: Option<&str>,
+        tools_ok: Option<bool>,
+    ) -> Result<bool, FinallyAValueBotError> {
+        let conn = self.conn.lock().unwrap();
+        let base_v = base_url.map(str::trim).filter(|s| !s.is_empty());
+        let model_v = model.map(str::trim).filter(|s| !s.is_empty());
+        let tools_v = tools_ok.map(|ok| if ok { 1 } else { 0 });
+        let rows = conn.execute(
+            "UPDATE personas SET local_delegate_base_url = ?1, local_delegate_model = ?2, local_delegate_tools_ok = ?3
+             WHERE id = ?4 AND chat_id = ?5",
+            params![base_v, model_v, tools_v, persona_id, chat_id],
         )?;
         Ok(rows > 0)
     }

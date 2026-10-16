@@ -808,7 +808,7 @@ function CustomAssistantMessage() {
           <span className="mc-assistant-placeholder-dot" />
           <span className="mc-assistant-placeholder-dot" />
           <span className="mc-assistant-placeholder-dot" />
-          <span className="mc-assistant-placeholder-text">Thinking</span>
+          <span className="mc-assistant-placeholder-text">Attending to your request…</span>
         </div>
       )}
       <BranchPicker />
@@ -1476,7 +1476,7 @@ export const ThreadPane = React.memo(function ThreadPane({
             },
             strings: {
               composer: {
-                input: { placeholder: 'Message Meido...' },
+                input: { placeholder: 'Give your instructions, or press / to summon…' },
               },
             },
             assistantAvatar: {},

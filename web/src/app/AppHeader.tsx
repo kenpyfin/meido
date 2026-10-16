@@ -2,7 +2,7 @@ import { Button } from '@/components/ui/button'
 import React from 'react'
 import { SessionPicker } from '../components/session-picker'
 import { SideChatsPicker } from '../components/side-chats-picker'
-import { IconCockpit, IconInbox, IconSidebar } from '../components/icons'
+import { IconCockpit, IconRibbonBow, IconServiceBell, IconSidebar } from '../components/icons'
 import type { ChatSession, InstallationStatus, QueueLane, SideChatSummary } from '../types'
 
 type Appearance = 'dark' | 'light'
@@ -143,8 +143,8 @@ export const AppHeader = React.memo(function AppHeader({
     <header
       className={
         appearance === 'dark'
-          ? 'sticky top-0 z-30 border-b border-[color:var(--mc-border-soft)] bg-[color:var(--mc-bg-panel)]/95 backdrop-blur-sm md:top-0'
-          : 'sticky top-0 z-30 border-b border-[color:var(--mc-border-soft)] bg-[color:var(--mc-surface-elevated)]/92 backdrop-blur-sm md:top-0'
+          ? 'mc-katyusha-lace sticky top-0 z-30 border-b border-[color:var(--mc-border-soft)] bg-[color:var(--mc-bg-panel)]/95 backdrop-blur-sm md:top-0'
+          : 'mc-katyusha-lace sticky top-0 z-30 border-b border-[color:var(--mc-border-soft)] bg-[color:var(--mc-surface-elevated)]/92 backdrop-blur-sm md:top-0'
       }
     >
       <div className="mc-app-header-bar px-3 max-md:py-2 md:px-4 md:py-3">
@@ -191,8 +191,11 @@ export const AppHeader = React.memo(function AppHeader({
                 }`}
               />
             </Button>
-            <h1 className="font-semibold text-2xl min-w-0 shrink truncate max-md:[font-size:1.125rem]">
-              {moduleTitle ?? activePersonaName ?? 'Chat'}
+            <h1 className="mc-display-title flex min-w-0 shrink items-center gap-1.5 text-2xl max-md:[font-size:1.35rem]">
+              {personaModule && activePersonaName ? (
+                <IconRibbonBow className="size-4 shrink-0 text-[color:var(--mc-accent)]" />
+              ) : null}
+              <span className="truncate">{moduleTitle ?? activePersonaName ?? 'Chat'}</span>
             </h1>
             <Button size="sm" variant="secondary" className="shrink-0 md:!hidden" onClick={onOpenPersona}>
               Persona
@@ -244,6 +247,7 @@ export const AppHeader = React.memo(function AppHeader({
               title="Inbox — new messages and todos"
               onClick={onOpenInbox}
             >
+              <IconServiceBell className="size-3.5 shrink-0" />
               Inbox
               {inboxBadgeCount > 0 ? (
                 <span className="mc-inbox-launch__badge" aria-hidden>

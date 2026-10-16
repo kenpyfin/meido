@@ -343,6 +343,16 @@ export type LocalDelegateConfigResponse = {
 /** @deprecated use LocalDelegateConfigResponse */
 export type MultimodelConfigResponse = LocalDelegateConfigResponse
 
+export type SystemLlmJobRow = {
+  id: string
+  label: string
+  detail: string
+  provider?: string
+  model?: string | null
+  using_default?: boolean
+  legacy_model?: string | null
+}
+
 export type TopicsModelResponse = {
   ok?: boolean
   source?: string
@@ -353,6 +363,7 @@ export type TopicsModelResponse = {
   strategy_provider?: string
   strategy_model?: string
   local_base_url?: string
+  jobs?: SystemLlmJobRow[]
   message?: string | null
 }
 

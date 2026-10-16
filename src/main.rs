@@ -550,10 +550,33 @@ async fn main() -> anyhow::Result<()> {
 
     config.merge_llm_selection_from_app_settings(&db)?;
     meido::topics::seed_system_llm_from_env(&db)?;
-    info!(
-        "LLM selection: provider={} model={}",
-        config.llm_provider, config.model
-    );
+    if let Ok(Some(env_path)) = meido::config::Config::resolve_config_path() {
+        if let Ok(content) = std::fs::read_to_string(&env_path) {
+            let mut next = content.clone();
+            for key in [
+                "LLM_PROVIDER",
+                "LLM_MODEL",
+                "LLM_BASE_URL",
+                "TOPICS_PREFER_TIER2",
+                "MULTIMODEL_ENABLED",
+                "MULTIMODEL_LOCAL_BASE_URL",
+                "MULTIMODEL_LOCAL_MODEL",
+                "MULTIMODEL_LOCAL_TOOLS_OK",
+                "MULTIMODEL_TIER1_BASE_URL",
+                "MULTIMODEL_TIER1_MODEL",
+                "MULTIMODEL_TIER1_TOOLS_OK",
+                "MULTIMODEL_TIER2_BASE_URL",
+                "MULTIMODEL_TIER2_MODEL",
+                "MULTIMODEL_TIER2_TOOLS_OK",
+            ] {
+                next = meido::dotenv_sync::remove_env_line(&next, key);
+            }
+            if next != content {
+                let _ = std::fs::write(&env_path, next);
+            }
+        }
+    }
+    info!("Chat models are stored on each persona. System LLM is a separate pair.");
 
     match meido::persona_shared_migrate::maybe_run(&config, &db) {
         Ok(stats) => {

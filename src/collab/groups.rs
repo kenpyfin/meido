@@ -12,7 +12,9 @@ use crate::chat_queue::{QueueEnqueueMeta, QueueSource};
 use crate::claude::{Message, MessageContent};
 use crate::db::call_blocking;
 use crate::db_collab::{GroupMember, GroupMessage};
-use crate::topics::{load_system_llm_choice, response_text, send_topic_prompt, system_llm_direct};
+use crate::topics::{
+    load_job_choice, response_text, send_topic_prompt, system_llm_direct, SystemLlmJob,
+};
 
 use super::{GROUP_SUMMARY_EVERY, GROUP_TOOL_CAP, GROUP_WINDOW};
 
@@ -89,6 +91,7 @@ pub async fn run_group_round(
             &provider,
             &model,
             max_speakers as usize,
+            SystemLlmJob::GroupSpeaker,
         )
         .await
     };
@@ -175,6 +178,7 @@ async fn pick_moderator(
     provider: &str,
     model: &str,
     max_speakers: usize,
+    job: SystemLlmJob,
 ) -> Vec<i64> {
     let mut roster = String::from("Members:\n");
     for member in members {
@@ -191,7 +195,7 @@ async fn pick_moderator(
         "Choose who should answer. Reply with JSON only: {{\"speakers\":[persona_id,...]}}. \
          At most {max_speakers} ids, each from the member list. No prose."
     );
-    let choice = resolve_choice(state, provider, model).await;
+    let choice = resolve_choice(state, provider, model, job).await;
     let messages = vec![Message {
         role: "user".into(),
         content: MessageContent::Text(roster),
@@ -220,11 +224,12 @@ async fn resolve_choice(
     state: &AppState,
     provider: &str,
     model: &str,
+    job: SystemLlmJob,
 ) -> Option<(String, String, Option<String>)> {
     if !provider.trim().is_empty() && !model.trim().is_empty() {
         return Some((provider.to_string(), model.to_string(), None));
     }
-    system_llm_direct(load_system_llm_choice(state).await)
+    system_llm_direct(load_job_choice(state, job).await)
 }
 
 fn parse_speakers(raw: &str, members: &[GroupMember], max_speakers: usize) -> Option<Vec<i64>> {
@@ -363,7 +368,7 @@ async fn maybe_refresh_summary(state: &AppState, session_id: &str) {
         body.push_str(&item.content.chars().take(400).collect::<String>());
         body.push('\n');
     }
-    let choice = resolve_choice(state, "", "").await;
+    let choice = resolve_choice(state, "", "", SystemLlmJob::GroupSummary).await;
     let Some((provider, model, base)) = choice else {
         return;
     };
