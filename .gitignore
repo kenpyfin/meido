@@ -1,0 +1,63 @@
+/target
+.env
+.env.local
+.env.*.local
+finally-a-value-bot.config.yaml
+finally-a-value-bot.config.yaml.*
+finally-a-value-bot.data/*
+website/
+tmp/
+working_dir/
+web/node_modules/
+web/dist/
+web/vite.config.ts.timestamp-*.mjs
+
+# Local SQLite database (may contain user data / secrets)
+finally-a-value-bot.db
+shared/*
+
+.cursorrules
+workspace/*
+# Workspace (keep skills/shared, exclude vault)
+workspace/shared/ORIGIN/
+workspace/shared/vault_db/
+workspace/shared/test-venv/
+workspace/shared/.venv-vault/
+workspace/**/.env
+workspace/**/node_modules/
+
+shared/
+ORIGIN/
+
+# Chat exports and per-chat secret vault (values must not be committed)
+*chat_export*.md
+chat-export-*.md
+email_scan_*.md
+recent_chat.md
+data/exports/
+workspace/runtime/secrets/
+builtin_skills/steel-browser/__pycache__/*
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# Internal docs stay local only
+docs/
+.cursor/
+.cursor/rules/
+ARCHITECTURE.md
+DEVELOP.md
+TEST.md
+# Runtime artifacts that were tracked in the old repo by mistake
+data/
+workspace/
+risk-reports/
+*.db
+*.log
+*.bak
+.DS_Store
+agent-browser
+_query_bg_jobs.py
+list_tasks.py
+add_indexing_task.py
+web/tsconfig.tsbuildinfo

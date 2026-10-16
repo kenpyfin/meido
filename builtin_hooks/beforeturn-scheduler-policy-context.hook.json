@@ -1,0 +1,8 @@
+{
+  "name": "beforeturn-scheduler-policy-context",
+  "event_name": "BeforeTurn",
+  "matcher": null,
+  "action_type": "builtin_scheduler_policy_context",
+  "action_payload": {},
+  "enabled": true
+}

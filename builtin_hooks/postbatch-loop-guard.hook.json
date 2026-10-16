@@ -1,0 +1,8 @@
+{
+  "name": "postbatch-loop-guard",
+  "event_name": "PostToolBatch",
+  "matcher": null,
+  "action_type": "builtin_loop_guard",
+  "action_payload": {},
+  "enabled": true
+}

@@ -1,0 +1,8 @@
+{
+  "name": "prestop-deferred-commitment-guard",
+  "event_name": "PreStop",
+  "matcher": null,
+  "action_type": "builtin_deferred_commitment_guard",
+  "action_payload": {},
+  "enabled": true
+}

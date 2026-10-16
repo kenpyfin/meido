@@ -1,0 +1,8 @@
+{
+  "name": "pretool-turn-skill-gate",
+  "event_name": "PreToolUse",
+  "matcher": null,
+  "action_type": "builtin_turn_skill_gate",
+  "action_payload": {},
+  "enabled": true
+}
