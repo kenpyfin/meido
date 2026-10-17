@@ -2,15 +2,16 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
-import { Select } from '@/components/ui/select'
 import { useCallback, useEffect, useState } from 'react'
 import { SettingsPanelSkeleton } from './skeleton'
+import { listedModelIds, ModelSelect } from './model-select'
 import type {
   AdkAgent,
   AdkAgentKind,
   AdkTopologyProfile,
   GeminiAdkConfigResponse,
   GeminiAdkTopologyResponse,
+  LlmLiveCatalogResponse,
 } from '../types'
 
 type Props = {
@@ -50,6 +51,8 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null)
   const [defaultModelDraft, setDefaultModelDraft] = useState('')
   const [maxIterationsDraft, setMaxIterationsDraft] = useState('40')
+  const [geminiModels, setGeminiModels] = useState<string[]>([])
+  const [modelsNotice, setModelsNotice] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -79,6 +82,33 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(() => {
+    let cancelled = false
+    void api<LlmLiveCatalogResponse>('/api/llm/models?provider=google')
+      .then((res) => {
+        if (cancelled) return
+        const ids = listedModelIds(res.models)
+        setGeminiModels(ids)
+        setModelsNotice(
+          ids.length === 0
+            ? 'No Gemini models returned. Add a Gemini key under Settings → Connections.'
+            : res.source === 'live'
+              ? `${ids.length} Gemini model${ids.length === 1 ? '' : 's'} loaded.`
+              : res.message?.trim() || 'Showing the curated Gemini list.',
+        )
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setModelsNotice(error instanceof Error ? error.message : String(error))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api])
+
+  function modelIsListed(model: string): boolean {
+    return geminiModels.includes(model.trim())
+  }
 
   function updateProfile(mutator: (p: AdkTopologyProfile) => AdkTopologyProfile) {
     setProfile((prev) => (prev ? mutator(structuredClone(prev)) : prev))
@@ -117,6 +147,10 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 
   }
 
   async function saveEngineSettings() {
+    if (!modelIsListed(defaultModelDraft)) {
+      onError('Pick a Gemini model from the list.')
+      return
+    }
     setSaving(true)
     setSaveNotice(null)
     try {
@@ -143,6 +177,17 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 
     if (activePersonaId == null && !opts?.resetDefaults && !profile) {
       onError('Select a persona to edit topology, or reset the global default.')
       return
+    }
+    if (!opts?.resetDefaults && !opts?.clearPersonaOverride && profile) {
+      if (!modelIsListed(profile.default_model)) {
+        onError('Pick a topology default model from the list.')
+        return
+      }
+      const unlisted = profile.agents.find((agent) => agent.model.trim() && !modelIsListed(agent.model))
+      if (unlisted) {
+        onError(`Pick a model from the list for ${unlisted.label || unlisted.id}, or use the topology default.`)
+        return
+      }
     }
     setSaving(true)
     setSaveNotice(null)
@@ -236,11 +281,13 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 
         <div className="flex gap-2 flex-wrap items-end">
           <label className="mc-pipeline-field">
             <span>Default Gemini model</span>
-            <Input
-              size="default"
+            <ModelSelect
+              ariaLabel="Default Gemini model"
               value={defaultModelDraft}
-              onChange={(e) => setDefaultModelDraft(e.target.value)}
-              placeholder="gemini-2.5-flash"
+              options={geminiModels.map((id) => ({ id }))}
+              onChange={setDefaultModelDraft}
+              disabled={saving}
+              emptyHint={modelsNotice ?? 'Refresh models, then pick one.'}
             />
           </label>
           <Button size="default" disabled={saving} onClick={() => void saveEngineSettings()}>
@@ -312,12 +359,13 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 
 
         <label className="mc-pipeline-field mb-3">
           <span>Topology default model</span>
-          <Input
-            size="sm"
+          <ModelSelect
+            ariaLabel="Topology default model"
             value={profile.default_model}
-            onChange={(e) =>
-              updateProfile((p) => ({ ...p, default_model: e.target.value }))
-            }
+            options={geminiModels.map((id) => ({ id }))}
+            onChange={(id) => updateProfile((p) => ({ ...p, default_model: id }))}
+            disabled={saving}
+            emptyHint={modelsNotice ?? 'Refresh models, then pick one.'}
           />
         </label>
 
@@ -403,11 +451,15 @@ export function SettingsGeminiAdkPanel({ api, onError, activePersonaId, scope = 
                       </select>
                     </label>
                     <label className="mc-pipeline-field">
-                      <span>Model (empty = topology default)</span>
-                      <Input
-                        size="sm"
+                      <span>Model</span>
+                      <ModelSelect
+                        ariaLabel={`${agent.label || agent.id} model`}
                         value={agent.model}
-                        onChange={(e) => updateAgent(index, { model: e.target.value })}
+                        blankLabel="Topology default"
+                        options={geminiModels.map((id) => ({ id }))}
+                        onChange={(id) => updateAgent(index, { model: id })}
+                        disabled={saving}
+                        emptyHint={modelsNotice ?? 'Refresh models, then pick one.'}
                       />
                     </label>
                     <label className="mc-pipeline-field">

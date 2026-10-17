@@ -660,12 +660,18 @@ pub fn assert_persona_tool_path_allowed_with_memory(
     origin_vault: &Path,
 ) -> Result<(), String> {
     if is_write && crate::self_repo::is_self_repo_source_path(workspace_root, resolved_path) {
-        return Err(format!(
-            "Write blocked: '{}' is inside the bot's own source checkout. \
-             Persona Tier-1 target repos (`Repo: …`) are allowed; the Meido \
-             install/source tree is not.",
-            resolved_path.display()
-        ));
+        let covered = auth.is_some_and(|a| {
+            crate::self_repo::path_covered_by_roots(resolved_path, &a.external_roots)
+        });
+        if !covered {
+            return Err(format!(
+                "Write blocked: '{}' is inside the bot's own source checkout and is not on \
+                 this persona's external paths. Add that directory under Paths outside the \
+                 workspace to allow writes there. Persona Tier-1 target repos (`Repo: …`) \
+                 stay allowed.",
+                resolved_path.display()
+            ));
+        }
     }
     if !has_persona_scope(auth) {
         return Ok(());
@@ -1594,6 +1600,67 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&allowed);
         let _ = std::fs::remove_dir_all(&denied);
+    }
+
+    #[test]
+    fn test_external_root_lifts_self_repo_write_ban() {
+        let checkout =
+            std::env::temp_dir().join(format!("meido_self_allow_{}", uuid::Uuid::new_v4()));
+        let workspace = checkout.join("workspace");
+        let src = checkout.join("src");
+        let persona = persona_shared_dir(&workspace, 10, 2);
+        let origin = workspace.join("shared").join("ORIGIN");
+        std::fs::create_dir_all(&persona).unwrap();
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(checkout.join("Cargo.toml"), "[package]\nname = \"meido\"\n").unwrap();
+        let file = src.join("lib.rs");
+        std::fs::write(&file, "x").unwrap();
+        let elsewhere = checkout.join("docs").join("note.md");
+        std::fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
+        std::fs::write(&elsewhere, "x").unwrap();
+
+        let mut auth = ToolAuthContext {
+            run_id: None,
+            caller_channel: "web".to_string(),
+            caller_chat_id: 10,
+            caller_persona_id: 2,
+            control_chat_ids: vec![],
+            is_scheduled_task: false,
+            session_id: None,
+            vector_db_root: None,
+            external_roots: vec![src.clone()],
+        };
+        assert!(
+            assert_persona_tool_path_allowed_with_origin(
+                &workspace,
+                &file,
+                Some(&auth),
+                true,
+                &origin
+            )
+            .is_ok(),
+            "listed subdirectory should be writable"
+        );
+        let denied = assert_persona_tool_path_allowed_with_origin(
+            &workspace,
+            &elsewhere,
+            Some(&auth),
+            true,
+            &origin,
+        )
+        .unwrap_err();
+        assert!(denied.contains("external paths"));
+        auth.external_roots.clear();
+        let blocked = assert_persona_tool_path_allowed_with_origin(
+            &workspace,
+            &file,
+            Some(&auth),
+            true,
+            &origin,
+        )
+        .unwrap_err();
+        assert!(blocked.contains("external paths"));
+        let _ = std::fs::remove_dir_all(&checkout);
     }
 
     #[test]

@@ -194,7 +194,7 @@ export function InitialRunPromptView({ jsonText }: Props) {
               <code className="text-xs">persona context</code> when included.
             </span>
             {!hasPersonaContext && messageCount > 0 ? (
-              <span className="text-amber-600 dark:text-amber-500">
+              <span className="text-[color:var(--mc-accent-brass)]">
                 No <code className="text-xs">[persona_context]</code> block in this snapshot - memory
                 / memo / bookmarks were empty or removed before the LLM call (e.g. token trim).
               </span>

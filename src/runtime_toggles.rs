@@ -1,6 +1,6 @@
 //! Hot-reloadable runtime flags persisted in `app_settings` (Web UI).
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::db::Database;
@@ -97,6 +97,8 @@ pub struct RuntimeToggleInit {
     pub post_tool_evaluator_enabled: bool,
     pub response_quality_evaluator_enabled: bool,
     pub agent_engine: AgentEngine,
+    /// Process-wide Classic tool-loop cap (`MAX_TOOL_ITERATIONS`).
+    pub max_tool_iterations: usize,
 }
 
 #[derive(Debug)]
@@ -105,6 +107,7 @@ pub struct RuntimeToggles {
     post_tool_evaluator_enabled: AtomicBool,
     response_quality_evaluator_enabled: AtomicBool,
     agent_engine: AtomicU8,
+    max_tool_iterations: AtomicUsize,
 }
 
 impl RuntimeToggles {
@@ -114,6 +117,7 @@ impl RuntimeToggles {
             post_tool_evaluator_enabled: false,
             response_quality_evaluator_enabled: false,
             agent_engine: AgentEngine::Classic,
+            max_tool_iterations: 100,
         })
     }
 
@@ -125,6 +129,7 @@ impl RuntimeToggles {
                 init.response_quality_evaluator_enabled,
             ),
             agent_engine: AtomicU8::new(init.agent_engine.to_u8()),
+            max_tool_iterations: AtomicUsize::new(init.max_tool_iterations.max(1)),
         })
     }
 
@@ -163,6 +168,14 @@ impl RuntimeToggles {
         self.agent_engine.store(engine.to_u8(), Ordering::Relaxed);
     }
 
+    pub fn max_tool_iterations(&self) -> usize {
+        self.max_tool_iterations.load(Ordering::Relaxed).max(1)
+    }
+
+    pub fn set_max_tool_iterations(&self, n: usize) {
+        self.max_tool_iterations.store(n.max(1), Ordering::Relaxed);
+    }
+
     pub fn merge_from_app_settings(
         env_defaults: RuntimeToggleInit,
         db: &Database,
@@ -184,6 +197,7 @@ impl RuntimeToggles {
                 env_defaults.response_quality_evaluator_enabled,
             )?,
             agent_engine: merge_agent_engine_from_app_settings(db, env_defaults.agent_engine)?,
+            max_tool_iterations: env_defaults.max_tool_iterations.max(1),
         })
     }
 

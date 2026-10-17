@@ -189,6 +189,9 @@ export type RuntimeConfigResponse = {
     response_quality_evaluator_enabled?: 'env' | 'app_settings'
     agent_engine?: 'env' | 'app_settings'
   }
+  max_tool_iterations?: number
+  max_tool_iterations_floor?: number
+  max_tool_iterations_ceiling?: number
   description?: string
   message?: string
 }
@@ -443,6 +446,7 @@ export type ScheduleTask = {
   last_run: string | null
   status: string
   created_at: string | null
+  output_delivery?: 'runs_only' | 'transcript'
 }
 
 export type PersonaTodo = {

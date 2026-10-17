@@ -100,11 +100,19 @@ export function AppDialogs(props: AppDialogsProps) {
       <InboxDialog appearance={appearance} personas={personas} inbox={inbox} />
       <SchedulesDialog
         appearance={appearance}
+        api={api}
+        chatId={chatId}
         activePersonaId={activePersonaId}
         personas={personas}
         schedules={schedules}
       />
-      <ScheduleDetailDialog appearance={appearance} personas={personas} scheduleDetail={scheduleDetail} />
+      <ScheduleDetailDialog
+        appearance={appearance}
+        api={api}
+        chatId={chatId}
+        personas={personas}
+        scheduleDetail={scheduleDetail}
+      />
       <AgentsMdDialog appearance={appearance} agentsMd={agentsMd} />
       <ArtifactsDialog
         appearance={appearance}

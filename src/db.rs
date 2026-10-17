@@ -261,6 +261,8 @@ pub struct ScheduledTask {
     pub last_run: Option<String>,
     pub status: String, // "active", "running", "paused", "completed", "cancelled"
     pub created_at: String,
+    /// `runs_only` stores output in `scheduled_runs`. `transcript` also copies it into chat history.
+    pub output_delivery: String,
 }
 
 /// Read a column as text, tolerating rows whose value was stored with BLOB affinity
@@ -292,8 +294,9 @@ fn row_text_opt(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Option<
 
 /// Shared, blob-tolerant row mapping for `scheduled_tasks` queries. All list/lookup queries
 /// must select columns in this order: id, chat_id, persona_id, prompt, schedule_type,
-/// schedule_value, next_run, last_run, status, created_at.
+/// schedule_value, next_run, last_run, status, created_at, output_delivery.
 fn map_scheduled_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScheduledTask> {
+    let output_delivery = row_text(row, 10)?;
     Ok(ScheduledTask {
         id: row.get(0)?,
         chat_id: row.get(1)?,
@@ -305,6 +308,11 @@ fn map_scheduled_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Scheduled
         last_run: row_text_opt(row, 7)?,
         status: row_text(row, 8)?,
         created_at: row_text(row, 9)?,
+        output_delivery: if output_delivery == "transcript" {
+            "transcript".to_string()
+        } else {
+            "runs_only".to_string()
+        },
     })
 }
 
@@ -955,7 +963,8 @@ impl Database {
                 next_run TEXT NOT NULL,
                 last_run TEXT,
                 status TEXT NOT NULL DEFAULT 'active',
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                output_delivery TEXT NOT NULL DEFAULT 'runs_only'
             );
 
             CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_status_next
@@ -1179,6 +1188,7 @@ impl Database {
 
         Self::migrate_persona_schema(&conn)?;
         Self::migrate_scheduled_tasks_persona_schema(&conn)?;
+        Self::migrate_scheduled_tasks_output_delivery(&conn)?;
         Self::migrate_channel_bindings(&conn)?;
         Self::migrate_channel_bot_instances_and_policy(&conn)?;
         Self::migrate_fts(&conn)?;
@@ -1815,6 +1825,19 @@ impl Database {
                 ON scheduled_tasks(status, next_run);",
         )?;
 
+        Ok(())
+    }
+
+    fn migrate_scheduled_tasks_output_delivery(
+        conn: &Connection,
+    ) -> Result<(), FinallyAValueBotError> {
+        if Self::column_exists(conn, "scheduled_tasks", "output_delivery")? {
+            return Ok(());
+        }
+        conn.execute(
+            "ALTER TABLE scheduled_tasks ADD COLUMN output_delivery TEXT NOT NULL DEFAULT 'runs_only'",
+            [],
+        )?;
         Ok(())
     }
 
@@ -4411,6 +4434,7 @@ impl Database {
             schedule_type,
             schedule_value,
             next_run,
+            "runs_only",
         )
     }
 
@@ -4422,12 +4446,22 @@ impl Database {
         schedule_type: &str,
         schedule_value: &str,
         next_run: &str,
+        output_delivery: &str,
     ) -> Result<i64, FinallyAValueBotError> {
+        let output_delivery = match output_delivery {
+            "transcript" => "transcript",
+            "runs_only" | "" => "runs_only",
+            other => {
+                return Err(FinallyAValueBotError::Config(format!(
+                    "output_delivery must be 'runs_only' or 'transcript'; got {other}"
+                )));
+            }
+        };
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO scheduled_tasks (chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7)",
+            "INSERT INTO scheduled_tasks (chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, status, created_at, output_delivery)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7, ?8)",
             params![
                 chat_id,
                 persona_id,
@@ -4435,7 +4469,8 @@ impl Database {
                 schedule_type,
                 schedule_value,
                 next_run,
-                now
+                now,
+                output_delivery
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -5016,7 +5051,7 @@ impl Database {
     pub fn get_due_tasks(&self, now: &str) -> Result<Vec<ScheduledTask>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at, output_delivery
              FROM scheduled_tasks
              WHERE status = 'active' AND next_run <= ?1
              ORDER BY next_run ASC, id ASC",
@@ -5030,7 +5065,7 @@ impl Database {
     pub fn get_all_active_tasks(&self) -> Result<Vec<ScheduledTask>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at, output_delivery
              FROM scheduled_tasks
              WHERE status IN ('active', 'running', 'paused')
              ORDER BY id",
@@ -5048,7 +5083,7 @@ impl Database {
     ) -> Result<Vec<ScheduledTask>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at, output_delivery
              FROM scheduled_tasks
              WHERE status IN ('active', 'running', 'paused', 'completed')
              ORDER BY id",
@@ -5067,7 +5102,7 @@ impl Database {
     ) -> Result<Vec<ScheduledTask>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at, output_delivery
              FROM scheduled_tasks
              WHERE chat_id = ?1 AND status IN ('active', 'running', 'paused', 'completed')
              ORDER BY id",
@@ -5086,7 +5121,7 @@ impl Database {
     ) -> Result<Vec<ScheduledTask>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at, output_delivery
              FROM scheduled_tasks
              WHERE chat_id = ?1 AND persona_id = ?2 AND status IN ('active', 'running', 'paused', 'completed')
              ORDER BY id",
@@ -5103,7 +5138,7 @@ impl Database {
     ) -> Result<Vec<ScheduledTask>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at, output_delivery
              FROM scheduled_tasks
              WHERE chat_id = ?1 AND status IN ('active', 'running', 'paused')
              ORDER BY id",
@@ -5122,7 +5157,7 @@ impl Database {
     ) -> Result<Vec<ScheduledTask>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at, output_delivery
              FROM scheduled_tasks
              WHERE chat_id = ?1 AND persona_id = ?2 AND status IN ('active', 'running', 'paused')
              ORDER BY id",
@@ -5139,7 +5174,7 @@ impl Database {
     ) -> Result<Option<ScheduledTask>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let result = conn.query_row(
-            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at, output_delivery
              FROM scheduled_tasks
              WHERE id = ?1",
             params![task_id],
@@ -5187,6 +5222,28 @@ impl Database {
         let rows = conn.execute(
             "UPDATE scheduled_tasks SET prompt = ?1 WHERE id = ?2",
             params![prompt, task_id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn update_task_output_delivery(
+        &self,
+        task_id: i64,
+        output_delivery: &str,
+    ) -> Result<bool, FinallyAValueBotError> {
+        let output_delivery = match output_delivery {
+            "transcript" => "transcript",
+            "runs_only" => "runs_only",
+            other => {
+                return Err(FinallyAValueBotError::Config(format!(
+                    "output_delivery must be 'runs_only' or 'transcript'; got {other}"
+                )));
+            }
+        };
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute(
+            "UPDATE scheduled_tasks SET output_delivery = ?1 WHERE id = ?2",
+            params![output_delivery, task_id],
         )?;
         Ok(rows > 0)
     }
@@ -10713,6 +10770,7 @@ mod tests {
         assert_eq!(tasks[0].prompt, "say hello");
         assert_eq!(tasks[0].schedule_type, "cron");
         assert_eq!(tasks[0].status, "active");
+        assert_eq!(tasks[0].output_delivery, "runs_only");
         cleanup(&dir);
     }
 
@@ -10731,6 +10789,7 @@ mod tests {
                 "once",
                 "2099-12-31T00:00:00Z",
                 "2099-12-31T00:00:00Z",
+                "runs_only",
             )
             .unwrap();
 
@@ -10793,6 +10852,7 @@ mod tests {
             "cron",
             "0 0 */6 * * *",
             "2026-01-01T00:00:00Z",
+            "runs_only",
         )
         .unwrap();
         db.create_scheduled_task_for_persona(
@@ -10802,6 +10862,7 @@ mod tests {
             "cron",
             "0 0 */6 * * *",
             "2026-01-01T00:00:00Z",
+            "runs_only",
         )
         .unwrap();
         db.ensure_indexing_task(

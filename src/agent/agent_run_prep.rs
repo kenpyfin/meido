@@ -209,23 +209,27 @@ pub async fn prepare_agent_run(
         &origin_vault,
     );
     let locate_roots_section = crate::tools::locate::format_registry_for_prompt(&locate_registry);
-    let system_prompt = build_system_prompt(
-        &state.config.bot_username,
-        &principles_content,
-        &agents_md_path,
-        chat_id,
-        persona_id,
-        &skills_catalog,
-        &workspace_path,
-        &skills_dir_for_prompt,
-        vault_paths_section.as_deref(),
-        &state.config.timezone,
-        &workspace_data_root_display,
-        &config_env_summary,
-        identity_tier1_system.as_str(),
-        &sops_caps_line,
-        &sops_body,
-        &locate_roots_section,
+    let system_prompt = crate::self_repo::rewrite_self_repo_ban_for_external_paths(
+        build_system_prompt(
+            &state.config.bot_username,
+            &principles_content,
+            &agents_md_path,
+            chat_id,
+            persona_id,
+            &skills_catalog,
+            &workspace_path,
+            &skills_dir_for_prompt,
+            vault_paths_section.as_deref(),
+            &state.config.timezone,
+            &workspace_data_root_display,
+            &config_env_summary,
+            identity_tier1_system.as_str(),
+            &sops_caps_line,
+            &sops_body,
+            &locate_roots_section,
+        ),
+        Path::new(&workspace_data_root_display),
+        &locate_auth.external_roots,
     );
 
     let mut messages = if context.is_background_job {

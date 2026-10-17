@@ -35,9 +35,9 @@ import {
   CopyIcon,
   FileIcon,
   PaperclipIcon,
-  SendHorizontalIcon,
   SquareIcon,
 } from 'lucide-react'
+import { IconSendBow } from './icons'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -756,7 +756,7 @@ const ComposerSend = forwardRef<HTMLButtonElement, Partial<TooltipIconButtonProp
   return (
     <ComposerPrimitive.Send asChild>
       <ComposerSendButton tooltip={tooltip} {...props} ref={ref}>
-        {props.children ?? <SendHorizontalIcon />}
+        {props.children ?? <IconSendBow />}
       </ComposerSendButton>
     </ComposerPrimitive.Send>
   )

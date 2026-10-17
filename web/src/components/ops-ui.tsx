@@ -95,6 +95,7 @@ export type MobileOpsSheetProps = {
   onOpenQueue: () => void
   onOpenInbox: () => void
   inboxBadgeCount?: number
+  schedulesBadgeCount?: number
   onOpenSchedules: () => void
   onOpenPrinciples: () => void
   onOpenArtifacts: () => void
@@ -111,6 +112,7 @@ export function MobileOpsSheet({
   onOpenQueue,
   onOpenInbox,
   inboxBadgeCount = 0,
+  schedulesBadgeCount = 0,
   onOpenSchedules,
   onOpenPrinciples,
   onOpenArtifacts,
@@ -140,7 +142,7 @@ export function MobileOpsSheet({
             onClick={pick(onOpenInbox)}
           />
           <OpsRow icon={<OpsGlyph d="M4 6h16M4 12h16M4 18h10" />} label="Queue" onClick={pick(onOpenQueue)} />
-          <OpsRow icon={<OpsGlyph d="M8 7V3m8 4V3M4 11h16M6 5h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" />} label="Schedules" onClick={pick(onOpenSchedules)} />
+          <OpsRow icon={<OpsGlyph d="M8 7V3m8 4V3M4 11h16M6 5h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" />} label="Schedules" badge={schedulesBadgeCount} onClick={pick(onOpenSchedules)} />
           <OpsRow icon={<OpsGlyph d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h5" />} label="Principles" onClick={pick(onOpenPrinciples)} />
           <OpsRow icon={<OpsGlyph d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />} label="Artifacts" onClick={pick(onOpenArtifacts)} />
           {terminalAvailable && onOpenTerminal ? (

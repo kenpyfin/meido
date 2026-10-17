@@ -17,6 +17,8 @@ export type ConfirmDialogProps = {
   description: string
   confirmLabel?: string
   cancelLabel?: string
+  /** Gerund shown while `loading`, for example `Clearing…`. */
+  busyLabel?: string
   destructive?: boolean
   loading?: boolean
   onConfirm: () => void | Promise<void>
@@ -29,6 +31,7 @@ export function ConfirmDialog({
   description,
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
+  busyLabel = 'Working…',
   destructive = false,
   loading = false,
   onConfirm,
@@ -50,7 +53,7 @@ export function ConfirmDialog({
               void onConfirm()
             }}
           >
-            {loading ? 'Working…' : confirmLabel}
+            {loading ? busyLabel : confirmLabel}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -62,6 +65,7 @@ export type PendingConfirm = {
   title: string
   description: string
   confirmLabel?: string
+  busyLabel?: string
   destructive?: boolean
   onConfirm: () => void | Promise<void>
 }
@@ -99,6 +103,7 @@ export function useConfirmDialog() {
       title={pending?.title ?? ''}
       description={pending?.description ?? ''}
       confirmLabel={pending?.confirmLabel}
+      busyLabel={pending?.busyLabel}
       destructive={pending?.destructive}
       loading={loading}
       onConfirm={handleConfirm}

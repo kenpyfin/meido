@@ -112,22 +112,22 @@ type UiTheme =
   | 'indigo'
 
 
-const UI_THEME_OPTIONS: { key: UiTheme; label: string; color: string }[] = [
-  { key: 'meido', label: 'Kuro-Meido', color: '#d94f70' },
-  { key: 'sakura', label: 'Sakura Cafe', color: '#f472b6' },
-  { key: 'matcha', label: 'Matcha Parlor', color: '#4ade80' },
-  { key: 'royal', label: 'Victorian Parlour', color: '#7aa2f7' },
-  { key: 'linear', label: 'Linear', color: '#5e6ad2' },
-  { key: 'green', label: 'Green', color: '#34d399' },
-  { key: 'blue', label: 'Blue', color: '#60a5fa' },
-  { key: 'slate', label: 'Slate', color: '#94a3b8' },
-  { key: 'amber', label: 'Amber', color: '#fbbf24' },
-  { key: 'violet', label: 'Violet', color: '#a78bfa' },
-  { key: 'rose', label: 'Rose', color: '#fb7185' },
-  { key: 'cyan', label: 'Cyan', color: '#22d3ee' },
-  { key: 'teal', label: 'Teal', color: '#2dd4bf' },
-  { key: 'orange', label: 'Orange', color: '#fb923c' },
-  { key: 'indigo', label: 'Indigo', color: '#818cf8' },
+const UI_THEME_OPTIONS: { key: UiTheme; label: string; color: string; canvas: string }[] = [
+  { key: 'meido', label: 'Kuro-Meido', color: '#d94f70', canvas: '#060508' },
+  { key: 'sakura', label: 'Sakura Cafe', color: '#f472b6', canvas: '#140b10' },
+  { key: 'matcha', label: 'Matcha Parlor', color: '#4ade80', canvas: '#07120c' },
+  { key: 'royal', label: 'Victorian Parlour', color: '#7aa2f7', canvas: '#070b14' },
+  { key: 'linear', label: 'Linear', color: '#5e6ad2', canvas: '#010102' },
+  { key: 'green', label: 'Green', color: '#34d399', canvas: '#02110d' },
+  { key: 'blue', label: 'Blue', color: '#60a5fa', canvas: '#030b14' },
+  { key: 'slate', label: 'Slate', color: '#94a3b8', canvas: '#0a0f16' },
+  { key: 'amber', label: 'Amber', color: '#fbbf24', canvas: '#140f04' },
+  { key: 'violet', label: 'Violet', color: '#a78bfa', canvas: '#0f0618' },
+  { key: 'rose', label: 'Rose', color: '#fb7185', canvas: '#16080f' },
+  { key: 'cyan', label: 'Cyan', color: '#22d3ee', canvas: '#051317' },
+  { key: 'teal', label: 'Teal', color: '#2dd4bf', canvas: '#041411' },
+  { key: 'orange', label: 'Orange', color: '#fb923c', canvas: '#171006' },
+  { key: 'indigo', label: 'Indigo', color: '#818cf8', canvas: '#080b19' },
 ]
 
 function readAppearance(): Appearance {
@@ -766,6 +766,7 @@ export function App({
   const [newSchedulePrompt, setNewSchedulePrompt] = useState('')
   const [newScheduleType, setNewScheduleType] = useState<'cron' | 'once'>('cron')
   const [newScheduleValue, setNewScheduleValue] = useState('0 9 * * *')
+  const [newScheduleDelivery, setNewScheduleDelivery] = useState<'runs_only' | 'transcript'>('runs_only')
   const [bindings, setBindings] = useState<ChannelBinding[]>([])
   const [pendingRuns, setPendingRuns] = useState<PendingRun[]>([])
   const [stoppingRunIds, setStoppingRunIds] = useState<string[]>([])
@@ -993,7 +994,7 @@ export function App({
   const handleOpenTopics = useCallback(() => {
     setTopicsSheetOpen(true)
   }, [])
-  const { queueLane, queueLanesAll, otherPersonasPending, backgroundActiveCount, backgroundJobs, queueSampledAt, blockedItems, invalidateOps } =
+  const { queueLane, queueLanesAll, otherPersonasPending, backgroundActiveCount, backgroundJobs, queueSampledAt, unreadRuns, blockedItems, invalidateOps } =
     useOpsPoll({
       chatId,
       activePersonaId,
@@ -1784,6 +1785,7 @@ export function App({
     scheduleType: string,
     scheduleValue: string,
     personaId?: number | null,
+    outputDelivery: 'runs_only' | 'transcript' = 'runs_only',
   ): Promise<void> {
     await api('/api/schedules', {
       method: 'POST',
@@ -1793,6 +1795,7 @@ export function App({
         schedule_type: scheduleType,
         schedule_value: scheduleValue,
         persona_id: personaId && personaId > 0 ? personaId : undefined,
+        output_delivery: outputDelivery,
       }),
     })
     await loadSchedules(chatId)
@@ -1807,12 +1810,16 @@ export function App({
       schedule_type?: string
       schedule_value?: string
       timezone?: string
+      output_delivery?: 'runs_only' | 'transcript'
     },
   ): Promise<void> {
     await api(`/api/schedules/${taskId}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     })
+    setScheduleDetailTask((current) =>
+      current?.id === taskId ? { ...current, ...patch } : current,
+    )
     await loadSchedules(chatId)
   }
 
@@ -2236,6 +2243,7 @@ export function App({
       onOpenSettings: handleOpenSettings,
       onOpenInbox: handleOpenInbox,
       inboxBadgeCount,
+      schedulesBadgeCount: unreadRuns,
       onOpenSchedules: handleOpenSchedules,
       onOpenPrinciples: handleOpenPrinciples,
       onOpenArtifacts: handleOpenArtifacts,
@@ -2257,6 +2265,7 @@ export function App({
       handleOpenSettings,
       handleOpenInbox,
       inboxBadgeCount,
+      unreadRuns,
       handleOpenSchedules,
       handleOpenPrinciples,
       handleOpenArtifacts,
@@ -2308,7 +2317,7 @@ export function App({
         className={
           appearance === 'dark'
             ? 'mc-app-shell h-[100dvh] min-w-0 w-full overflow-hidden bg-[var(--mc-bg-main)] pb-[env(safe-area-inset-bottom,0px)] pt-[env(safe-area-inset-top,0px)]'
-            : 'mc-app-shell h-[100dvh] min-w-0 w-full overflow-hidden bg-[radial-gradient(1200px_560px_at_-8%_-10%,#d1fae5_0%,transparent_58%),radial-gradient(1200px_560px_at_108%_-12%,#e0f2fe_0%,transparent_58%),#f8fafc] pb-[env(safe-area-inset-bottom,0px)] pt-[env(safe-area-inset-top,0px)]'
+            : 'mc-app-shell h-[100dvh] min-w-0 w-full overflow-hidden bg-[var(--mc-bg-main)] pb-[env(safe-area-inset-bottom,0px)] pt-[env(safe-area-inset-top,0px)]'
         }
       >
         {mobileNavOpen ? (
@@ -2410,7 +2419,7 @@ export function App({
               className={
                 appearance === 'dark'
                   ? 'relative flex min-h-0 min-w-0 flex-1 flex-col bg-[linear-gradient(to_bottom,var(--mc-bg-panel),var(--mc-bg-main)_28%)]'
-                  : 'relative flex min-h-0 min-w-0 flex-1 flex-col bg-[linear-gradient(to_bottom,#f8fafc,white_20%)]'
+                  : 'relative flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--mc-bg-main)]'
               }
             >
               <div
@@ -2447,10 +2456,10 @@ export function App({
                 {installationStatus != null &&
                 !onboardingDismissed &&
                 (!installationStatus.llm_ready || !installationStatus.channel_ready) ? (
-                  <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100 mb-2">
+                  <div role="status" className="mc-notice-owed mb-2">
                     <div className="flex flex-col gap-2">
                       <span>
-                        Finish setup: configure <code className="text-xs">.env</code> with at least one channel (Telegram or Discord) and LLM keys, then restart Meido if needed. See Settings for status.
+                        LLM or a channel is missing. Open Settings to finish setup.
                       </span>
                       <div className="flex gap-2 items-center flex-wrap">
                         <Button size="sm" variant="default" onClick={handleOpenSettings}>
@@ -2468,7 +2477,7 @@ export function App({
                   </div>
                 ) : null}
                 {replayNotice ? (
-                  <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100">{replayNotice}</div>
+                  <div role="status" className="mc-notice-owed">{replayNotice}</div>
                 ) : null}
                 {error ? (
                   <ErrorBanner
@@ -2885,6 +2894,8 @@ export function App({
           setNewType: setNewScheduleType,
           newValue: newScheduleValue,
           setNewValue: setNewScheduleValue,
+          newDelivery: newScheduleDelivery,
+          setNewDelivery: setNewScheduleDelivery,
           newPersonaId: newSchedulePersonaId,
           setNewPersonaId: setNewSchedulePersonaId,
           createSchedule,
@@ -3034,6 +3045,7 @@ export function App({
         onOpenQueue={() => setQueueDialogOpen(true)}
         onOpenInbox={() => setInboxDialogOpen(true)}
         inboxBadgeCount={inboxBadgeCount}
+        schedulesBadgeCount={unreadRuns}
         onOpenSchedules={() => setSchedulesDialogOpen(true)}
         onOpenPrinciples={() => setAgentsMdOpen(true)}
         onOpenArtifacts={() => setArtifactsDialogOpen(true)}

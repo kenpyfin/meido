@@ -189,7 +189,7 @@ export function SettingsRunContextPanel({
       </div>
 
       {saveNotice ? (
-        <div role="status" className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-900 dark:text-green-100">{saveNotice}</div>
+        <div role="status" className="mc-notice-settled">{saveNotice}</div>
       ) : null}
 
       <div className="mc-run-context-block">
@@ -277,7 +277,8 @@ export function SettingsRunContextPanel({
         <span className="font-medium">Paths outside the workspace</span>
         <span className="mt-1 block leading-snug">
           Absolute paths this persona may read and write. One path per line. Only listed paths
-          are reachable outside the workspace. Vault paths set for the process stay available.
+          are reachable outside the workspace. Listing the Meido source checkout allows edits
+          there; other paths in that checkout stay blocked. Vault paths set for the process stay available.
           The list is stored as{' '}
           {externalEnvKey ? (
             <code className="text-[11px]">{externalEnvKey}</code>

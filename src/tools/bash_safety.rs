@@ -199,9 +199,17 @@ fn extract_find_name_pattern(command: &str) -> Option<String> {
     None
 }
 
-/// Block git that explicitly targets the bot's own checkout. Tier-1 target repos stay allowed.
-pub fn check_self_repo_git(command: &str, workspace_root: &Path) -> Option<ToolResult> {
+/// Block git that explicitly targets the bot's own checkout.
+/// An external path that covers the checkout root lifts the block.
+pub fn check_self_repo_git(
+    command: &str,
+    workspace_root: &Path,
+    external_roots: &[PathBuf],
+) -> Option<ToolResult> {
     if !crate::self_repo::command_targets_self_repo_git(command, workspace_root) {
+        return None;
+    }
+    if crate::self_repo::self_repo_git_allowed_by_external_roots(workspace_root, external_roots) {
         return None;
     }
     Some(

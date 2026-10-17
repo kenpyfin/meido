@@ -1,9 +1,11 @@
 import { Component, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { ConfirmDialog } from './confirm-dialog'
 import { asEngineId, engineLabel, ENGINE_OPTIONS, type EngineId } from '../lib/agent-engine'
 import { SettingsPanelSkeleton } from './skeleton'
+import { LocalModelFields } from './llm-model-fields'
 import { SettingsLlmPanel } from './settings-llm'
 import { SettingsCursorPanel } from './settings-cursor'
 import { SettingsGeminiAdkPanel } from './settings-gemini-adk'
@@ -328,13 +330,16 @@ export function SettingsAgentEnginePanel({
 
       <ConfigPanelErrorBoundary key={selectedEngine}>
         {selectedEngine === 'classic' ? (
-          <SettingsLlmPanel
-            api={api}
-            onError={onError}
-            activePersonaId={activePersonaId}
-            includeThinking={false}
-            onSaved={refreshModelGap}
-          />
+          <div className="flex flex-col gap-3">
+            <SettingsLlmPanel
+              api={api}
+              onError={onError}
+              activePersonaId={activePersonaId}
+              includeThinking={false}
+              onSaved={refreshModelGap}
+            />
+            <AdvancedSingleTurnDialog api={api} onError={onError} />
+          </div>
         ) : null}
         {selectedEngine === 'classic_cost_routing' ? (
           <div className="flex flex-col gap-4">
@@ -392,6 +397,7 @@ function PersonaLocalDelegate({
 }) {
   const [baseUrl, setBaseUrl] = useState('')
   const [model, setModel] = useState('')
+  const [listedModels, setListedModels] = useState<string[]>([])
   const [toolsOk, setToolsOk] = useState(false)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -416,6 +422,10 @@ function PersonaLocalDelegate({
 
   async function save() {
     if (personaId == null) return
+    if (!listedModels.includes(model.trim())) {
+      onError('Pick a model from the list.')
+      return
+    }
     setBusy(true)
     setNotice(null)
     try {
@@ -436,6 +446,10 @@ function PersonaLocalDelegate({
 
   async function test() {
     if (personaId == null) return
+    if (!listedModels.includes(model.trim())) {
+      onError('Pick a model from the list.')
+      return
+    }
     setBusy(true)
     setNotice(null)
     try {
@@ -468,8 +482,14 @@ function PersonaLocalDelegate({
         This persona’s local server. The turn stops until the URL, model, and tool-call check are set.
         {ready ? ' Tool calling is verified.' : ' Run Test after saving.'}
       </span>
-      <Input value={baseUrl} placeholder="http://127.0.0.1:8080/v1" aria-label="Local server URL" onChange={(e) => setBaseUrl(e.target.value)} />
-      <Input value={model} placeholder="Model id" aria-label="Local model" onChange={(e) => setModel(e.target.value)} />
+      <LocalModelFields
+        api={api}
+        baseUrl={baseUrl}
+        model={model}
+        onBaseUrl={setBaseUrl}
+        onModel={setModel}
+        onListed={setListedModels}
+      />
       <div className="flex gap-2">
         <Button type="button" size="sm" disabled={busy || personaId == null} onClick={() => void save()}>
           {busy ? 'Saving…' : 'Save local delegate'}
@@ -480,6 +500,143 @@ function PersonaLocalDelegate({
       </div>
       {notice ? <span className="text-xs text-muted-foreground" role="status">{notice}</span> : null}
     </div>
+  )
+}
+
+function AdvancedSingleTurnDialog({
+  api,
+  onError,
+}: {
+  api: <T>(path: string, init?: RequestInit) => Promise<T>
+  onError: (message: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [discardOpen, setDiscardOpen] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [saved, setSaved] = useState<number | null>(null)
+  const [floor, setFloor] = useState(1)
+  const [ceiling, setCeiling] = useState(500)
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    const data = await api<RuntimeConfigResponse>('/api/runtime')
+    const current = data.max_tool_iterations ?? 100
+    const nextFloor = data.max_tool_iterations_floor ?? 1
+    const nextCeiling = data.max_tool_iterations_ceiling ?? 500
+    setSaved(current)
+    setDraft(String(current))
+    setFloor(nextFloor)
+    setCeiling(nextCeiling)
+  }, [api])
+
+  useEffect(() => {
+    if (!open) return
+    setNotice(null)
+    void load().catch((e: unknown) => {
+      onError(e instanceof Error ? e.message : String(e))
+    })
+  }, [load, onError, open])
+
+  const parsed = Number.parseInt(draft, 10)
+  const valid = Number.isFinite(parsed) && parsed >= floor && parsed <= ceiling
+  const dirty = saved != null && parsed !== saved
+
+  function requestClose(next: boolean) {
+    if (next) {
+      setOpen(true)
+      return
+    }
+    if (dirty) {
+      setDiscardOpen(true)
+      return
+    }
+    setOpen(false)
+  }
+
+  async function save() {
+    if (!valid) {
+      onError(`Max turns must be from ${floor} to ${ceiling}.`)
+      return
+    }
+    setBusy(true)
+    setNotice(null)
+    try {
+      const res = await api<RuntimeConfigResponse>('/api/runtime', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ max_tool_iterations: parsed }),
+      })
+      const current = res.max_tool_iterations ?? parsed
+      setSaved(current)
+      setDraft(String(current))
+      if (res.max_tool_iterations_floor != null) setFloor(res.max_tool_iterations_floor)
+      if (res.max_tool_iterations_ceiling != null) setCeiling(res.max_tool_iterations_ceiling)
+      if (res.warnings?.length) onError(res.warnings.join(' '))
+      setNotice(res.message ?? 'Max turns saved.')
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const boundNote =
+    floor > 1
+      ? `This process keeps the limit at ${floor} or more.`
+      : ceiling < 500
+        ? `This process keeps the limit at ${ceiling} or less.`
+        : 'From 1 to 500. The default is 100.'
+
+  return (
+    <>
+      <Button type="button" size="sm" variant="outline" onClick={() => setOpen(true)}>
+        Advanced
+      </Button>
+      <Dialog open={open} onOpenChange={requestClose}>
+        <DialogContent className="max-w-[420px]">
+          <DialogTitle>Advanced</DialogTitle>
+          <DialogDescription>
+            Max turns is shared by every persona, including Cost routing. The next turn uses the
+            saved limit. Close does not save.
+          </DialogDescription>
+          <label className="mc-pipeline-field">
+            <span>Max turns</span>
+            <Input
+              type="number"
+              min={floor}
+              max={ceiling}
+              inputMode="numeric"
+              value={draft}
+              disabled={busy || saved == null}
+              onChange={(e) => setDraft(e.target.value)}
+            />
+          </label>
+          <span className="text-xs text-muted-foreground">
+            Tool rounds one turn may take. {boundNote}
+          </span>
+          <Button type="button" size="sm" disabled={busy || !dirty || !valid} onClick={() => void save()}>
+            {busy ? 'Saving…' : 'Save max turns'}
+          </Button>
+          {notice ? (
+            <span className="text-xs text-muted-foreground" role="status">
+              {notice}
+            </span>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+      <ConfirmDialog
+        open={discardOpen}
+        onOpenChange={setDiscardOpen}
+        title="Discard max turns?"
+        description="The unsaved max turns will be lost."
+        confirmLabel="Discard draft"
+        onConfirm={() => {
+          setDiscardOpen(false)
+          setOpen(false)
+        }}
+      />
+    </>
   )
 }
 

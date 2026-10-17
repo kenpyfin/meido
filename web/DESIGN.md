@@ -222,7 +222,7 @@ No dramatic drop shadows. A 1px top sheen on lifted panels is enough.
 
 ### `katyusha-header-bar`
 
-Sticky header. Surface-1 at 95% with a hairline, then a 6px scallop (`.mc-katyusha-lace`) along the bottom edge. The persona name is display type. The inbox control carries the service-bell icon.
+Sticky header. Surface-1 at 95%, then a 14px scallop (`.mc-katyusha-lace`) along the bottom edge. The straight rule is gone; the canvas shows in the dips. The persona name is display type. The inbox control carries the service-bell icon.
 
 ### `apron-message-card`
 
@@ -230,7 +230,7 @@ Assistant text. Warm parlor gradient mixed from the ribbon, 18px radius with a t
 
 ### `ribbon-cta-button`
 
-Primary actions. Ribbon fill, espresso label, 8px radius, 150ms hover to `{colors.primary-hover}`. The composer send control is the same ribbon, drawn as a small seal.
+Primary actions. Ribbon fill, espresso label, 8px radius, 150ms hover to `{colors.primary-hover}`. The composer send control is that same 8px ribbon square, with a 14px espresso bow taken from the crest.
 
 ### `brooch-status-badge`
 
@@ -242,7 +242,7 @@ Bulletin under the header. Uppercase sans label, display not required. Empty cop
 
 ### `parlor-empty-state`
 
-Empty thread. Centered crest medallion, display greeting, one line of instruction, then the existing shortcut hints. No illustration scene and no extra accent colors.
+Empty thread. Centered crest, display greeting, one line of instruction, then the existing shortcut hints. No illustration scene and no extra accent colors. The crest file is the medallion.
 
 ## Theme presets
 

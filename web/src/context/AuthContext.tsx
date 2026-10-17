@@ -76,9 +76,7 @@ export function AuthDialog() {
     <Dialog open={authRequired} onOpenChange={(open) => !open && setAuthRequired(false)}>
       <DialogContent>
         <DialogHeader>
-          <div className="mc-crest-medallion mx-auto" aria-hidden>
-            <IconMeidoCrest className="size-8" />
-          </div>
+          <IconMeidoCrest className="mc-crest-medallion" />
           <DialogTitle className="mc-display-title text-2xl">The parlor gate</DialogTitle>
           <DialogDescription>
             This house asks for a token before entry. Use the same value as <code>WEB_AUTH_TOKEN</code> in

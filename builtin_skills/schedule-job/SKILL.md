@@ -36,6 +36,7 @@ Before calling `schedule_task` (new row) or `update_scheduled_task` (existing `t
 - schedule type (`cron` or `once`)
 - schedule expression or timestamp (`schedule_value`)
 - timezone context (`timezone`, or default to UTC with explicit notice)
+- output delivery (`output_delivery`): `runs_only` (default) keeps the result in scheduled run history; `transcript` also copies it into the chat transcript without pushing to Telegram, Discord, or other channel webhooks
 
 Then:
 
@@ -70,11 +71,12 @@ The script prints JSON with normalized output and explicit timezone assumptions.
 - `schedule_type="once"`:
   - `schedule_value`: ISO 8601 timestamp (include offset when available)
   - `timezone`: optional; include `"UTC"` when timezone was unknown and defaulted
+- `output_delivery` (optional): `"runs_only"` (default) or `"transcript"`
 
 ### Change existing task — `update_scheduled_task`
 
 - Pass `task_id` (from `list_scheduled_tasks`).
-- Optional fields: `status`, `persona_id`, `prompt`, and/or **`schedule_type` + `schedule_value`** together (with optional `timezone` for preflight).
+- Optional fields: `status`, `persona_id`, `prompt`, `output_delivery` (`runs_only` or `transcript`), and/or **`schedule_type` + `schedule_value`** together (with optional `timezone` for preflight).
 - Do not confuse with authored YAML workflows; this only updates the scheduled row.
 
 ## Examples

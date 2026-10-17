@@ -617,6 +617,8 @@ struct ScheduleCreateRequest {
     schedule_value: String,
     timezone: Option<String>,
     persona_id: Option<i64>,
+    #[serde(default)]
+    output_delivery: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -635,6 +637,8 @@ struct ScheduleUpdateRequest {
     schedule_type: Option<String>,
     schedule_value: Option<String>,
     timezone: Option<String>,
+    #[serde(default)]
+    output_delivery: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -7175,6 +7179,7 @@ async fn api_schedules_list(
                 "last_run": t.last_run,
                 "status": t.status,
                 "created_at": t.created_at,
+                "output_delivery": t.output_delivery,
             })
         })
         .collect();
@@ -7316,6 +7321,9 @@ async fn api_schedules_create(
         effective_tz,
     )
     .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let output_delivery =
+        crate::tools::schedule::normalize_output_delivery(body.output_delivery.as_deref(), true)
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
     let prompt = body.prompt;
     let schedule_type = body.schedule_type;
@@ -7341,6 +7349,7 @@ async fn api_schedules_create(
             &schedule_type,
             &schedule_value,
             &next_run_for_db,
+            &output_delivery,
         )
     })
     .await
@@ -7394,10 +7403,22 @@ async fn api_schedules_update(
             "Provide both schedule_type and schedule_value to change the schedule".into(),
         ));
     }
-    if status.is_none() && persona_id.is_none() && prompt_update.is_none() && !has_schedule_pair {
+    let output_delivery = match body.output_delivery.as_deref() {
+        None => None,
+        Some(raw) => Some(
+            crate::tools::schedule::normalize_output_delivery(Some(raw), false)
+                .map_err(|e| (StatusCode::BAD_REQUEST, e))?,
+        ),
+    };
+    if status.is_none()
+        && persona_id.is_none()
+        && prompt_update.is_none()
+        && output_delivery.is_none()
+        && !has_schedule_pair
+    {
         return Err((
             StatusCode::BAD_REQUEST,
-            "Provide at least one field to update: status, persona_id, prompt, or schedule_type+schedule_value".into(),
+            "Provide at least one field to update: status, persona_id, prompt, output_delivery, or schedule_type+schedule_value".into(),
         ));
     }
     if let Some(pid) = persona_id {
@@ -7483,6 +7504,16 @@ async fn api_schedules_update(
     if let Some(p) = prompt_update {
         let ok = call_blocking(state.app_state.db.clone(), move |db| {
             db.update_task_prompt(task_id, &p)
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if !ok {
+            return Err((StatusCode::NOT_FOUND, "Task not found".into()));
+        }
+    }
+    if let Some(delivery) = output_delivery {
+        let ok = call_blocking(state.app_state.db.clone(), move |db| {
+            db.update_task_output_delivery(task_id, &delivery)
         })
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -7806,6 +7837,9 @@ struct RuntimePatchRequest {
     response_quality_evaluator_enabled: Option<bool>,
     #[serde(default)]
     agent_engine: Option<String>,
+    /// Process-wide Classic tool-loop cap. `None` leaves the current limit.
+    #[serde(default)]
+    max_tool_iterations: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -8345,6 +8379,9 @@ async fn api_runtime_get(
     let mm_cfg = state.app_state.llm.local_delegate_config();
     let engine = toggles.agent_engine();
     let local_ready = mm_cfg.local_routable();
+    let max_turn_bounds = crate::config::max_tool_iteration_bounds(
+        &state.app_state.config.runtime_reliability_profile,
+    );
     Ok(Json(json!({
         "ok": true,
         "tool_output_debug": toggles.tool_output_debug(),
@@ -8362,6 +8399,9 @@ async fn api_runtime_get(
             "response_quality_evaluator_enabled": if sources.2 { "app_settings" } else { "env" },
             "agent_engine": if sources.3.is_some() { "app_settings" } else { "env" },
         },
+        "max_tool_iterations": toggles.max_tool_iterations(),
+        "max_tool_iterations_floor": max_turn_bounds.0,
+        "max_tool_iterations_ceiling": max_turn_bounds.1,
         "description": "When enabled, verbose shell output is shown in chat (including background-job completion). When off, full logs are agent-only.",
     })))
 }
@@ -8372,8 +8412,20 @@ async fn api_runtime_patch(
     Json(body): Json<RuntimePatchRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     require_auth(&headers, state.auth_token.as_deref())?;
+    if let Some(requested) = body.max_tool_iterations {
+        if !(1..=crate::config::MAX_TOOL_ITERATIONS_HARD_CAP).contains(&requested) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Max turns must be from 1 to {}.",
+                    crate::config::MAX_TOOL_ITERATIONS_HARD_CAP
+                ),
+            ));
+        }
+    }
     let toggles = &state.app_state.runtime_toggles;
     let mut messages: Vec<&str> = Vec::new();
+    let mut max_turns_message: Option<String> = None;
 
     if let Some(enabled) = body.tool_output_debug {
         toggles.set_tool_output_debug(enabled);
@@ -8458,6 +8510,23 @@ async fn api_runtime_patch(
             }
         });
     }
+    if let Some(requested) = body.max_tool_iterations {
+        let profile = state.app_state.config.runtime_reliability_profile.as_str();
+        let effective = crate::config::clamp_max_tool_iterations(profile, requested);
+        toggles.set_max_tool_iterations(effective);
+        let (floor, ceiling) = crate::config::max_tool_iteration_bounds(profile);
+        max_turns_message = Some(if effective == requested {
+            format!("Max turns set to {effective}. The next turn uses this limit.")
+        } else if requested < floor {
+            format!(
+                "Max turns set to {effective}. This process does not go below {floor}. The next turn uses this limit."
+            )
+        } else {
+            format!(
+                "Max turns set to {effective}. This process does not go above {ceiling}. The next turn uses this limit."
+            )
+        });
+    }
 
     let mm_cfg = state.app_state.llm.local_delegate_config();
     let engine = toggles.agent_engine();
@@ -8476,7 +8545,7 @@ async fn api_runtime_patch(
         }
     }
 
-    if messages.is_empty() {
+    if messages.is_empty() && max_turns_message.is_none() {
         return Err((
             StatusCode::BAD_REQUEST,
             "No runtime toggle fields provided".to_string(),
@@ -8498,13 +8567,25 @@ async fn api_runtime_patch(
     } else {
         "false"
     };
+    let max_turns_value = toggles.max_tool_iterations().to_string();
     if let Err(err) = env_config::persist_pairs(&[
         ("TOOL_OUTPUT_DEBUG", Some(debug_value)),
         ("POST_TOOL_EVALUATOR_ENABLED", Some(pte_value)),
         ("RESPONSE_QUALITY_EVALUATOR_ENABLED", Some(pdqe_value)),
         ("AGENT_ENGINE", Some(engine_name)),
+        ("MAX_TOOL_ITERATIONS", Some(max_turns_value.as_str())),
     ]) {
         warnings.push(format!("Saved in the app. Could not update .env: {err}"));
+    }
+    let max_turn_bounds = crate::config::max_tool_iteration_bounds(
+        &state.app_state.config.runtime_reliability_profile,
+    );
+    let mut message = messages.join(" ");
+    if let Some(extra) = max_turns_message.as_deref() {
+        if !message.is_empty() {
+            message.push(' ');
+        }
+        message.push_str(extra);
     }
 
     Ok(Json(json!({
@@ -8517,9 +8598,12 @@ async fn api_runtime_patch(
         "local_delegate_tools_ok": mm_cfg.local_tools_ok,
         "local_delegate_ready": local_ready,
         "cost_routing_effective": cost_routing_effective,
+        "max_tool_iterations": toggles.max_tool_iterations(),
+        "max_tool_iterations_floor": max_turn_bounds.0,
+        "max_tool_iterations_ceiling": max_turn_bounds.1,
         "warnings": warnings,
         "source": "app_settings",
-        "message": messages.join(" "),
+        "message": message,
     })))
 }
 
@@ -10776,6 +10860,21 @@ async fn favicon_file() -> impl IntoResponse {
     (StatusCode::NOT_FOUND, "Not Found").into_response()
 }
 
+fn embedded_public_file(name: &str, content_type: &'static str) -> axum::response::Response {
+    match WEB_ASSETS.get_file(name) {
+        Some(file) => ([("content-type", content_type)], file.contents().to_vec()).into_response(),
+        None => (StatusCode::NOT_FOUND, "Not Found").into_response(),
+    }
+}
+
+async fn meido_crest_file() -> axum::response::Response {
+    embedded_public_file("meido-crest.svg", "image/svg+xml")
+}
+
+async fn meido_bow_file() -> axum::response::Response {
+    embedded_public_file("meido-bow.svg", "image/svg+xml")
+}
+
 #[derive(Debug, Deserialize)]
 struct OAuthAuthorizeQuery {
     chat_id: Option<i64>,
@@ -10976,6 +11075,8 @@ fn build_router(web_state: WebState) -> Router {
         .route("/api/uploads/*path", get(upload_file))
         .route("/icon.png", get(icon_file))
         .route("/favicon.ico", get(favicon_file))
+        .route("/meido-crest.svg", get(meido_crest_file))
+        .route("/meido-bow.svg", get(meido_bow_file))
         .route("/api/health", get(api_health))
         .route("/api/chat", get(api_chat))
         .route("/api/contacts/bind", post(api_contacts_bind))
@@ -11250,6 +11351,14 @@ mod tests {
         assert!(
             WEB_ASSETS.get_file("icon.png").is_some(),
             "embedded web asset missing: icon.png"
+        );
+        assert!(
+            WEB_ASSETS.get_file("meido-crest.svg").is_some(),
+            "embedded web asset missing: meido-crest.svg"
+        );
+        assert!(
+            WEB_ASSETS.get_file("meido-bow.svg").is_some(),
+            "embedded web asset missing: meido-bow.svg"
         );
         let assets_dir = WEB_ASSETS.get_dir("assets");
         assert!(

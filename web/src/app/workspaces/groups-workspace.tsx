@@ -255,7 +255,9 @@ function GroupSettings({
     staleTime: 60_000,
   })
   const providers = catalog.data?.providers ?? []
-  const models = providers.find((item) => item.id === provider)?.models ?? []
+  const models = (providers.find((item) => item.id === provider)?.models ?? []).filter(
+    (item) => item.id && !item.from_active_config,
+  )
 
   async function save() {
     await api(`/api/groups/${group.id}`, {
@@ -264,7 +266,7 @@ function GroupSettings({
         turn_mode: mode,
         max_speakers: maxSpeakers,
         moderator_provider: provider,
-        moderator_model: model,
+        moderator_model: models.some((item) => item.id === model) ? model : '',
       }),
     })
     await api(`/api/groups/${group.id}/members`, {
@@ -307,7 +309,7 @@ function GroupSettings({
             </option>
           ))}
         </select>
-        <select className="rounded-md border border-[color:var(--mc-border-soft)] bg-transparent px-2 py-1" value={model} onChange={(event) => setModel(event.target.value)}>
+        <select className="rounded-md border border-[color:var(--mc-border-soft)] bg-transparent px-2 py-1" value={models.some((item) => item.id === model) ? model : ''} onChange={(event) => setModel(event.target.value)}>
           <option value="">Default</option>
           {models.map((item) => (
             <option key={item.id} value={item.id}>

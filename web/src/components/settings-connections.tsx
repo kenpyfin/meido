@@ -1,6 +1,6 @@
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { ModelSelect } from './model-select'
 import { useCallback, useEffect, useState } from 'react'
 
 type ConnectionRow = {
@@ -52,7 +52,6 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
   const [localUrl, setLocalUrl] = useState('')
   const [localModel, setLocalModel] = useState('')
   const [localModels, setLocalModels] = useState<string[]>([])
-  const [localListed, setLocalListed] = useState(false)
   const [savingId, setSavingId] = useState<string | null>(null)
   const [loadingLocalModels, setLoadingLocalModels] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -110,8 +109,8 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
       onError('Enter the local server URL.')
       return
     }
-    if (!model) {
-      onError('Enter a local model name.')
+    if (!localModels.includes(model)) {
+      onError('Pick a model from the list.')
       return
     }
     setSavingId('local_server')
@@ -150,8 +149,6 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
         return
       }
       setLocalModels(ids)
-      setLocalListed(true)
-      if (!ids.includes(localModel)) setLocalModel(ids[0] ?? '')
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -162,8 +159,8 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
   async function testLocal() {
     const url = localUrl.trim()
     const model = localModel.trim()
-    if (!url || !model) {
-      onError('Enter the server URL and model before testing.')
+    if (!url || !localModels.includes(model)) {
+      onError('Pick a model from the list before testing.')
       return
     }
     setTesting(true)
@@ -304,28 +301,13 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
           aria-label="Local model server URL"
         />
         <div className="flex flex-wrap items-center gap-2">
-          {localListed && localModels.length > 0 ? (
-            <Select value={localModel || undefined} onValueChange={setLocalModel}>
-              <SelectTrigger className="min-w-[220px] flex-1" aria-label="Local model">
-                <SelectValue placeholder="Select a model" />
-              </SelectTrigger>
-              <SelectContent>
-                {localModels.map((id) => (
-                  <SelectItem key={id} value={id}>
-                    {id}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : (
-            <Input
-              value={localModel}
-              placeholder="Model name"
-              onChange={(e) => setLocalModel(e.target.value)}
-              className="min-w-[220px] flex-1"
-              aria-label="Local model"
-            />
-          )}
+          <ModelSelect
+            ariaLabel="Local model"
+            value={localModel}
+            options={localModels.map((id) => ({ id }))}
+            onChange={setLocalModel}
+            disabled={loadingLocalModels}
+          />
           <Button
             size="sm"
             variant="outline"

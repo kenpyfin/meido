@@ -6,9 +6,11 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose } fr
 import React from 'react'
 
 import type { SchedulesDialogProps } from './types'
+import { ScheduleRunsPanel } from './schedule-runs-panel'
 
 export function SchedulesDialog(props: SchedulesDialogProps) {
-  const { appearance, activePersonaId, personas, schedules } = props
+  const { appearance, api, chatId, activePersonaId, personas, schedules } = props
+  const [view, setView] = React.useState<'tasks' | 'runs'>('tasks')
   const schedulesDialogOpen = schedules.open
   const setSchedulesDialogOpen = schedules.onOpenChange
   const schedulesShowArchived = schedules.showArchived
@@ -23,6 +25,8 @@ export function SchedulesDialog(props: SchedulesDialogProps) {
   const setNewScheduleValue = schedules.setNewValue
   const newSchedulePersonaId = schedules.newPersonaId
   const setNewSchedulePersonaId = schedules.setNewPersonaId
+  const newScheduleDelivery = schedules.newDelivery
+  const setNewScheduleDelivery = schedules.setNewDelivery
   const createSchedule = schedules.createSchedule
   const updateSchedule = schedules.updateSchedule
   const openScheduleDetail = schedules.openDetail
@@ -43,7 +47,22 @@ export function SchedulesDialog(props: SchedulesDialogProps) {
           </DialogDescription>
 
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <span className="font-medium">Active schedules</span>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant={view === 'tasks' ? 'default' : 'secondary'}
+                onClick={() => setView('tasks')}
+              >
+                Tasks
+              </Button>
+              <Button
+                size="sm"
+                variant={view === 'runs' ? 'default' : 'secondary'}
+                onClick={() => setView('runs')}
+              >
+                All runs
+              </Button>
+            </div>
             <label htmlFor="sched-archived" className="flex cursor-pointer items-center gap-2 text-sm">
               <span>Show completed / cancelled</span>
               <Switch
@@ -58,6 +77,10 @@ export function SchedulesDialog(props: SchedulesDialogProps) {
             className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border p-3"
             style={borderStyle}
           >
+            {view === 'runs' ? (
+              <ScheduleRunsPanel api={api} chatId={chatId} />
+            ) : (
+            <>
             <ul className="mb-3 min-h-0 min-w-0 flex-1 list-none space-y-3 overflow-y-auto overflow-x-hidden overscroll-contain pr-1">
               {schedulesFiltered.length === 0 ? (
                 <li className="rounded-lg border border-dashed px-4 py-10 text-center" style={rowBorder}>
@@ -98,6 +121,7 @@ export function SchedulesDialog(props: SchedulesDialogProps) {
                     </span>
                     <span className="shrink-0 text-xs capitalize text-muted-foreground">
                       {t.status === 'running' ? 'active' : t.status}
+                      {t.output_delivery === 'transcript' ? ' · transcript' : ''}
                     </span>
                     <div className="ml-auto flex flex-wrap gap-1.5">
                       <Button size="sm" variant="secondary" onClick={() => openScheduleDetail(t)}>
@@ -158,6 +182,18 @@ export function SchedulesDialog(props: SchedulesDialogProps) {
                 className="min-w-0 basis-[12rem] sm:w-[200px]"
               />
               <Select
+                value={newScheduleDelivery}
+                onValueChange={(v) => setNewScheduleDelivery(v as 'runs_only' | 'transcript')}
+              >
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue placeholder="Delivery" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="runs_only">Runs only</SelectItem>
+                  <SelectItem value="transcript">Post to chat transcript</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select
                 value={newSchedulePersonaId != null ? String(newSchedulePersonaId) : ''}
                 onValueChange={(v) => setNewSchedulePersonaId(Number(v))}
               >
@@ -181,6 +217,7 @@ export function SchedulesDialog(props: SchedulesDialogProps) {
                       newScheduleType,
                       newScheduleValue,
                       newSchedulePersonaId ?? activePersonaId,
+                      newScheduleDelivery,
                     )
                     setNewSchedulePrompt('')
                   }
@@ -189,6 +226,8 @@ export function SchedulesDialog(props: SchedulesDialogProps) {
                 Add
               </Button>
             </div>
+            </>
+            )}
           </div>
 
           <div className="flex justify-end gap-2">

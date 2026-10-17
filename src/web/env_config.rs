@@ -107,6 +107,17 @@ fn apply_runtime_keys(state: &WebState, values: &HashMap<String, String>) {
     if let Some(value) = values.get("AGENT_ENGINE") {
         toggles.set_agent_engine(crate::runtime_toggles::AgentEngine::parse(value));
     }
+    if let Some(value) = values.get("MAX_TOOL_ITERATIONS") {
+        if let Ok(requested) = value.trim().parse::<usize>() {
+            if requested >= 1 {
+                let effective = crate::config::clamp_max_tool_iterations(
+                    &state.app_state.config.runtime_reliability_profile,
+                    requested,
+                );
+                toggles.set_max_tool_iterations(effective);
+            }
+        }
+    }
 }
 
 fn persist_env(updates: Vec<EnvUpdate>) -> Result<(), String> {

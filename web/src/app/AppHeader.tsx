@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button'
+import { Menu } from 'lucide-react'
 import React from 'react'
 import { SessionPicker } from '../components/session-picker'
 import { SideChatsPicker } from '../components/side-chats-picker'
@@ -41,6 +42,7 @@ export type AppHeaderToolbarProps = {
   onOpenSettings: () => void
   onOpenInbox: () => void
   inboxBadgeCount?: number
+  schedulesBadgeCount?: number
   onOpenSchedules: () => void
   onOpenPrinciples: () => void
   onOpenArtifacts: () => void
@@ -103,6 +105,7 @@ export const AppHeader = React.memo(function AppHeader({
     onOpenSettings,
     onOpenInbox,
     inboxBadgeCount = 0,
+    schedulesBadgeCount = 0,
     onOpenSchedules,
     onOpenPrinciples,
     onOpenArtifacts,
@@ -143,8 +146,8 @@ export const AppHeader = React.memo(function AppHeader({
     <header
       className={
         appearance === 'dark'
-          ? 'mc-katyusha-lace sticky top-0 z-30 border-b border-[color:var(--mc-border-soft)] bg-[color:var(--mc-bg-panel)]/95 backdrop-blur-sm md:top-0'
-          : 'mc-katyusha-lace sticky top-0 z-30 border-b border-[color:var(--mc-border-soft)] bg-[color:var(--mc-surface-elevated)]/92 backdrop-blur-sm md:top-0'
+          ? 'mc-katyusha-lace sticky top-0 z-30 bg-[color:var(--mc-bg-panel)]/95 backdrop-blur-sm md:top-0'
+          : 'mc-katyusha-lace sticky top-0 z-30 bg-[color:var(--mc-surface-elevated)]/92 backdrop-blur-sm md:top-0'
       }
     >
       <div className="mc-app-header-bar px-3 max-md:py-2 md:px-4 md:py-3">
@@ -152,7 +155,7 @@ export const AppHeader = React.memo(function AppHeader({
           <div className="flex items-center gap-2 min-w-0 w-full min-h-[44px] md:flex-1">
             <Button
               size="icon-lg"
-              variant="outline"
+              variant="secondary"
               className="shrink-0 min-h-10 min-w-10 md:!hidden"
               type="button"
               aria-expanded={mobileNavOpen}
@@ -162,22 +165,11 @@ export const AppHeader = React.memo(function AppHeader({
               title="Personas & theme"
               onClick={onOpenMobileNav}
             >
-              <svg
-                className="size-5 shrink-0"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden
-              >
-                <path d="M4 6h16M4 12h16M4 18h16" />
-              </svg>
+              <Menu className="size-5 shrink-0" aria-hidden />
             </Button>
             <Button
               size="icon-lg"
-              variant="outline"
+              variant="secondary"
               className="!hidden shrink-0 md:!inline-flex"
               type="button"
               aria-expanded={desktopSidebarOpen}
@@ -262,8 +254,23 @@ export const AppHeader = React.memo(function AppHeader({
             <Button size="sm" variant="secondary" className="!hidden md:!inline-flex" onClick={onOpenSettings}>
               Settings
             </Button>
-            <Button size="sm" variant="secondary" className="!hidden md:!inline-flex" onClick={onOpenSchedules}>
+            <Button
+              size="sm"
+              variant="secondary"
+              className="!hidden md:!inline-flex"
+              aria-label={
+                schedulesBadgeCount > 0
+                  ? `Schedules, ${schedulesBadgeCount} unread runs`
+                  : 'Open Schedules'
+              }
+              onClick={onOpenSchedules}
+            >
               Schedules
+              {schedulesBadgeCount > 0 ? (
+                <span className="mc-inbox-launch__badge" aria-hidden>
+                  {schedulesBadgeCount > 99 ? '99+' : schedulesBadgeCount}
+                </span>
+              ) : null}
             </Button>
             {personaModule ? (
             <Button size="sm" variant="secondary" className="!hidden md:!inline-flex" onClick={onOpenPrinciples}>

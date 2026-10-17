@@ -74,6 +74,24 @@ fn default_max_tokens() -> u32 {
 fn default_max_tool_iterations() -> usize {
     100
 }
+
+/// Upper bound for a saved max-turn limit. The reliability profile may use a lower ceiling.
+pub const MAX_TOOL_ITERATIONS_HARD_CAP: usize = 500;
+
+/// Inclusive floor and ceiling for `MAX_TOOL_ITERATIONS` under the running reliability profile.
+pub fn max_tool_iteration_bounds(profile: &str) -> (usize, usize) {
+    match profile {
+        "aggressive_completion" => (80, MAX_TOOL_ITERATIONS_HARD_CAP),
+        "safe_conservative" => (1, 60),
+        _ => (1, MAX_TOOL_ITERATIONS_HARD_CAP),
+    }
+}
+
+/// Apply the same profile floor and ceiling that `Config::post_deserialize` uses, plus the hard cap.
+pub fn clamp_max_tool_iterations(profile: &str, requested: usize) -> usize {
+    let (floor, ceiling) = max_tool_iteration_bounds(profile);
+    requested.clamp(floor, ceiling)
+}
 fn default_max_history_messages() -> usize {
     50
 }

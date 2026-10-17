@@ -493,7 +493,12 @@ export function SettingsIntegrationsPanel({
   return (
     <div className="space-y-3">
       {notice ? (
-        <div role="status" className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-900 dark:text-green-100">{notice}</div>
+        <div
+          role="status"
+          className={/Restart Meido to/i.test(notice) ? 'mc-notice-owed' : 'mc-notice-settled'}
+        >
+          {notice}
+        </div>
       ) : null}
 
       <div role="status" className="rounded-lg border border-border bg-muted/50 p-3 text-sm">

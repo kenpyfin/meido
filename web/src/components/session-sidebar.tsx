@@ -46,7 +46,7 @@ type SessionSidebarProps = {
   onToggleAppearance: () => void
   uiTheme: string
   onUiThemeChange: (theme: string) => void
-  uiThemeOptions: Array<{ key: string; label: string; color: string }>
+  uiThemeOptions: Array<{ key: string; label: string; color: string; canvas: string }>
   personas: Persona[]
   personaHasNew?: Record<number, boolean>
   selectedPersonaId: number | null
@@ -69,7 +69,7 @@ function ThemeSwatchButton({
   selected,
   onSelect,
 }: {
-  theme: { key: string; label: string; color: string }
+  theme: { key: string; label: string; color: string; canvas: string }
   selected: boolean
   onSelect: () => void
 }) {
@@ -92,10 +92,12 @@ function ThemeSwatchButton({
       }
     >
       <span
-        className="h-3 w-3 rounded-sm border border-[color:var(--mc-border-soft)]"
-        style={{ backgroundColor: theme.color }}
+        className="relative h-5 w-8 shrink-0 overflow-hidden rounded-sm border border-[color:var(--mc-border-soft)]"
+        style={{ backgroundColor: theme.canvas }}
         aria-hidden="true"
-      />
+      >
+        <span className="absolute inset-x-0 bottom-0 h-1.5" style={{ backgroundColor: theme.color }} />
+      </span>
       {theme.label}
     </button>
   )
@@ -159,14 +161,10 @@ export const SessionSidebar = React.memo(function SessionSidebar({
       <div className="flex justify-between items-center mb-4">
         <div className="min-w-0">
           <span className="mc-display-title flex items-center gap-2 text-2xl leading-none">
-            <IconMeidoCrest className="size-6 text-[color:var(--mc-accent)]" />
+            <IconMeidoCrest className="size-8" />
             Meido
           </span>
-          <span className="mc-katyusha-lace mt-2 block h-2" aria-hidden />
           <span className="mt-1.5 block text-xs text-[color:var(--mc-text-muted)]">
-            At your service, always. · メイド
-          </span>
-          <span className="mt-0.5 block">
             {mode === 'personas' ? 'Personas & sessions' : mode}
           </span>
         </div>

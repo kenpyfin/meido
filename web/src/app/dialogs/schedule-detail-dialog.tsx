@@ -5,9 +5,10 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose } fr
 import React from 'react'
 
 import type { ScheduleDetailDialogProps } from './types'
+import { ScheduleRunsPanel } from './schedule-runs-panel'
 
 export function ScheduleDetailDialog(props: ScheduleDetailDialogProps) {
-const { appearance, personas, scheduleDetail } = props
+const { appearance, api, chatId, personas, scheduleDetail } = props
   const scheduleDetailTask = scheduleDetail.task
   const scheduleDetailPrompt = scheduleDetail.prompt
   const setScheduleDetailPrompt = scheduleDetail.setPrompt
@@ -18,6 +19,11 @@ const { appearance, personas, scheduleDetail } = props
   const scheduleDetailBusy = scheduleDetail.busy
   const setScheduleDetailBusy = scheduleDetail.setBusy
   const updateScheduleDetail = scheduleDetail.updateSchedule
+  const [delivery, setDelivery] = React.useState<'runs_only' | 'transcript'>('runs_only')
+  React.useEffect(() => {
+    if (scheduleDetailTask == null) return
+    setDelivery(scheduleDetailTask.output_delivery === 'transcript' ? 'transcript' : 'runs_only')
+  }, [scheduleDetailTask?.id])
   return (
     <Dialog
       open={scheduleDetailTask != null}
@@ -60,6 +66,41 @@ const { appearance, personas, scheduleDetail } = props
                 ? 'min-h-[160px] w-full rounded-md border border-[color:var(--mc-border-soft)] bg-[color:var(--mc-bg-panel)] p-3 font-mono text-xs text-[color:var(--mc-text-primary)]'
                 : 'min-h-[160px] w-full rounded-md border border-[color:var(--mc-border-strong)] bg-[color:var(--mc-surface-elevated)] p-3 font-mono text-xs text-[color:var(--mc-text-primary)]'}
             />
+            <span className="mb-1 mt-3 block font-semibold">Output delivery</span>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <Select
+                value={delivery}
+                onValueChange={(v) => setDelivery(v as 'runs_only' | 'transcript')}
+                disabled={scheduleDetailTask.status === 'cancelled'}
+              >
+                <SelectTrigger className="w-[220px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="runs_only">Runs only</SelectItem>
+                  <SelectItem value="transcript">Post to chat transcript</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={
+                  scheduleDetailBusy
+                  || scheduleDetailTask.status === 'cancelled'
+                  || delivery === (scheduleDetailTask.output_delivery === 'transcript' ? 'transcript' : 'runs_only')
+                }
+                onClick={() => {
+                  setScheduleDetailBusy(true)
+                  updateScheduleDetail(scheduleDetailTask.id, { output_delivery: delivery })
+                    .catch(() => { /* api throws */ })
+                    .finally(() => setScheduleDetailBusy(false))
+                }}
+              >
+                Save delivery
+              </Button>
+            </div>
+            <span className="mb-1 mt-3 block font-semibold">Recent runs</span>
+            <div className="mb-3">
+              <ScheduleRunsPanel api={api} chatId={chatId} taskId={scheduleDetailTask.id} />
+            </div>
             <span className="mb-1 mt-3 block font-semibold">Schedule</span>
             <div className="flex gap-2 items-center flex-wrap mb-2">
               <Select

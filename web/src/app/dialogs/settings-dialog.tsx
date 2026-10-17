@@ -46,10 +46,10 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
           and WhatsApp under Integrations. Restart Meido after changing channel tokens.
         </DialogDescription>
         {settingsError ? (
-          <div role="status" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive mb-2">{settingsError}</div>
+          <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive mb-2">{settingsError}</div>
         ) : null}
         {restartNotice ? (
-          <div role="status" className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-900 dark:text-green-100 mb-2">{restartNotice}</div>
+          <div role="status" className="mc-notice-owed mb-2">{restartNotice}</div>
         ) : null}
         <Tabs defaultValue="overview">
           <TabsList className="mc-settings-tabs-sticky mb-3 h-auto flex-wrap">
@@ -73,24 +73,22 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
               <div className="flex flex-col gap-2 mb-2">
                 <div className="flex gap-2 flex-wrap items-center">
                   <span>
-                    LLM: {installationStatus.llm_ready ? 'ready' : 'missing'}
+                    {installationStatus.llm_ready ? 'LLM ready' : 'LLM missing. Open Connections.'}
                   </span>
                   <span>
-                    Channels: {installationStatus.channel_ready ? 'ready' : 'missing'}
+                    {installationStatus.channel_ready ? 'Channels ready' : 'Channels missing. Open Integrations.'}
                   </span>
                   <span>
-                    Cursor engine:{' '}
-                    {installationStatus.cursor_engine_ready ? 'ready' : 'not ready'}
+                    {installationStatus.cursor_engine_ready ? 'Cursor ready' : 'Cursor not ready'}
                   </span>
                   {installationStatus.needs_initialization ? (
-                    <span>Setup wizard: open</span>
+                    <span>Run Setup Wizard to finish setup.</span>
                   ) : null}
                   <span>
-                    Env restart needed:{' '}
                     {(installationStatus.requires_restart_for_env_changes ??
                       installationStatus.requires_restart_to_apply_runtime_settings) === true
-                      ? 'yes'
-                      : 'no'}
+                      ? 'Restart needed'
+                      : 'No restart owed'}
                   </span>
                 </div>
                 <span>
@@ -107,10 +105,19 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
                   <Button
                     size="sm"
                     variant="default"
-                    disabled={restartBusy}
+                    disabled={
+                      restartBusy ||
+                      (installationStatus.requires_restart_for_env_changes ??
+                        installationStatus.requires_restart_to_apply_runtime_settings) !== true
+                    }
                     onClick={() => void requestRestart()}
                   >
-                    {restartBusy ? 'Restarting…' : 'Restart Meido'}
+                    {restartBusy
+                      ? 'Restarting…'
+                      : (installationStatus.requires_restart_for_env_changes ??
+                            installationStatus.requires_restart_to_apply_runtime_settings) === true
+                        ? 'Restart Meido'
+                        : 'No restart owed'}
                   </Button>
                 </div>
               </div>
@@ -119,9 +126,7 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
             )}
             <div
               className="rounded-md border p-3 mt-3"
-              style={appearance === 'dark'
-                ? { borderColor: 'var(--mc-border-soft)', background: 'var(--mc-bg-panel)' }
-                : { borderColor: 'var(--gray-6)', background: 'var(--gray-2)' }}
+              style={{ borderColor: 'var(--mc-border-soft)', background: 'var(--mc-bg-panel)' }}
             >
               <span className="font-semibold mb-2 block">
                 Runtime toggles
@@ -148,9 +153,7 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
           <TabsContent value="channels">
         <div
           className="rounded-md border p-3"
-          style={appearance === 'dark'
-            ? { borderColor: 'var(--mc-border-soft)', background: 'var(--mc-bg-panel)' }
-            : { borderColor: 'var(--gray-6)', background: 'var(--gray-2)' }}
+          style={{ borderColor: 'var(--mc-border-soft)', background: 'var(--mc-bg-panel)' }}
         >
           <span className="font-semibold">External channel persona mode</span>
           <span className="mb-2 block">

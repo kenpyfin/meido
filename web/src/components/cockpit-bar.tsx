@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Select } from '@/components/ui/select'
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { ConfirmDialog } from './confirm-dialog'
 import { EmptyState } from './empty-state'
 import { api } from '../api/client'
 import { useIsMobile } from '../hooks/use-mobile'
@@ -104,6 +105,7 @@ export const CockpitBar = React.memo(function CockpitBar({
   const [memoDraft, setMemoDraft] = useState('')
   const [memoBusy, setMemoBusy] = useState(false)
   const [memoError, setMemoError] = useState('')
+  const [clearMemoOpen, setClearMemoOpen] = useState(false)
   const expandedRootRef = useRef<HTMLDivElement | null>(null)
   const panelId = useId()
   const isMobile = useIsMobile()
@@ -152,9 +154,31 @@ export const CockpitBar = React.memo(function CockpitBar({
   ])
 
   const onMemoBlur = useCallback(() => {
-    if (!memoDirty || memoBusy || memoTooLong) return
+    if (clearMemoOpen || !memoDirty || memoBusy || memoTooLong) return
     void saveMemo()
-  }, [memoBusy, memoDirty, memoTooLong, saveMemo])
+  }, [clearMemoOpen, memoBusy, memoDirty, memoTooLong, saveMemo])
+
+  const clearMemo = useCallback(async () => {
+    if (activePersonaId == null) return
+    const previous = memoDraft
+    setMemoDraft('')
+    setMemoBusy(true)
+    setMemoError('')
+    try {
+      await api(`/api/personas/${activePersonaId}/bulletin`, {
+        method: 'PATCH',
+        body: JSON.stringify({ operator_memo: '' }),
+      })
+      await reloadBulletin()
+      onBulletinStatus?.('Operator memo cleared')
+      setClearMemoOpen(false)
+    } catch (e) {
+      setMemoDraft(previous)
+      setMemoError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setMemoBusy(false)
+    }
+  }, [activePersonaId, memoDraft, onBulletinStatus, reloadBulletin])
 
   const otherHint =
     otherPersonasPending > 0
@@ -185,6 +209,7 @@ export const CockpitBar = React.memo(function CockpitBar({
       if (!target) return
       if (expandedRootRef.current?.contains(target)) return
       if (isPointerOnRadixSelectOverlay(target)) return
+      if (target instanceof Element && target.closest('[role="alertdialog"]')) return
       setExpanded(false)
     }
     window.addEventListener('pointerdown', onPointerDown)
@@ -204,9 +229,11 @@ export const CockpitBar = React.memo(function CockpitBar({
           <span className="text-[color:var(--mc-text-muted)]">Queue</span>
           <span
             className={
-              pending > 0 || queueError
-                ? 'font-medium text-amber-500'
-                : 'font-medium text-[color:var(--mc-text-muted)]'
+              queueError
+                ? 'font-medium text-destructive'
+                : pending > 0
+                  ? 'font-medium text-[color:var(--mc-accent-brass)]'
+                  : 'font-medium text-[color:var(--mc-text-muted)]'
             }
           >
             {queueLabel}
@@ -223,7 +250,7 @@ export const CockpitBar = React.memo(function CockpitBar({
           <span
             className={
               backgroundActiveCount > 0
-                ? 'font-medium text-blue-500'
+                ? 'font-medium text-[color:var(--mc-accent-brass)]'
                 : 'font-medium text-[color:var(--mc-text-muted)]'
             }
           >
@@ -297,7 +324,7 @@ export const CockpitBar = React.memo(function CockpitBar({
                 <Button
                   type="button"
                   size="sm"
-                  variant="secondary"
+                  variant="default"
                   disabled={activePersonaId == null || memoBusy || !memoDirty || memoTooLong}
                   onClick={() => void saveMemo()}
                 >
@@ -308,26 +335,7 @@ export const CockpitBar = React.memo(function CockpitBar({
                   size="sm"
                   variant="ghost"
                   disabled={activePersonaId == null || memoBusy || serverMemoTrimmed.length === 0}
-                  onClick={() => {
-                    setMemoDraft('')
-                    void (async () => {
-                      if (activePersonaId == null) return
-                      setMemoBusy(true)
-                      setMemoError('')
-                      try {
-                        await api(`/api/personas/${activePersonaId}/bulletin`, {
-                          method: 'PATCH',
-                          body: JSON.stringify({ operator_memo: '' }),
-                        })
-                        await reloadBulletin()
-                        onBulletinStatus?.('Operator memo cleared')
-                      } catch (e) {
-                        setMemoError(e instanceof Error ? e.message : String(e))
-                      } finally {
-                        setMemoBusy(false)
-                      }
-                    })()
-                  }}
+                  onClick={() => setClearMemoOpen(true)}
                 >
                   Clear
                 </Button>
@@ -429,6 +437,22 @@ export const CockpitBar = React.memo(function CockpitBar({
     </div>
   )
 
+  const clearMemoDialog = (
+    <ConfirmDialog
+      open={clearMemoOpen}
+      onOpenChange={(open) => {
+        if (!memoBusy) setClearMemoOpen(open)
+      }}
+      title="Clear operator memo"
+      description="This removes the steering note from the system prompt. The next runs will not see it."
+      confirmLabel="Clear memo"
+      busyLabel="Clearing…"
+      destructive
+      loading={memoBusy}
+      onConfirm={() => void clearMemo()}
+    />
+  )
+
   if (isMobile) {
     return (
       <MobileSheet
@@ -438,20 +462,24 @@ export const CockpitBar = React.memo(function CockpitBar({
         description="Queue, background jobs, memo, and bookmarks."
       >
         {body}
+        {clearMemoDialog}
       </MobileSheet>
     )
   }
 
-  if (!expanded) return null
+  if (!expanded) return clearMemoOpen ? clearMemoDialog : null
 
   return (
-    <div
-      ref={expandedRootRef}
-      className="mc-cockpit mc-cockpit-dropdown absolute left-0 right-0 top-full z-30 mt-1 max-h-[min(70vh,560px)] overflow-y-auto overscroll-contain rounded-xl border border-[color:var(--mc-border-soft)] bg-[color:var(--mc-bg-main)]/95 py-2 shadow-lg ring-1 ring-inset ring-[color:var(--mc-border-lace)] backdrop-blur"
-      role="region"
-      aria-label="Household ledger"
-    >
-      {body}
-    </div>
+    <>
+      <div
+        ref={expandedRootRef}
+        className="mc-cockpit mc-cockpit-dropdown absolute left-0 right-0 top-full z-30 mt-1 max-h-[min(70vh,560px)] overflow-y-auto overscroll-contain rounded-xl border border-[color:var(--mc-border-soft)] bg-[color:var(--mc-bg-main)]/95 py-2 ring-1 ring-inset ring-[color:var(--mc-border-lace)] backdrop-blur"
+        role="region"
+        aria-label="Household ledger"
+      >
+        {body}
+      </div>
+      {clearMemoDialog}
+    </>
   )
 })

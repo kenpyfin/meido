@@ -85,8 +85,15 @@ pub fn format_tasks_list_persona(tasks: &[ScheduledTask]) -> String {
     let mut output = String::from("Scheduled tasks:\n");
     for t in tasks {
         output.push_str(&format!(
-            "#{} [{}] persona:{} | {} | {} '{}' | next: {}\n",
-            t.id, t.status, t.persona_id, t.prompt, t.schedule_type, t.schedule_value, t.next_run
+            "#{} [{}] persona:{} | {} | {} '{}' | next: {} | delivery: {}\n",
+            t.id,
+            t.status,
+            t.persona_id,
+            t.prompt,
+            t.schedule_type,
+            t.schedule_value,
+            t.next_run,
+            t.output_delivery
         ));
     }
     output.push_str("\nUse `schedule_task` to add; `update_scheduled_task` to change prompt/timing/status; `pause_scheduled_task` / `resume_scheduled_task` / `cancel_scheduled_task` to manage.");
@@ -105,13 +112,26 @@ fn format_tasks_list_impl(tasks: &[ScheduledTask], include_chat_id: bool) -> Str
     for t in tasks {
         if include_chat_id {
             output.push_str(&format!(
-                "#{} [{}] chat:{} | {} | {} '{}' | next: {}\n",
-                t.id, t.status, t.chat_id, t.prompt, t.schedule_type, t.schedule_value, t.next_run
+                "#{} [{}] chat:{} | {} | {} '{}' | next: {} | delivery: {}\n",
+                t.id,
+                t.status,
+                t.chat_id,
+                t.prompt,
+                t.schedule_type,
+                t.schedule_value,
+                t.next_run,
+                t.output_delivery
             ));
         } else {
             output.push_str(&format!(
-                "#{} [{}] {} | {} '{}' | next: {}\n",
-                t.id, t.status, t.prompt, t.schedule_type, t.schedule_value, t.next_run
+                "#{} [{}] {} | {} '{}' | next: {} | delivery: {}\n",
+                t.id,
+                t.status,
+                t.prompt,
+                t.schedule_type,
+                t.schedule_value,
+                t.next_run,
+                t.output_delivery
             ));
         }
     }
@@ -150,6 +170,24 @@ fn normalize_cron_expression(schedule_value: &str) -> Result<String, String> {
             "Invalid cron expression: expected 5 or 6 fields (sec min hour dom month dow)"
                 .to_string(),
         ),
+    }
+}
+
+/// `runs_only` keeps output in scheduled run history. `transcript` also copies it into chat.
+/// When `default_when_empty` is set, a missing or blank value becomes `runs_only`.
+pub fn normalize_output_delivery(
+    raw: Option<&str>,
+    default_when_empty: bool,
+) -> Result<String, String> {
+    let trimmed = raw.map(str::trim).filter(|s| !s.is_empty());
+    match trimmed {
+        None if default_when_empty => Ok("runs_only".to_string()),
+        None => Err("output_delivery must be 'runs_only' or 'transcript'".into()),
+        Some("runs_only") => Ok("runs_only".to_string()),
+        Some("transcript") => Ok("transcript".to_string()),
+        Some(other) => Err(format!(
+            "output_delivery must be 'runs_only' or 'transcript'; got {other}"
+        )),
     }
 }
 
@@ -238,6 +276,11 @@ impl Tool for ScheduleTaskTool {
                     "timezone": {
                         "type": "string",
                         "description": "Optional IANA timezone name (e.g. 'US/Eastern', 'Europe/London'). If omitted, the bot's configured default timezone is used."
+                    },
+                    "output_delivery": {
+                        "type": "string",
+                        "enum": ["runs_only", "transcript"],
+                        "description": "Optional. runs_only (default) stores output in scheduled run history. transcript also posts a copy into the chat transcript without external channel push."
                     }
                 }),
                 &["chat_id", "prompt", "schedule_type", "schedule_value"],
@@ -282,11 +325,19 @@ impl Tool for ScheduleTaskTool {
                 Ok(p) => p,
                 Err(e) => return ToolResult::error(e),
             };
+        let output_delivery = match normalize_output_delivery(
+            input.get("output_delivery").and_then(|v| v.as_str()),
+            true,
+        ) {
+            Ok(v) => v,
+            Err(e) => return ToolResult::error(e),
+        };
 
         let prompt_owned = prompt.to_string();
         let schedule_type_owned = schedule_type.to_string();
         let schedule_value_owned = preflight.schedule_value.clone();
         let next_run_owned = preflight.next_run.clone();
+        let output_delivery_owned = output_delivery.clone();
         let persona_id = auth_context_from_input(&input)
             .map(|auth| {
                 if auth.caller_chat_id == chat_id {
@@ -310,6 +361,7 @@ impl Tool for ScheduleTaskTool {
                 &schedule_type_owned,
                 &schedule_value_owned,
                 &next_run_owned,
+                &output_delivery_owned,
             )
         })
         .await
@@ -322,6 +374,7 @@ impl Tool for ScheduleTaskTool {
                 if preflight.timezone_defaulted_to_utc {
                     message.push_str(" Timezone was not provided, so UTC was assumed.");
                 }
+                message.push_str(&format!(" Delivery: {output_delivery}."));
                 ToolResult::success(message)
             }
             Err(e) => ToolResult::error(format!("Failed to create task: {e}")),
@@ -605,7 +658,7 @@ impl Tool for UpdateScheduledTaskTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::new(
             "update_scheduled_task",
-            "Update an existing scheduled task by id: optional status (paused/active/cancelled), persona_id, prompt, and/or schedule (schedule_type + schedule_value with optional timezone). Same preflight rules as `schedule_task`. Activate the `schedule-job` skill before changing schedule fields.",
+            "Update an existing scheduled task by id: optional status (paused/active/cancelled), persona_id, prompt, output_delivery (runs_only or transcript), and/or schedule (schedule_type + schedule_value with optional timezone). Same preflight rules as `schedule_task`. Activate the `schedule-job` skill before changing schedule fields.",
             schema_object(
                 json!({
                     "task_id": {
@@ -636,6 +689,11 @@ impl Tool for UpdateScheduledTaskTool {
                     "timezone": {
                         "type": "string",
                         "description": "Optional IANA timezone for schedule preflight; defaults to bot config or UTC"
+                    },
+                    "output_delivery": {
+                        "type": "string",
+                        "enum": ["runs_only", "transcript"],
+                        "description": "Optional. runs_only stores output in run history only. transcript also posts a copy into the chat transcript."
                     }
                 }),
                 &["task_id"],
@@ -694,10 +752,29 @@ impl Tool for UpdateScheduledTaskTool {
             );
         }
 
-        if status.is_none() && persona_id.is_none() && prompt_update.is_none() && !has_schedule_pair
+        let output_delivery = match input.get("output_delivery") {
+            None | Some(serde_json::Value::Null) => None,
+            Some(v) => {
+                let Some(raw) = v.as_str() else {
+                    return ToolResult::error(
+                        "output_delivery must be 'runs_only' or 'transcript'".into(),
+                    );
+                };
+                Some(match normalize_output_delivery(Some(raw), false) {
+                    Ok(v) => v,
+                    Err(e) => return ToolResult::error(e),
+                })
+            }
+        };
+
+        if status.is_none()
+            && persona_id.is_none()
+            && prompt_update.is_none()
+            && output_delivery.is_none()
+            && !has_schedule_pair
         {
             return ToolResult::error(
-                "Provide at least one of: status, persona_id, prompt, or schedule_type+schedule_value."
+                "Provide at least one of: status, persona_id, prompt, output_delivery, or schedule_type+schedule_value."
                     .into(),
             );
         }
@@ -795,6 +872,19 @@ impl Tool for UpdateScheduledTaskTool {
                 Err(e) => return ToolResult::error(format!("Failed to update prompt: {e}")),
             }
         }
+        if let Some(delivery) = output_delivery.clone() {
+            match call_blocking(self.db.clone(), move |db| {
+                db.update_task_output_delivery(task_id, &delivery)
+            })
+            .await
+            {
+                Ok(true) => {}
+                Ok(false) => return ToolResult::error(format!("Task #{task_id} not found.")),
+                Err(e) => {
+                    return ToolResult::error(format!("Failed to update output delivery: {e}"))
+                }
+            }
+        }
         if let Some(pref) = &schedule_preflight {
             let schedule_type_owned = schedule_type_in.as_ref().unwrap().clone();
             let schedule_value_owned = pref.schedule_value.clone();
@@ -816,6 +906,9 @@ impl Tool for UpdateScheduledTaskTool {
         }
 
         let mut msg = format!("Task #{task_id} updated.");
+        if let Some(delivery) = &output_delivery {
+            msg.push_str(&format!(" Delivery: {delivery}."));
+        }
         if let Some(pref) = schedule_preflight {
             msg.push_str(&format!(
                 " Next run: {} (tz: {}).",
@@ -1338,6 +1431,7 @@ mod tests {
             "cron",
             "0 * * * * *",
             "2024-01-01T00:00:00Z",
+            "runs_only",
         )
         .unwrap();
         db.create_scheduled_task_for_persona(
@@ -1347,6 +1441,7 @@ mod tests {
             "cron",
             "0 * * * * *",
             "2024-01-01T00:00:00Z",
+            "runs_only",
         )
         .unwrap();
 
@@ -1379,6 +1474,7 @@ mod tests {
             "cron",
             "0 * * * * *",
             "2024-01-01T00:00:00Z",
+            "runs_only",
         )
         .unwrap();
         db.create_scheduled_task_for_persona(
@@ -1388,6 +1484,7 @@ mod tests {
             "cron",
             "0 * * * * *",
             "2024-01-01T00:00:00Z",
+            "runs_only",
         )
         .unwrap();
 
@@ -1421,6 +1518,7 @@ mod tests {
                 "cron",
                 "0 * * * * *",
                 "2024-01-01T00:00:00Z",
+                "runs_only",
             )
             .unwrap();
 
@@ -1453,6 +1551,7 @@ mod tests {
                 "cron",
                 "0 * * * * *",
                 "2024-01-01T00:00:00Z",
+                "runs_only",
             )
             .unwrap();
 

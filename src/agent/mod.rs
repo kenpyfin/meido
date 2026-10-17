@@ -503,7 +503,7 @@ pub(crate) async fn process_classic_agent_with_events(
 ) -> anyhow::Result<AgentProcessResult> {
     let chat_id = context.chat_id;
     let persona_id = context.persona_id;
-    let configured_tool_iterations = state.config.max_tool_iterations;
+    let configured_tool_iterations = state.runtime_toggles.max_tool_iterations();
     let max_tool_iterations = context
         .tool_iteration_cap
         .unwrap_or(configured_tool_iterations)
@@ -809,23 +809,27 @@ pub(crate) async fn process_classic_agent_with_events(
         &origin_vault,
     );
     let locate_roots_section = crate::tools::locate::format_registry_for_prompt(&locate_registry);
-    let system_prompt = build_system_prompt(
-        &state.config.bot_username,
-        &principles_content,
-        &agents_md_path,
-        chat_id,
-        persona_id,
-        &skills_catalog,
-        &workspace_path,
-        &skills_dir_for_prompt,
-        vault_paths_section.as_deref(),
-        &state.config.timezone,
-        &workspace_data_root_display,
-        &config_env_summary,
-        identity_tier1_system.as_str(),
-        &sops_caps_line,
-        &sops_body,
-        &locate_roots_section,
+    let system_prompt = crate::self_repo::rewrite_self_repo_ban_for_external_paths(
+        build_system_prompt(
+            &state.config.bot_username,
+            &principles_content,
+            &agents_md_path,
+            chat_id,
+            persona_id,
+            &skills_catalog,
+            &workspace_path,
+            &skills_dir_for_prompt,
+            vault_paths_section.as_deref(),
+            &state.config.timezone,
+            &workspace_data_root_display,
+            &config_env_summary,
+            identity_tier1_system.as_str(),
+            &sops_caps_line,
+            &sops_body,
+            &locate_roots_section,
+        ),
+        std::path::Path::new(&workspace_data_root_display),
+        &locate_auth.external_roots,
     );
 
     // Background-job runs are detached and do not consume foreground chat context while running.
@@ -2503,6 +2507,7 @@ Use the strategy model for mutations or delegate_local_subjob for discovery."
                         &pte_memory_prose,
                         &messages,
                         iteration,
+                        max_tool_iterations,
                     ),
                     cancel.as_ref(),
                 )

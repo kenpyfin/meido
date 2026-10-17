@@ -72,11 +72,14 @@ export interface AppDialogsSchedulesProps {
   setNewValue: (v: string) => void
   newPersonaId: number | null
   setNewPersonaId: (v: number) => void
+  newDelivery: 'runs_only' | 'transcript'
+  setNewDelivery: (v: 'runs_only' | 'transcript') => void
   createSchedule: (
     prompt: string,
     scheduleType: 'cron' | 'once',
     scheduleValue: string,
     personaId: number | null,
+    outputDelivery?: 'runs_only' | 'transcript',
   ) => Promise<void>
   updateSchedule: (id: number, patch: Partial<ScheduleTask>) => Promise<void>
   openDetail: (task: ScheduleTask) => void
@@ -230,6 +233,8 @@ export type InboxDialogProps = {
 
 export type SchedulesDialogProps = {
   appearance: Appearance
+  api: AppDialogsProps['api']
+  chatId: number | null
   activePersonaId: number | null
   personas: Persona[]
   schedules: AppDialogsSchedulesProps
@@ -237,6 +242,8 @@ export type SchedulesDialogProps = {
 
 export type ScheduleDetailDialogProps = {
   appearance: Appearance
+  api: AppDialogsProps['api']
+  chatId: number | null
   personas: Persona[]
   scheduleDetail: AppDialogsScheduleDetailProps
 }

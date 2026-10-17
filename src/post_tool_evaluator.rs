@@ -270,6 +270,7 @@ pub async fn evaluate_completion(
     memory_context: &str,
     messages: &[Message],
     iteration: usize,
+    max_tool_iterations: usize,
 ) -> Result<PteResult, FinallyAValueBotError> {
     if !enabled {
         return Ok(PteResult {
@@ -304,12 +305,7 @@ pub async fn evaluate_completion(
     }
 
     let system_prompt = build_pte_system_prompt(principles_content, memory_context);
-    let user_prompt = build_pte_user_prompt(
-        env_redactor,
-        messages,
-        iteration,
-        config.max_tool_iterations,
-    );
+    let user_prompt = build_pte_user_prompt(env_redactor, messages, iteration, max_tool_iterations);
 
     let pte_messages = vec![Message {
         role: "user".into(),

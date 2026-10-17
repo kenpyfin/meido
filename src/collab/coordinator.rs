@@ -145,6 +145,7 @@ pub async fn enable(
                     "cron",
                     &cron,
                     &next,
+                    "runs_only",
                 )?)
             }
         } else {

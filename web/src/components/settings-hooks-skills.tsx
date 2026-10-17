@@ -131,10 +131,10 @@ function statusBucket(color: string | undefined): 'allowed' | 'blocked' | null {
 
 const STATUS_BADGE_CLASS: Record<'gray' | 'green' | 'orange' | 'red' | 'blue', string> = {
   gray: 'border-border text-muted-foreground',
-  green: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400',
-  orange: 'border-amber-500/40 text-amber-700 dark:text-amber-400',
+  green: 'border-[color:var(--mc-border-soft)] text-[color:var(--mc-text-muted)]',
+  orange: 'border-[color:color-mix(in_srgb,var(--mc-accent-brass)_45%,transparent)] text-[color:var(--mc-accent-brass)]',
   red: 'border-destructive/40 text-destructive',
-  blue: 'border-sky-500/40 text-sky-700 dark:text-sky-400',
+  blue: 'border-[color:color-mix(in_srgb,var(--mc-accent-brass)_45%,transparent)] text-[color:var(--mc-accent-brass)]',
 }
 
 function StatusBadge({

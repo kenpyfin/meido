@@ -9,7 +9,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { api } from '../api/client'
 import { AgentEngineSelect } from './agent-engine-select'
+import { CursorModelFields, LlmModelFields, LocalModelFields } from './llm-model-fields'
 import { ENGINE_OPTIONS, type EngineId } from '../lib/agent-engine'
 
 export type PersonaCreateInput = {
@@ -35,7 +37,7 @@ export function NewPersonaDialog({ open, onOpenChange, existingNames, onCreate }
   const engineFieldId = useId()
   const [name, setName] = useState('')
   const [engine, setEngine] = useState<EngineId>('classic')
-  const [provider, setProvider] = useState('anthropic')
+  const [provider, setProvider] = useState('')
   const [model, setModel] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
   const [localUrl, setLocalUrl] = useState('')
@@ -49,7 +51,7 @@ export function NewPersonaDialog({ open, onOpenChange, existingNames, onCreate }
     if (open) {
       setName('')
       setEngine('classic')
-      setProvider('anthropic')
+      setProvider('')
       setModel('')
       setBaseUrl('')
       setLocalUrl('')
@@ -110,7 +112,7 @@ export function NewPersonaDialog({ open, onOpenChange, existingNames, onCreate }
         <DialogHeader>
           <DialogTitle>New persona</DialogTitle>
           <DialogDescription>
-            Each persona has its own chat history, memory, and engine settings.
+            Each persona has its own chat history, memory, and engine settings. Models come from the provider list.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-2">
@@ -146,28 +148,47 @@ export function NewPersonaDialog({ open, onOpenChange, existingNames, onCreate }
             </p>
           </div>
           {engine === 'classic' || engine === 'classic_cost_routing' ? (
-            <>
-              <Input value={provider} aria-label="Provider" placeholder="Provider id" disabled={busy} onChange={(e) => setProvider(e.target.value)} />
-              <Input value={model} aria-label="Model" placeholder="Model id" disabled={busy} onChange={(e) => setModel(e.target.value)} />
-              {localProvider ? (
-                <Input value={baseUrl} aria-label="Base URL" placeholder="http://127.0.0.1:11434/v1" disabled={busy} onChange={(e) => setBaseUrl(e.target.value)} />
-              ) : null}
-            </>
+            <LlmModelFields
+              api={api}
+              provider={provider}
+              model={model}
+              baseUrl={baseUrl}
+              onProvider={setProvider}
+              onModel={setModel}
+              onBaseUrl={setBaseUrl}
+              disabled={busy}
+              fillWhenEmpty
+              fillProviderWhenMissing
+            />
           ) : null}
           {engine === 'classic_cost_routing' ? (
-            <>
-              <Input value={localUrl} aria-label="Local server URL" placeholder="Local server URL" disabled={busy} onChange={(e) => setLocalUrl(e.target.value)} />
-              <Input value={localModel} aria-label="Local model" placeholder="Local model" disabled={busy} onChange={(e) => setLocalModel(e.target.value)} />
-            </>
+            <LocalModelFields
+              api={api}
+              baseUrl={localUrl}
+              model={localModel}
+              onBaseUrl={setLocalUrl}
+              onModel={setLocalModel}
+              disabled={busy}
+              fillWhenEmpty
+            />
           ) : null}
           {engine === 'cursor' ? (
-            <Input value={cursorModel} aria-label="Cursor model" placeholder="Cursor model" disabled={busy} onChange={(e) => setCursorModel(e.target.value)} />
+            <CursorModelFields api={api} model={cursorModel} onModel={setCursorModel} disabled={busy} fillWhenEmpty />
           ) : null}
           {engine === 'gemini_adk' ? (
-            <Input value={geminiModel} aria-label="Gemini default model" placeholder="gemini-2.5-flash" disabled={busy} onChange={(e) => setGeminiModel(e.target.value)} />
+            <LlmModelFields
+              api={api}
+              provider="google"
+              model={geminiModel}
+              onProvider={() => undefined}
+              onModel={setGeminiModel}
+              disabled={busy}
+              lockProvider="google"
+              fillWhenEmpty
+            />
           ) : null}
           {!modelReady && trimmed ? (
-            <p className="text-xs text-muted-foreground">Create stays off until this engine’s model is filled in.</p>
+            <p className="text-xs text-muted-foreground">Create stays off until you pick a model from the list.</p>
           ) : null}
         </div>
         <DialogFooter>

@@ -1,6 +1,6 @@
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { listedModelIds, ModelSelect } from './model-select'
 import { Switch } from '@/components/ui/switch'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { LlmConfigResponse, LlmLiveCatalogResponse, SystemLlmJobRow, TopicsModelResponse } from '../types'
@@ -86,21 +86,17 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
     () => providers.find((entry) => entry.id === provider),
     [provider, providers],
   )
-  const catalogModels = providerEntry?.models.map((entry) => entry.id) ?? []
+  const catalogModels = listedModelIds(providerEntry?.models)
   const liveForProvider = liveModels[provider] ?? []
-  const modelOptions =
-    liveForProvider.length > 0
-      ? Array.from(new Set([...liveForProvider, ...(model ? [model] : [])]))
-      : Array.from(new Set([...catalogModels, ...(model ? [model] : [])]))
+  const modelOptions = liveForProvider.length > 0 ? liveForProvider : catalogModels
   const providerLabel = providerEntry?.label || provider || 'the selected provider'
   const localBaseUrl = data?.local_base_url?.trim() ?? ''
 
-  function modelsFor(providerId: string, currentModel: string): string[] {
+  function modelsFor(providerId: string): string[] {
     const entry = providers.find((item) => item.id === providerId)
-    const catalog = entry?.models.map((item) => item.id) ?? []
+    const catalog = listedModelIds(entry?.models)
     const live = liveModels[providerId] ?? []
-    const base = live.length > 0 ? live : catalog
-    return Array.from(new Set([...base, ...(currentModel ? [currentModel] : [])]))
+    return live.length > 0 ? live : catalog
   }
 
   function updateJob(id: string, patch: Partial<JobDraft>) {
@@ -111,13 +107,17 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
   async function save(nextProvider = provider, nextModel = model) {
     const chosenProvider = nextProvider.trim()
     const chosenModel = nextModel.trim()
-    if (!chosenProvider || !chosenModel) {
-      onError('Choose a provider and a model for the shared default.')
+    if (!chosenProvider || !modelOptions.includes(chosenModel)) {
+      onError('Pick a shared model from the list.')
       return
     }
     for (const job of jobs) {
-      if (job.provider && !job.model.trim()) {
-        onError(`Choose a model for ${job.label}, or set the row back to the shared default.`)
+      if (job.provider && !modelsFor(job.provider).includes(job.model.trim())) {
+        onError(`Pick a model from the list for ${job.label}, or set the row back to the shared default.`)
+        return
+      }
+      if (!job.provider && job.id === 'prompt_hooks' && job.model.trim() && !modelOptions.includes(job.model.trim())) {
+        onError('Pick a prompt hooks model from the list, or leave the shared default.')
         return
       }
       if (job.provider && isLocalProvider(job.provider) && !localBaseUrl) {
@@ -178,11 +178,11 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
         const qs = new URLSearchParams({ provider: chosen })
         if (local) qs.set('base_url', localBaseUrl)
         const res = await api<LlmLiveCatalogResponse>(`/api/llm/models?${qs.toString()}`)
-        const ids = (res.models ?? []).map((entry) => entry.id).filter((id) => Boolean(id))
+        const ids = listedModelIds(res.models)
         if (res.source === 'live' && ids.length > 0) {
           setLiveModels((prev) => ({ ...prev, [chosen]: ids }))
           const n = res.live_count ?? ids.length
-          const truncated = res.truncated ? ' (truncated; use custom id for others)' : ''
+          const truncated = res.truncated ? ' (list truncated)' : ''
           setModelsNotice(`${n} model${n === 1 ? '' : 's'} loaded from provider API${truncated}.`)
           setModel((current) => {
             if (current && ids.includes(current)) return current
@@ -214,6 +214,18 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
 
   const thinkingDirty =
     thinkingEnabled !== thinkingBaseline.enabled || showThinking !== thinkingBaseline.show
+
+  const systemDirty = useMemo(() => {
+    if (!data) return false
+    if ((data.provider?.trim() || '') !== provider.trim()) return true
+    if ((data.model?.trim() || '') !== model.trim()) return true
+    return jobs.some((job) => {
+      const saved = (data.jobs ?? []).find((row) => row.id === job.id)
+      const savedProvider = saved?.provider?.trim() || ''
+      const savedModel = saved?.model?.trim() || saved?.legacy_model?.trim() || ''
+      return job.provider !== savedProvider || job.model !== savedModel
+    })
+  }, [data, jobs, model, provider])
 
   async function saveThinking() {
     setThinkingBusy(true)
@@ -265,7 +277,7 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
           onValueChange={(value) => {
             setProvider(value)
             const entry = providers.find((item) => item.id === value)
-            const ids = entry?.models.map((item) => item.id) ?? []
+            const ids = listedModelIds(entry?.models)
             setModel((current) => (ids.includes(current) ? current : (ids[0] ?? '')))
             if (!loadedProvidersRef.current.has(value)) {
               loadedProvidersRef.current.add(value)
@@ -284,18 +296,13 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
             ))}
           </SelectContent>
         </Select>
-        <Select value={model || undefined} disabled={saving} onValueChange={setModel}>
-          <SelectTrigger className="min-w-[220px] flex-1" aria-label="Shared default model">
-            <SelectValue placeholder="Model" />
-          </SelectTrigger>
-          <SelectContent>
-            {modelOptions.map((id) => (
-              <SelectItem key={id} value={id}>
-                {id}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <ModelSelect
+          ariaLabel="Shared default model"
+          value={model}
+          disabled={saving}
+          options={modelOptions.map((id) => ({ id }))}
+          onChange={setModel}
+        />
         <Button
           size="sm"
           variant="outline"
@@ -314,7 +321,7 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
           : ''}
       </span>
       {jobs.map((job) => {
-        const rowModels = job.provider ? modelsFor(job.provider, job.model) : []
+        const rowModels = job.provider ? modelsFor(job.provider) : []
         return (
           <div
             key={job.id}
@@ -332,7 +339,7 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
                     updateJob(job.id, { provider: '' })
                     return
                   }
-                  const ids = modelsFor(value, '')
+                  const ids = modelsFor(value)
                   updateJob(job.id, {
                     provider: value,
                     model: ids.includes(job.model) ? job.model : (ids[0] ?? ''),
@@ -356,30 +363,22 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
                 </SelectContent>
               </Select>
               {job.provider ? (
-                <Select
-                  value={job.model || undefined}
-                  disabled={saving}
-                  onValueChange={(value) => updateJob(job.id, { model: value })}
-                >
-                  <SelectTrigger className="min-w-[220px] flex-1" aria-label={`${job.label} model`}>
-                    <SelectValue placeholder="Model" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {rowModels.map((id) => (
-                      <SelectItem key={id} value={id}>
-                        {id}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : job.id === 'prompt_hooks' ? (
-                <Input
-                  className="min-w-[220px] flex-1"
-                  aria-label="Prompt hooks model"
-                  placeholder="Leave blank to use the shared default"
+                <ModelSelect
+                  ariaLabel={`${job.label} model`}
                   value={job.model}
                   disabled={saving}
-                  onChange={(event) => updateJob(job.id, { model: event.target.value })}
+                  options={rowModels.map((id) => ({ id }))}
+                  onChange={(value) => updateJob(job.id, { model: value })}
+                />
+              ) : job.id === 'prompt_hooks' ? (
+                <ModelSelect
+                  ariaLabel="Prompt hooks model"
+                  value={job.model}
+                  blankLabel="Shared default"
+                  disabled={saving}
+                  options={modelOptions.map((id) => ({ id }))}
+                  onChange={(value) => updateJob(job.id, { model: value })}
+                  emptyHint="Load the shared provider’s models, then pick one or leave the shared default."
                 />
               ) : (
                 <span className="text-xs text-muted-foreground">Using the shared default.</span>
@@ -389,7 +388,7 @@ export function SettingsTopicsModelPanel({ api, onError }: Props) {
         )
       })}
       <div>
-        <Button size="sm" type="button" disabled={saving || !provider || !model} onClick={() => void save()}>
+        <Button size="sm" type="button" disabled={saving || !provider || !model || !systemDirty} onClick={() => void save()}>
           {saving ? 'Saving…' : 'Save system LLM'}
         </Button>
       </div>
