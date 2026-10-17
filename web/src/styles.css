@@ -2181,7 +2181,7 @@ html.dark *::-webkit-scrollbar-thumb:hover {
   }
 
   .mc-thread-composer-dock {
-    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
   .mc-thread-composer-dock .aui-composer-send,
@@ -2569,38 +2569,6 @@ html.dark *::-webkit-scrollbar-thumb:hover {
   line-height: 1;
   color: var(--mc-accent-contrast, #fff);
   background: var(--mc-accent);
-}
-
-/* Mobile secondary sub-bar holding the session + side-chat controls.
-   Default display:none — unlayered `display: grid` here would beat Tailwind
-   `md:hidden` (utilities layer) and duplicate the desktop session cluster. */
-.mc-mobile-session-subbar {
-  display: none;
-  grid-template-rows: 1fr;
-  transition:
-    grid-template-rows 200ms ease,
-    opacity 200ms ease,
-    margin-top 200ms ease;
-  opacity: 1;
-  margin-top: 0.35rem;
-}
-
-@media (max-width: 767px) {
-  .mc-mobile-session-subbar {
-    display: grid;
-  }
-}
-
-.mc-mobile-session-subbar-inner {
-  min-height: 0;
-  overflow: hidden;
-}
-
-.mc-mobile-session-subbar--collapsed {
-  grid-template-rows: 0fr;
-  opacity: 0;
-  margin-top: 0;
-  pointer-events: none;
 }
 
 .mc-load-earlier {

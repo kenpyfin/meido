@@ -5,6 +5,7 @@ import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose } from '@/components/ui/dialog'
 import React from 'react'
 
+import { useIsMobile } from '@/lib/use-is-mobile'
 import type { SchedulesDialogProps } from './types'
 import { ScheduleRunsPanel } from './schedule-runs-panel'
 
@@ -30,6 +31,7 @@ export function SchedulesDialog(props: SchedulesDialogProps) {
   const createSchedule = schedules.createSchedule
   const updateSchedule = schedules.updateSchedule
   const openScheduleDetail = schedules.openDetail
+  const mobile = useIsMobile()
 
   const borderStyle =
     appearance === 'dark'
@@ -97,6 +99,19 @@ export function SchedulesDialog(props: SchedulesDialogProps) {
                   className="mc-schedule-row flex min-w-0 flex-col gap-2 rounded-lg border p-3"
                   style={rowBorder}
                 >
+                  {mobile ? (
+                    <button
+                      type="button"
+                      className="flex w-full min-w-0 flex-col items-start gap-1 text-left"
+                      onClick={() => openScheduleDetail(t)}
+                    >
+                      <span className="w-full truncate text-sm leading-snug">{t.prompt}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {t.schedule_type} · {t.next_run ?? '-'} · {t.status === 'running' ? 'active' : t.status}
+                      </span>
+                    </button>
+                  ) : (
+                  <>
                   <p className="mc-schedule-prompt m-0 min-w-0 truncate text-sm leading-snug" title={t.prompt}>
                     {t.prompt}
                   </p>
@@ -155,6 +170,8 @@ export function SchedulesDialog(props: SchedulesDialogProps) {
                       ) : null}
                     </div>
                   </div>
+                  </>
+                  )}
                 </li>
               ))}
             </ul>

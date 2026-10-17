@@ -23,9 +23,9 @@ import { useConfirmDialog } from '../components/confirm-dialog'
 import { NewPersonaDialog } from '../components/new-persona-dialog'
 import { ErrorBanner } from '../components/error-banner'
 import { StatusRegion } from '../components/status-region'
-import { MobileTabBar } from '../components/mobile-tab-bar'
+import { SessionPicker } from '../components/session-picker'
+import { SideChatsPicker } from '../components/side-chats-picker'
 import { MobileOpsSheet, ShortcutsDialog } from '../components/ops-ui'
-import { IconChevronDown } from '../components/icons'
 import { Toaster } from '../components/ui/sonner'
 import { TooltipProvider } from '../components/ui/tooltip'
 import {
@@ -343,43 +343,6 @@ type LoadHistoryFn = (
   },
 ) => Promise<void>
 
-
-const MOBILE_COCKPIT_OPEN_KEY = 'meido_mobile_cockpit_open'
-
-function MobileFocusDisclosure({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useState(() => {
-    try {
-      return localStorage.getItem(MOBILE_COCKPIT_OPEN_KEY) === '1'
-    } catch {
-      return false
-    }
-  })
-
-  return (
-    <>
-      <button
-        type="button"
-        className="flex h-9 w-full items-center gap-2 px-1 text-xs text-[color:var(--mc-text-muted)] md:hidden"
-        aria-expanded={open}
-        onClick={() => {
-          setOpen((current) => {
-            const next = !current
-            try {
-              localStorage.setItem(MOBILE_COCKPIT_OPEN_KEY, next ? '1' : '0')
-            } catch {
-              /* private mode */
-            }
-            return next
-          })
-        }}
-      >
-        <IconChevronDown className={`size-3 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
-        Focus and cockpit
-      </button>
-      <div className={open ? undefined : 'max-md:hidden'}>{children}</div>
-    </>
-  )
-}
 
 export function App({
   onAuthErrorRef,
@@ -796,7 +759,6 @@ export function App({
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const { open: commandPaletteOpen, setOpen: setCommandPaletteOpen } = useCommandPaletteOpenState()
   const [newPersonaOpen, setNewPersonaOpen] = useState(false)
-  const [mobileChatHeaderCollapsed, setMobileChatHeaderCollapsed] = useState(false)
   const [cockpitExpanded, setCockpitExpanded] = useState(false)
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState<boolean>(readDesktopSidebarOpen)
   const [desktopSidebarWidth, setDesktopSidebarWidth] = useState<number>(readDesktopSidebarWidth)
@@ -2025,22 +1987,6 @@ export function App({
 
   const runtimeKey = `${chatId ?? 0}-${activePersonaId ?? 0}`
 
-  const handleMobileThreadScroll = useCallback((opts: {
-    collapseHeader: boolean
-    source: 'scroll' | 'reset' | 'focus' | 'media-change'
-    scrollTop?: number
-  }) => {
-    if (opts.source !== 'scroll') {
-      setMobileChatHeaderCollapsed(false)
-      return
-    }
-    if ((opts.scrollTop ?? 0) < 24) {
-      setMobileChatHeaderCollapsed(false)
-      return
-    }
-    setMobileChatHeaderCollapsed((prev) => (prev === opts.collapseHeader ? prev : opts.collapseHeader))
-  }, [])
-
   const handleShowShortcuts = useCallback(() => {
     setShortcutsOpen(true)
   }, [])
@@ -2141,24 +2087,6 @@ export function App({
       /* ignore */
     }
     setOnboardingDismissed(true)
-  }, [])
-
-  useEffect(() => {
-    setMobileChatHeaderCollapsed(false)
-  }, [runtimeKey])
-
-  useEffect(() => {
-    if (mobileNavOpen) setMobileChatHeaderCollapsed(false)
-  }, [mobileNavOpen])
-
-  useEffect(() => {
-    const mq = window.matchMedia('(min-width: 768px)')
-    const clearCollapsed = () => {
-      if (mq.matches) setMobileChatHeaderCollapsed(false)
-    }
-    mq.addEventListener('change', clearCollapsed)
-    clearCollapsed()
-    return () => mq.removeEventListener('change', clearCollapsed)
   }, [])
 
   const bookmarkedMessageIds = useMemo(
@@ -2352,6 +2280,8 @@ export function App({
                 mode={sidebarMode}
                 onModeChange={setMode}
                 blockedItems={blockedItems}
+                onOpenPersonaConfig={handleOpenPersona}
+                onOpenSettings={handleOpenSettings}
               />
             </div>
           </div>
@@ -2407,11 +2337,11 @@ export function App({
           >
             <AppHeader
               appearance={appearance}
-              mobileChatHeaderCollapsed={mobileChatHeaderCollapsed}
+              mobileContextOpen={topicsSheetOpen}
+              onOpenMobileContext={handleOpenTopics}
               nav={appHeaderNav}
               session={appHeaderSession}
               toolbar={appHeaderToolbar}
-              onOpenMobileSettings={handleOpenSettings}
               onOpenMobileOps={handleOpenMobileOps}
               moduleTitle={sidebarMode === 'personas' ? null : SIDEBAR_MODE_TITLES[sidebarMode]}
             />
@@ -2429,8 +2359,9 @@ export function App({
                     : 'hidden'
                 }
               >
-                <MobileFocusDisclosure>
-                <BulletinStrip bulletinFocus={bulletinFocus} hideCockpitLauncher />
+                <div className="hidden md:block">
+                  <BulletinStrip bulletinFocus={bulletinFocus} hideCockpitLauncher />
+                </div>
                 <CockpitBar
                   appearance={appearance}
                   statusText={statusText}
@@ -2439,6 +2370,7 @@ export function App({
                   backgroundActiveCount={backgroundActiveCount}
                   installationStatus={installationStatus}
                   onQueueClick={handleQueueClick}
+                  bulletinFocus={bulletinFocus}
                   bookmarks={personaBookmarks}
                   activePersonaId={activePersonaId}
                   onJumpToBookmark={revealMessageInThread}
@@ -2449,7 +2381,6 @@ export function App({
                   onExpandedChange={setCockpitExpanded}
                   expanded={cockpitExpanded}
                 />
-                </MobileFocusDisclosure>
               </div>
               <div className="mx-auto w-full max-w-5xl px-2 pt-2 md:px-3">
                 <StatusRegion message={statusText} />
@@ -2529,7 +2460,7 @@ export function App({
                   />
                 ) : null}
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col px-0 pb-1 md:px-1">
-                <div className="flex items-center gap-1 px-2 pt-1" aria-label="Conversation surface">
+                <div className="hidden items-center gap-1 px-2 pt-1 md:flex" aria-label="Conversation surface">
                   <Button
                     type="button"
                     size="sm"
@@ -2601,7 +2532,6 @@ export function App({
                       activeSubthreadMessageId={activeSideChat?.anchorMessageId ?? null}
                       pendingReply={activePendingReply}
                       onDismissPendingReply={handleDismissPendingReply}
-                      onMobileThreadScroll={handleMobileThreadScroll}
                       targetScrollMessageId={targetScrollMessageId}
                       suppressAutoScroll={jumpSuppressAutoScroll}
                       onTargetScrollHandled={handleTargetScrollHandled}
@@ -2741,57 +2671,72 @@ export function App({
               ) : null}
             </div>
           </main>
-          <MobileTabBar
-            active={
-              personaDialogOpen
-                ? 'persona'
-                : settingsDialogOpen
-                  ? 'settings'
-                  : mobileOpsOpen
-                    ? 'ops'
-                    : topicsSheetOpen
-                      ? 'topics'
-                      : 'chat'
-            }
-            onChat={() => {
-              setTopicsSheetOpen(false)
-              setMobileOpsOpen(false)
-              setSettingsDialogOpen(false)
-              setPersonaDialogOpen(false)
-            }}
-            onPersona={() => {
-              setTopicsSheetOpen(false)
-              setMobileOpsOpen(false)
-              handleOpenPersona()
-            }}
-            onTopics={() => {
-              setMobileOpsOpen(false)
-              setSettingsDialogOpen(false)
-              setPersonaDialogOpen(false)
-              setTopicsSheetOpen(true)
-            }}
-            onOps={() => {
-              setTopicsSheetOpen(false)
-              setSettingsDialogOpen(false)
-              setPersonaDialogOpen(false)
-              setMobileOpsOpen(true)
-            }}
-            onSettings={() => {
-              setTopicsSheetOpen(false)
-              setMobileOpsOpen(false)
-              handleOpenSettings()
-            }}
-          />
         </div>
 
       </div>
       <MobileSheet
         open={topicsSheetOpen}
         onOpenChange={setTopicsSheetOpen}
-        title="Topics"
-        description="Jump to a topic in this conversation"
+        title="Session and topics"
+        description="Choose a session, change the thread view, or jump to a topic."
       >
         {activePersonaId != null ? (
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2">
+              <span className="text-xs font-medium text-[color:var(--mc-text-muted)]">Session</span>
+              <SessionPicker
+                compact
+                sessions={chatSessions}
+                activeSessionId={activeSessionId}
+                onSelectSession={(sessionId) => {
+                  setTopicsSheetOpen(false)
+                  void handleSelectSession(sessionId)
+                }}
+                onCreateSession={handleCreateSession}
+                onDeleteSession={handleDeleteSession}
+                loading={historyLoading}
+              />
+              <SideChatsPicker
+                sideChats={sideChats}
+                sessions={chatSessions}
+                activeSideChatId={activeSideChat?.id ?? null}
+                loading={sideChatsLoading}
+                onSelect={(id) => {
+                  setTopicsSheetOpen(false)
+                  void handleSelectSideChat(id)
+                }}
+                onDelete={deleteSideChat}
+              />
+            </div>
+            <div className="flex flex-wrap gap-1" aria-label="Conversation surface">
+              <Button
+                type="button"
+                size="sm"
+                variant={threadSurface === 'focus' ? 'secondary' : 'ghost'}
+                aria-pressed={threadSurface === 'focus'}
+                onClick={() => chooseThreadSurface('focus')}
+              >
+                Focus
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={threadSurface === 'transcript' ? 'secondary' : 'ghost'}
+                aria-pressed={threadSurface === 'transcript'}
+                onClick={() => chooseThreadSurface('transcript')}
+              >
+                Transcript
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={hideScheduled ? 'secondary' : 'ghost'}
+                aria-pressed={hideScheduled}
+                onClick={() => setHideScheduled((current) => !current)}
+              >
+                {hideScheduled ? 'Scheduled hidden' : 'Hide scheduled'}
+              </Button>
+            </div>
           <TopicOutlineRail
             variant="sheet"
             topics={topics.topics}
@@ -2832,7 +2777,10 @@ export function App({
               })
             }}
           />
-        ) : null}
+          </div>
+        ) : (
+          <p className="text-sm text-[color:var(--mc-text-muted)]">Choose a persona to open sessions and topics.</p>
+        )}
       </MobileSheet>
       <AppDialogs
         appearance={appearance}
@@ -3057,6 +3005,8 @@ export function App({
         onOpenMemory={() => setMemoryDialogOpen(true)}
         onOpenAgentHistory={() => setAgentHistoryDialogOpen(true)}
         agentHistoryDisabled={activePersonaId == null}
+        onOpenPersona={activePersonaId == null ? undefined : handleOpenPersona}
+        onOpenSettings={handleOpenSettings}
       />
       <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       </TooltipProvider>

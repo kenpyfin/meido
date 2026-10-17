@@ -52,7 +52,7 @@ export type CockpitBarProps = {
   backgroundActiveCount: number
   installationStatus: InstallationStatus | null
   onQueueClick: () => void
-  /** Kept for API stability; bulletin now lives in BulletinStrip. */
+  /** Service briefing. Shown at the top of the mobile ledger sheet. Desktop uses BulletinStrip. */
   bulletinFocus?: PersonaBulletinFocus | null
   bookmarks: PersonaMessageBookmark[]
   /** Used when jumping to a bookmarked message. */
@@ -74,7 +74,7 @@ export type CockpitBarProps = {
 
 /**
  * Session status panel: queue, background jobs, setup readiness, operator memo, bookmarks.
- * Bulletin focus and persona run-context knobs live elsewhere (BulletinStrip / Settings).
+ * On a phone the service briefing sits at the top of this sheet. Desktop keeps BulletinStrip.
  */
 export const CockpitBar = React.memo(function CockpitBar({
   statusText,
@@ -83,6 +83,7 @@ export const CockpitBar = React.memo(function CockpitBar({
   backgroundActiveCount,
   installationStatus,
   onQueueClick,
+  bulletinFocus = null,
   bookmarks,
   activePersonaId,
   onJumpToBookmark,
@@ -218,8 +219,19 @@ export const CockpitBar = React.memo(function CockpitBar({
     }
   }, [expanded, isMobile, setExpanded])
 
+  const briefingTitle = bulletinFocus?.title?.trim() || (bulletinFocus ? 'Bulletin' : 'No bulletin focus yet.')
+  const briefingBody = bulletinFocus?.content?.trim() ?? ''
   const body = (
     <div id={panelId} className="space-y-3 px-3 pb-1 md:px-4">
+      <div className="rounded-md border border-[color:var(--mc-border-soft)] p-3 md:hidden">
+        <span className="text-xs font-medium text-[color:var(--mc-text-muted)]">Service briefing</span>
+        <span className="mt-1 block text-sm font-medium">{briefingTitle}</span>
+        {briefingBody ? (
+          <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">{briefingBody}</p>
+        ) : (
+          <p className="mt-1 text-xs text-[color:var(--mc-text-muted)]">Focus updates after each run.</p>
+        )}
+      </div>
       <div className="mc-cockpit-status-strip flex min-h-[32px] flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-snug max-md:grid max-md:grid-cols-2 max-md:gap-2">
         <span className="font-medium max-md:col-span-2 shrink-0">
           {statusText}

@@ -1,4 +1,6 @@
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { useIsMobile } from '@/lib/use-is-mobile'
 import React from 'react'
 
 export type ScheduledRunItem = {
@@ -32,6 +34,7 @@ export function ScheduleRunsPanel({
     error: string | null
   } | null>(null)
   const [loadingId, setLoadingId] = React.useState<number | null>(null)
+  const mobile = useIsMobile()
 
   const load = React.useCallback(async () => {
     if (chatId == null) {
@@ -72,8 +75,26 @@ export function ScheduleRunsPanel({
     }
   }
 
+  const runPage = mobile && selected ? (
+    <Dialog open onOpenChange={(open) => { if (!open) setSelected(null) }}>
+      <DialogContent
+        className="inset-0 top-0 left-0 flex h-[100dvh] max-h-[100dvh] w-full max-w-none translate-x-0 translate-y-0 flex-col gap-3 rounded-none"
+        style={{ inset: 0, transform: 'none', width: '100%', maxWidth: 'none', height: '100dvh', maxHeight: '100dvh', borderRadius: 0 }}
+      >
+        <Button type="button" variant="outline" size="sm" className="self-start" onClick={() => setSelected(null)}>
+          Back
+        </Button>
+        <DialogTitle>Run #{selected.id}</DialogTitle>
+        <p className="m-0 text-sm text-muted-foreground">{selected.status}</p>
+        {selected.error ? <p role="alert" className="m-0 text-sm text-destructive">{selected.error}</p> : null}
+        <pre className="m-0 min-h-0 flex-1 overflow-auto whitespace-pre-wrap font-mono text-xs">{selected.output || '(no output)'}</pre>
+      </DialogContent>
+    </Dialog>
+  ) : null
+
   return (
     <div className="flex min-h-0 flex-col gap-2">
+      {runPage}
       {error ? <p className="m-0 text-sm text-red-500">{error}</p> : null}
       {runs.length === 0 ? (
         <p className="m-0 text-sm text-muted-foreground">No runs yet.</p>
@@ -98,7 +119,7 @@ export function ScheduleRunsPanel({
           ))}
         </ul>
       )}
-      {selected ? (
+      {!mobile && selected ? (
         <div className="max-h-64 overflow-auto rounded-md border p-2">
           <div className="mb-1 flex items-center justify-between gap-2">
             <span className="text-xs font-semibold">

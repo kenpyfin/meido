@@ -56,6 +56,8 @@ type SessionSidebarProps = {
   mode?: SidebarMode
   onModeChange?: (mode: SidebarMode) => void
   blockedItems?: number
+  onOpenPersonaConfig?: () => void
+  onOpenSettings?: () => void
 }
 
 const SIDEBAR_MODES: Array<{ id: SidebarMode; label: string }> = [
@@ -118,6 +120,8 @@ export const SessionSidebar = React.memo(function SessionSidebar({
   mode = 'personas',
   onModeChange,
   blockedItems = 0,
+  onOpenPersonaConfig,
+  onOpenSettings,
 }: SessionSidebarProps) {
   const isDark = appearance === 'dark'
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
@@ -366,6 +370,36 @@ export const SessionSidebar = React.memo(function SessionSidebar({
             : 'The Coordinator board and daily brief open in the main pane.'}
         </p>
       )}
+
+      {onOpenPersonaConfig || onOpenSettings ? (
+        <div className="mt-3 border-t border-[color:var(--mc-border-soft)] pt-3 md:hidden">
+          <span className="text-xs font-medium text-[color:var(--mc-text-muted)]">Configuration</span>
+          <div className="mt-1 flex flex-col">
+            <button
+              type="button"
+              className="flex h-11 w-full items-center rounded-md px-1 text-left text-sm disabled:opacity-40"
+              disabled={selectedPersonaId == null || !onOpenPersonaConfig}
+              title={selectedPersonaId == null ? 'Choose a persona first' : 'Persona configuration'}
+              onClick={() => {
+                onCloseRequest?.()
+                onOpenPersonaConfig?.()
+              }}
+            >
+              Persona configuration
+            </button>
+            <button
+              type="button"
+              className="flex h-11 w-full items-center rounded-md px-1 text-left text-sm"
+              onClick={() => {
+                onCloseRequest?.()
+                onOpenSettings?.()
+              }}
+            >
+              Web UI configuration
+            </button>
+          </div>
+        </div>
+      ) : null}
 
     </aside>
   )

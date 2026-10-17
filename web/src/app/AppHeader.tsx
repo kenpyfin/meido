@@ -1,9 +1,9 @@
 import { Button } from '@/components/ui/button'
-import { Menu } from 'lucide-react'
+import { ChevronDown, Menu } from 'lucide-react'
 import React from 'react'
 import { SessionPicker } from '../components/session-picker'
 import { SideChatsPicker } from '../components/side-chats-picker'
-import { IconCockpit, IconRibbonBow, IconServiceBell, IconSidebar } from '../components/icons'
+import { IconCockpit, IconOps, IconRibbonBow, IconServiceBell, IconSidebar } from '../components/icons'
 import type { ChatSession, InstallationStatus, QueueLane, SideChatSummary } from '../types'
 
 type Appearance = 'dark' | 'light'
@@ -56,11 +56,11 @@ export type AppHeaderToolbarProps = {
 
 export type AppHeaderProps = {
   appearance: Appearance
-  mobileChatHeaderCollapsed: boolean
+  mobileContextOpen: boolean
+  onOpenMobileContext: () => void
   nav: AppHeaderNavProps
   session: AppHeaderSessionProps
   toolbar: AppHeaderToolbarProps
-  onOpenMobileSettings: () => void
   onOpenMobileOps: () => void
   /** Set outside Personas mode: the header shows the module name and hides persona-only controls. */
   moduleTitle?: string | null
@@ -68,10 +68,12 @@ export type AppHeaderProps = {
 
 export const AppHeader = React.memo(function AppHeader({
   appearance,
-  mobileChatHeaderCollapsed,
+  mobileContextOpen,
+  onOpenMobileContext,
   nav,
   session,
   toolbar,
+  onOpenMobileOps,
   moduleTitle = null,
 }: AppHeaderProps) {
   const personaModule = moduleTitle == null
@@ -117,6 +119,13 @@ export const AppHeader = React.memo(function AppHeader({
   } = toolbar
 
   const cockpitBusyCount = (queueLane?.pending ?? 0) + backgroundActiveCount
+  const sessionCaption =
+    activePersonaId == null || !personaModule
+      ? null
+      : activeSessionId
+        ? chatSessions.find((item) => item.id === activeSessionId)?.title || 'Session'
+        : 'Main chat'
+  const mobileTitle = moduleTitle ?? activePersonaName ?? 'Chat'
 
   const renderSessionControls = (className?: string) =>
     activePersonaId == null || !personaModule ? null : (
@@ -183,29 +192,77 @@ export const AppHeader = React.memo(function AppHeader({
                 }`}
               />
             </Button>
-            <h1 className="mc-display-title flex min-w-0 shrink items-center gap-1.5 text-2xl max-md:[font-size:1.35rem]">
+            {personaModule ? (
+              <button
+                type="button"
+                className="mc-display-title flex min-h-10 min-w-0 flex-1 items-center gap-1 text-left text-[1.35rem] leading-none md:!hidden"
+                aria-expanded={mobileContextOpen}
+                aria-haspopup="dialog"
+                title="Session, topics, and view"
+                onClick={onOpenMobileContext}
+              >
+                {activePersonaName ? (
+                  <IconRibbonBow className="size-4 shrink-0 text-[color:var(--mc-accent)]" />
+                ) : null}
+                <span className="truncate">{mobileTitle}</span>
+                {sessionCaption ? (
+                  <span className="truncate font-sans text-xs font-normal text-[color:var(--mc-text-muted)]">
+                    {sessionCaption}
+                  </span>
+                ) : null}
+                <ChevronDown
+                  className={`size-4 shrink-0 text-[color:var(--mc-text-muted)] transition-transform duration-150 ${
+                    mobileContextOpen ? 'rotate-180' : ''
+                  }`}
+                  aria-hidden
+                />
+              </button>
+            ) : (
+              <h1 className="mc-display-title min-w-0 flex-1 truncate text-[1.35rem] md:!hidden">{mobileTitle}</h1>
+            )}
+            <h1 className="mc-display-title hidden min-w-0 shrink items-center gap-1.5 text-2xl md:!flex">
               {personaModule && activePersonaName ? (
                 <IconRibbonBow className="size-4 shrink-0 text-[color:var(--mc-accent)]" />
               ) : null}
-              <span className="truncate">{moduleTitle ?? activePersonaName ?? 'Chat'}</span>
+              <span className="truncate">{mobileTitle}</span>
             </h1>
-            <Button size="sm" variant="secondary" className="shrink-0 md:!hidden" onClick={onOpenPersona}>
-              Persona
-            </Button>
             {renderSessionControls('max-md:!hidden')}
-          </div>
-          {activePersonaId != null && personaModule ? (
-            <div
-              className={`mc-mobile-session-subbar w-full ${
-                mobileChatHeaderCollapsed ? 'mc-mobile-session-subbar--collapsed' : ''
-              }`}
-              aria-hidden={mobileChatHeaderCollapsed}
+            {personaModule ? (
+              <button
+                type="button"
+                className="mc-cockpit-launch relative shrink-0 md:!hidden"
+                data-active={cockpitExpanded ? 'true' : 'false'}
+                data-busy={cockpitBusyCount > 0 ? 'true' : 'false'}
+                aria-pressed={cockpitExpanded}
+                aria-label={
+                  cockpitBusyCount > 0 ? `Cockpit, ${cockpitBusyCount} active` : 'Cockpit'
+                }
+                title="Cockpit"
+                onClick={onToggleCockpit}
+              >
+                <IconCockpit className="size-4 shrink-0" />
+                {cockpitBusyCount > 0 ? (
+                  <span className="mc-badge-counter absolute -right-1 -top-1" aria-hidden>
+                    {cockpitBusyCount > 99 ? '99+' : cockpitBusyCount}
+                  </span>
+                ) : null}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="mc-cockpit-launch relative shrink-0 md:!hidden"
+              aria-label={inboxBadgeCount > 0 ? `Tools, ${inboxBadgeCount} in inbox` : 'Tools'}
+              title="Tools"
+              onClick={onOpenMobileOps}
             >
-              <div className="mc-mobile-session-subbar-inner">
-                {renderSessionControls('w-full justify-start')}
-              </div>
-            </div>
-          ) : null}
+              <IconOps className="size-4 shrink-0" />
+              {inboxBadgeCount > 0 ? (
+                <span className="mc-badge-counter absolute -right-1 -top-1" aria-hidden>
+                  {inboxBadgeCount > 99 ? '99+' : inboxBadgeCount}
+                </span>
+              ) : null}
+            </button>
+          </div>
           <div className="flex items-center gap-2 flex-wrap justify-end w-full max-md:!hidden md:!flex">
             {personaModule ? (
             <button

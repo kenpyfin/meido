@@ -104,6 +104,8 @@ export type MobileOpsSheetProps = {
   onOpenTerminal?: () => void
   terminalAvailable?: boolean
   agentHistoryDisabled?: boolean
+  onOpenPersona?: () => void
+  onOpenSettings?: () => void
 }
 
 export function MobileOpsSheet({
@@ -121,7 +123,13 @@ export function MobileOpsSheet({
   onOpenTerminal,
   terminalAvailable = false,
   agentHistoryDisabled,
+  onOpenPersona,
+  onOpenSettings,
 }: MobileOpsSheetProps) {
+  const [configOpen, setConfigOpen] = React.useState(false)
+  React.useEffect(() => {
+    if (!open) setConfigOpen(false)
+  }, [open])
   const pick = (fn: () => void) => () => {
     onOpenChange(false)
     fn()
@@ -155,6 +163,34 @@ export function MobileOpsSheet({
             disabled={agentHistoryDisabled}
             onClick={pick(onOpenAgentHistory)}
           />
+          {onOpenPersona || onOpenSettings ? (
+            <div className="mt-2 border-t border-[color:var(--mc-border-soft)] pt-2">
+              <button
+                type="button"
+                className="flex h-12 w-full items-center px-1 text-left text-sm text-[color:var(--mc-text-muted)]"
+                aria-expanded={configOpen}
+                onClick={() => setConfigOpen((open) => !open)}
+              >
+                Configuration
+              </button>
+              {configOpen ? (
+                <>
+                  <OpsRow
+                    icon={<OpsGlyph d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" />}
+                    label="Persona configuration"
+                    disabled={!onOpenPersona}
+                    onClick={onOpenPersona ? pick(onOpenPersona) : () => {}}
+                  />
+                  <OpsRow
+                    icon={<OpsGlyph d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />}
+                    label="Web UI configuration"
+                    disabled={!onOpenSettings}
+                    onClick={onOpenSettings ? pick(onOpenSettings) : () => {}}
+                  />
+                </>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <div className="flex justify-end mt-4">
           <DialogClose>

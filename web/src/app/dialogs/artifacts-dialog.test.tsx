@@ -82,6 +82,28 @@ describe('artifact library', () => {
     expect(container.querySelector('pre')?.textContent).toContain('plain line')
     vi.unstubAllGlobals()
   })
+  it('opens a file on its own page on a phone', async () => {
+    vi.stubGlobal('matchMedia', () => ({
+      matches: true,
+      media: '(max-width: 767px)',
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }))
+    apiMock.mockResolvedValue({ artifacts: [file('clip'), file('still')], next_cursor: null, indexing: false })
+    await act(async () => root.render(<ArtifactsDialog {...props()} />)); await tick()
+    expect(container.querySelector('video')).toBeNull()
+    const open = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('clip.mp4'))
+    expect(open).toBeTruthy()
+    await act(async () => open!.click())
+    expect(container.querySelector('video')).not.toBeNull()
+    expect(container.querySelector('input[aria-label="Select still.mp4"]')).toBeNull()
+    const back = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Back')
+    expect(back).toBeTruthy()
+    await act(async () => back!.click())
+    expect(container.querySelector('video')).toBeNull()
+    expect(container.querySelector('input[aria-label="Select still.mp4"]')).not.toBeNull()
+    vi.unstubAllGlobals()
+  })
   it('ignores a late response from the previous persona', async () => {
     let finish: (value: unknown) => void = () => {}
     apiMock.mockImplementation((path: string) => path.includes('persona_id=2')
