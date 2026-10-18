@@ -1,9 +1,10 @@
 import { Button } from '@/components/ui/button'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
-import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogClose } from '@/components/ui/dialog'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import React from 'react'
 
+import { LedgerDialogHeader, LedgerSection, LedgerStatusRow } from '../../components/ledger-chrome'
 import { SettingsPanelSkeleton, OverviewStatusSkeleton } from '../../components/skeleton'
 import type { SettingsDialogProps } from './types'
 
@@ -38,13 +39,13 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
 
   return (
     <Dialog open={settingsDialogOpen} onOpenChange={setSettingsDialogOpen}>
-      <DialogContent className="max-w-[920px]">
-        <DialogTitle>Web UI configuration</DialogTitle>
-        <DialogDescription className="mb-3">
-          Shared setup for every persona. Provider API keys are under Connections. A persona’s
-          engine, hooks, skills, and secrets are on the Persona page. Configure Telegram, Discord,
-          and WhatsApp under Integrations. Restart Meido after changing channel tokens.
-        </DialogDescription>
+      <DialogContent className="mc-ledger-dialog max-w-[920px]">
+        <LedgerDialogHeader
+          eyebrow="Household ledger"
+          title="Web UI configuration"
+          description="Shared setup for every persona. Provider API keys are under Connections. A persona’s engine, hooks, skills, and secrets are on the Persona page. Configure Telegram, Discord, and WhatsApp under Integrations. Restart Meido after changing channel tokens."
+        />
+        <div className="mc-ledger-body">
         {settingsError ? (
           <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive mb-2">{settingsError}</div>
         ) : null}
@@ -70,31 +71,55 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
           </TabsContent>
           <TabsContent value="overview">
             {installationStatus ? (
-              <div className="flex flex-col gap-2 mb-2">
-                <div className="flex gap-2 flex-wrap items-center">
-                  <span>
-                    {installationStatus.llm_ready ? 'LLM ready' : 'LLM missing. Open Connections.'}
-                  </span>
-                  <span>
-                    {installationStatus.channel_ready ? 'Channels ready' : 'Channels missing. Open Integrations.'}
-                  </span>
-                  <span>
-                    {installationStatus.cursor_engine_ready ? 'Cursor ready' : 'Cursor not ready'}
-                  </span>
+              <LedgerSection
+                title="Readiness"
+                owed={
+                  !installationStatus.llm_ready ||
+                  !installationStatus.channel_ready ||
+                  !installationStatus.cursor_engine_ready ||
+                  installationStatus.needs_initialization === true ||
+                  (installationStatus.requires_restart_for_env_changes ??
+                    installationStatus.requires_restart_to_apply_runtime_settings) === true
+                }
+                className="mb-2"
+              >
+                <div className="mc-ledger-rows">
+                  <LedgerStatusRow
+                    label="LLM"
+                    state={installationStatus.llm_ready ? 'Ready' : 'Missing'}
+                    detail={installationStatus.llm_ready ? undefined : 'Open Connections.'}
+                  />
+                  <LedgerStatusRow
+                    label="Channels"
+                    state={installationStatus.channel_ready ? 'Ready' : 'Missing'}
+                    detail={installationStatus.channel_ready ? undefined : 'Open Integrations.'}
+                  />
+                  <LedgerStatusRow
+                    label="Cursor"
+                    state={installationStatus.cursor_engine_ready ? 'Ready' : 'Missing'}
+                    detail={installationStatus.cursor_engine_ready ? undefined : 'Finish setup on the persona engine.'}
+                  />
                   {installationStatus.needs_initialization ? (
-                    <span>Run Setup Wizard to finish setup.</span>
+                    <LedgerStatusRow
+                      label="Setup"
+                      state="Missing"
+                      detail="Run Setup Wizard to finish setup."
+                    />
                   ) : null}
-                  <span>
-                    {(installationStatus.requires_restart_for_env_changes ??
-                      installationStatus.requires_restart_to_apply_runtime_settings) === true
-                      ? 'Restart needed'
-                      : 'No restart owed'}
-                  </span>
+                  <LedgerStatusRow
+                    label="Restart"
+                    state={
+                      (installationStatus.requires_restart_for_env_changes ??
+                        installationStatus.requires_restart_to_apply_runtime_settings) === true
+                        ? 'Restart needed'
+                        : 'No restart owed'
+                    }
+                  />
                 </div>
-                <span>
+                <p className="mc-notice-settled mt-2">
                   Stop requests between LLM/tool iterations (cooperative cancel). Use Queue for FIFO visibility.
-                </span>
-                <div className="flex gap-2 flex-wrap">
+                </p>
+                <div className="mt-3 flex gap-2 flex-wrap">
                   <Button
                     size="sm"
                     variant="outline"
@@ -120,19 +145,13 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
                         : 'No restart owed'}
                   </Button>
                 </div>
-              </div>
+              </LedgerSection>
             ) : (
               <OverviewStatusSkeleton />
             )}
-            <div
-              className="rounded-md border p-3 mt-3"
-              style={{ borderColor: 'var(--mc-border-soft)', background: 'var(--mc-bg-panel)' }}
-            >
-              <span className="font-semibold mb-2 block">
-                Runtime toggles
-              </span>
+            <LedgerSection title="Runtime toggles" className="mt-3">
               <SettingsRuntimePanel api={api} onError={setSettingsError} />
-            </div>
+            </LedgerSection>
           </TabsContent>
           <TabsContent value="system-llm">
             <SettingsTopicsModelPanel api={api} onError={setSettingsError} />
@@ -151,11 +170,7 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
             />
           </TabsContent>
           <TabsContent value="channels">
-        <div
-          className="rounded-md border p-3"
-          style={{ borderColor: 'var(--mc-border-soft)', background: 'var(--mc-bg-panel)' }}
-        >
-          <span className="font-semibold">External channel persona mode</span>
+        <LedgerSection title="External channel persona mode">
           <span className="mb-2 block">
             Bot integrations appear here for this contact’s main chat. Replies are directional: each channel only receives responses to messages it sent. All traffic still appears in the web UI. Telegram, Discord, and WeCom can use all personas or a single persona. WhatsApp is single-persona by design. Focused sessions stay in the web UI.
           </span>
@@ -244,7 +259,7 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
               )
             })}
           </div>
-        </div>
+        </LedgerSection>
           </TabsContent>
           </React.Suspense>
         </Tabs>
@@ -252,6 +267,7 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
           <DialogClose>
             <Button variant="secondary">Close</Button>
           </DialogClose>
+        </div>
         </div>
       </DialogContent>
     </Dialog>

@@ -4,6 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { Input } from '@/components/ui/input'
 import { ConfirmDialog } from './confirm-dialog'
 import { asEngineId, engineLabel, ENGINE_OPTIONS, type EngineId } from '../lib/agent-engine'
+import { LedgerSection, LedgerStatusRow } from './ledger-chrome'
 import { SettingsPanelSkeleton } from './skeleton'
 import { LocalModelFields } from './llm-model-fields'
 import { SettingsLlmPanel } from './settings-llm'
@@ -246,6 +247,15 @@ export function SettingsAgentEnginePanel({
     personaEngine?.override ?? personaEngine?.effective ?? runtime?.agent_engine,
   )
   const busy = savingKey != null
+  const cursorMissing = selectedEngine === 'cursor' && cursorStatus != null && !cursorStatus.engine_ready
+  const geminiMissing = selectedEngine === 'gemini_adk' && geminiStatus != null && !geminiStatus.engine_ready
+  const engineMissing = cursorMissing || geminiMissing
+  const engineOwed = activePersonaId == null || engineMissing || modelGap != null
+  const engineDetail = cursorMissing
+    ? `${cursorStatus?.sidecar_reachable ? 'Sidecar up' : 'Sidecar down'}, API key ${cursorStatus?.api_key_configured ? 'set' : 'missing'}, health ${cursorStatus?.sdk_runner_ok ? 'verified' : 'not verified'}. Finish setup in the Cursor panel below.`
+    : geminiMissing
+      ? `API key ${geminiStatus?.api_key_configured ? 'set' : 'missing'}. Add the Gemini key under Settings → Connections, then finish setup in the Gemini ADK panel below.`
+      : undefined
 
   const refreshModelGap = useCallback(() => {
     void missingModelNotice(api, activePersonaId, selectedEngine)
@@ -267,10 +277,23 @@ export function SettingsAgentEnginePanel({
         onPersonaBulletinChanged={onPersonaBulletinChanged}
       />
 
-      <div className="flex flex-col gap-2">
-        <span className="font-medium">
-          Agent engine
-        </span>
+      <LedgerSection title="Agent engine" owed={engineOwed} className="flex flex-col gap-2">
+        <div className="mc-ledger-rows">
+          {activePersonaId == null ? (
+            <LedgerStatusRow
+              label="Persona"
+              state="Missing"
+              detail="Select a persona in the sidebar."
+            />
+          ) : (
+            <LedgerStatusRow
+              label="Engine"
+              state={engineMissing ? 'Missing' : 'Ready'}
+              detail={engineDetail}
+            />
+          )}
+          {modelGap ? <LedgerStatusRow label="Model" state="Missing" detail={modelGap} /> : null}
+        </div>
         {activePersonaId == null ? (
           <span>
             Select a persona in the sidebar to set its engine. Choosing an engine saves it and shows
@@ -306,27 +329,7 @@ export function SettingsAgentEnginePanel({
           <span className="text-xs text-muted-foreground" role="status">{saveNotice}</span>
         ) : null}
 
-        {modelGap ? (
-          <div role="status" className="mc-notice-owed">{modelGap}</div>
-        ) : null}
-
-        {selectedEngine === 'cursor' && cursorStatus && !cursorStatus.engine_ready ? (
-          <div role="status" className="mc-notice-owed">
-              Cursor engine is active but not ready ({cursorStatus.sidecar_reachable ? 'sidecar up' : 'sidecar down'}
-              , API key {cursorStatus.api_key_configured ? 'ok' : 'missing'}, health{' '}
-              {cursorStatus.sdk_runner_ok ? 'verified' : 'not verified'}). Finish setup in the Cursor
-              panel below.
-            </div>
-        ) : null}
-
-        {selectedEngine === 'gemini_adk' && geminiStatus && !geminiStatus.engine_ready ? (
-          <div role="status" className="mc-notice-owed">
-              Gemini ADK is active but not ready (API key{' '}
-              {geminiStatus.api_key_configured ? 'ok' : 'missing'}). Add the Gemini key under
-              Settings → Connections, then finish setup in the Gemini ADK panel below.
-            </div>
-        ) : null}
-      </div>
+      </LedgerSection>
 
       <ConfigPanelErrorBoundary key={selectedEngine}>
         {selectedEngine === 'classic' ? (
@@ -476,11 +479,16 @@ function PersonaLocalDelegate({
 
   const ready = baseUrl.trim().length > 0 && model.trim().length > 0 && toolsOk
   return (
-    <div className="flex flex-col gap-2 rounded-md border p-3" style={{ borderColor: 'var(--mc-border-soft)' }}>
-      <span className="font-medium">Local delegate</span>
+    <LedgerSection title="Local delegate" owed={!ready} className="flex flex-col gap-2">
+      <div className="mc-ledger-rows">
+        <LedgerStatusRow
+          label="Delegate"
+          state={ready ? 'Ready' : 'Missing'}
+          detail={ready ? 'Tool calling is verified.' : 'Run Test after saving.'}
+        />
+      </div>
       <span className="text-xs text-muted-foreground">
         This persona’s local server. The turn stops until the URL, model, and tool-call check are set.
-        {ready ? ' Tool calling is verified.' : ' Run Test after saving.'}
       </span>
       <LocalModelFields
         api={api}
@@ -499,7 +507,7 @@ function PersonaLocalDelegate({
         </Button>
       </div>
       {notice ? <span className="text-xs text-muted-foreground" role="status">{notice}</span> : null}
-    </div>
+    </LedgerSection>
   )
 }
 

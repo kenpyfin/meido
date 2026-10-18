@@ -148,6 +148,11 @@ export function IconSendBow({ className }: { className?: string }) {
   )
 }
 
+/** Antique-brass brooch. Marks a ledger eyebrow; color comes from `.mc-bulletin-mark`. */
+export function IconBrassBrooch({ className }: { className?: string }) {
+  return <span className={base(className, 'mc-bulletin-mark')} aria-hidden />
+}
+
 /** Collar ribbon, used on the active persona row. */
 export function IconRibbonBow({ className }: { className?: string }) {
   return (

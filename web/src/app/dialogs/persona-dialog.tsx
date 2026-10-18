@@ -1,7 +1,8 @@
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogClose, DialogContent } from '@/components/ui/dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import React from 'react'
+import { LedgerDialogHeader, LedgerSection } from '../../components/ledger-chrome'
 import { SettingsPanelSkeleton } from '../../components/skeleton'
 import type { PersonaDialogProps } from './types'
 
@@ -110,8 +111,7 @@ function VaultedSecretsPanel({
   const legacyItems = activePersonaId == null ? [] : items.filter((item) => item.legacy === true)
 
   return (
-    <section className="mb-4 rounded-lg border border-border p-3">
-      <h3 className="text-sm font-medium">Vaulted secrets</h3>
+    <LedgerSection title="Vaulted secrets" className="mb-4">
       <p className="mt-1 text-xs text-muted-foreground">
         Names stored for this persona after the agent calls vault_secret. Values stay in the
         runtime secrets file and are not shown here. Older secrets saved before persona tagging
@@ -135,7 +135,7 @@ function VaultedSecretsPanel({
           <VaultSecretList items={legacyItems} busyName={busyName} onForget={(name) => void forget(name)} />
         </div>
       ) : null}
-    </section>
+    </LedgerSection>
   )
 }
 
@@ -147,14 +147,15 @@ export function PersonaDialog({ api, activePersonaId, personas, persona }: Perso
 
   return (
     <Dialog open={persona.open} onOpenChange={persona.onOpenChange}>
-      <DialogContent className="max-w-[920px]">
-        <DialogTitle>{personaName ?? 'Persona'}</DialogTitle>
-        <DialogDescription className="mb-3">
-          Engine, hooks, skills, and secrets for this persona. Connections, channels, and shared
-          engine defaults stay in Settings.
-        </DialogDescription>
+      <DialogContent className="mc-ledger-dialog max-w-[920px]">
+        <LedgerDialogHeader
+          eyebrow="Attendant dossier"
+          title={personaName ?? 'Persona'}
+          description="Engine, hooks, skills, and secrets for this persona. Connections, channels, and shared engine defaults stay in Settings."
+        />
+        <div className="mc-ledger-body">
         {persona.error ? (
-          <div role="status" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive mb-2">
+          <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive mb-2">
             {persona.error}
           </div>
         ) : null}
@@ -209,6 +210,7 @@ export function PersonaDialog({ api, activePersonaId, personas, persona }: Perso
           <DialogClose>
             <Button variant="secondary">Close</Button>
           </DialogClose>
+        </div>
         </div>
       </DialogContent>
     </Dialog>

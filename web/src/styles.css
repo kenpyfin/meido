@@ -3332,6 +3332,126 @@ html.dark *::-webkit-scrollbar-thumb:hover {
   letter-spacing: 0.01em;
 }
 
+/* Household and attendant dialogs sit on the parlor canvas. The header is a panel; the scallop dips show canvas. */
+.mc-ledger-dialog {
+  background: var(--mc-bg-main);
+  color: var(--mc-text-primary);
+  gap: 0;
+}
+
+.mc-ledger-header {
+  margin: -1rem -1rem 0;
+  padding: 1rem 2.75rem 14px 1rem;
+  background: var(--mc-bg-panel);
+}
+
+.mc-ledger-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0 0 0.35rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mc-text-muted);
+}
+
+.mc-ledger-dialog-title {
+  font-size: 1.75rem;
+  line-height: 1.15;
+}
+
+.mc-ledger-dialog-description {
+  margin-top: 0.35rem;
+  max-width: 42rem;
+}
+
+.mc-ledger-body {
+  padding-top: 0.85rem;
+}
+
+.mc-ledger-dialog .mc-settings-tabs-sticky {
+  background: var(--mc-bg-main);
+}
+
+.mc-ledger-section {
+  position: relative;
+  border: 1px solid var(--mc-border-soft);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, #fff 7%, transparent), transparent 18px),
+    var(--mc-bg-panel);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 10%, transparent);
+  padding: 0.75rem;
+}
+
+.mc-ledger-section[data-owed='true'] {
+  border-left: 3px solid var(--mc-accent-brass);
+  padding-left: calc(0.75rem - 2px);
+}
+
+.mc-ledger-section-title {
+  margin: 0 0 0.5rem;
+  font-family: var(--mc-font-display);
+  font-size: 1.25rem;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  color: var(--mc-text-primary);
+}
+
+.mc-ledger-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.mc-ledger-row {
+  display: grid;
+  grid-template-columns: minmax(6.5rem, 8.5rem) minmax(7.5rem, auto) minmax(0, 1fr);
+  gap: 0.35rem 0.75rem;
+  align-items: baseline;
+  padding: 0.4rem 0;
+  border-top: 1px solid var(--mc-border-soft);
+}
+
+.mc-ledger-row-label {
+  color: var(--mc-text-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.mc-ledger-state {
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.mc-ledger-state--owed {
+  color: var(--mc-accent-brass);
+}
+
+.mc-ledger-state--settled {
+  color: var(--mc-text-muted);
+}
+
+.mc-ledger-row-detail {
+  color: var(--mc-text-primary);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+@media (max-width: 640px) {
+  .mc-ledger-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .mc-ledger-row-detail {
+    grid-column: 1 / -1;
+  }
+}
+
 .mc-crest-medallion {
   display: block;
   width: 5.5rem;

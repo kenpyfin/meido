@@ -236,6 +236,10 @@ Primary actions. Ribbon fill, espresso label, 8px radius, 150ms hover to `{color
 
 Pill for a live count. Brass or ribbon fill, espresso numerals. One badge per cluster.
 
+### `ledger-dialog`
+
+Settings and Persona. Canvas field, panel header, katyusha scallop under the header, uppercase eyebrow with a brass brooch (`Household ledger`, `Attendant dossier`), display title. A section is a hairline panel with a top sheen. A brass pin-tuck on the leading edge means that section is owed (missing setup or restart). Status rows say Ready, Missing, Restart needed, or No restart owed. Brass repeats an owed word. Muted repeats a settled word.
+
 ### `service-ledger-strip`
 
 Bulletin under the header. Uppercase sans label, display not required. Empty copy is "No active briefing on the tray yet." A brass diamond sits before the label. The same scallop hem as the header runs along the bottom.
