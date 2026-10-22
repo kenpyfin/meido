@@ -70,6 +70,8 @@ export type InstallationStatus = {
   requires_restart_to_apply_runtime_settings?: boolean
   requires_restart_for_env_changes?: boolean
   needs_initialization?: boolean
+  /** False when `.env` has no `WORKSPACE_DIR`. The setup wizard opens. */
+  workspace_configured?: boolean
   runtime_env_merge_from_app_settings?: boolean
   llm_model_from_app_settings?: boolean
 }
@@ -467,6 +469,10 @@ export type PersonaTodo = {
   position?: number
   source_kind?: string | null
   source_ref?: string | null
+  auto_advance?: boolean
+  stage_run_id?: string | null
+  stage_outcome?: string | null
+  deploy_prompt?: string | null
 }
 
 export type MessageItem = {

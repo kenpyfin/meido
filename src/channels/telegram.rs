@@ -871,6 +871,7 @@ pub(crate) async fn handle_message(
         origin: crate::db::message_origin_interactive(),
         speaker_persona_id: None,
     };
+    let inbound_user_message_id = stored.id.clone();
     let _ = call_blocking(state.db.clone(), move |db| db.store_message(&stored)).await;
 
     // Groups: only respond when @bot appears in the (prefix-stripped) body
@@ -1020,6 +1021,7 @@ pub(crate) async fn handle_message(
                 history_override: None,
                 tool_iteration_cap: None,
                 skip_recall: false,
+                inbound_user_message_id: Some(inbound_user_message_id),
             },
             None,
             images,

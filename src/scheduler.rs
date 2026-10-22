@@ -713,6 +713,7 @@ async fn run_scheduled_agent_and_finalize(
                 history_override: None,
                 tool_iteration_cap: None,
                 skip_recall: false,
+                inbound_user_message_id: None,
             },
             Some(&prompt),
             crate::agent::InboundImages::new(),

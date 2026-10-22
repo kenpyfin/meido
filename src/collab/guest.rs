@@ -53,8 +53,8 @@ pub async fn run_guest_turn(
     .await
     .map_err(|e| e.to_string())?;
 
-    let mut messages = Vec::new();
-    let mut budget = GUEST_HISTORY_CHARS;
+    let question_redacted = state.env_redactor.redact(&question_owned);
+    let mut lines = Vec::with_capacity(history.len());
     for item in history {
         let role = if item.is_from_bot {
             "assistant"
@@ -66,31 +66,23 @@ pub async fn run_guest_turn(
             text = format!("[Guest: {}]\n{text}", item.sender_name);
         }
         let text = state.env_redactor.redact(&text);
-        let take = text.chars().take(budget).collect::<String>();
-        budget = budget.saturating_sub(take.chars().count());
-        if take.is_empty() {
+        if text.is_empty() {
             continue;
         }
-        messages.push(Message {
+        lines.push(GuestHistoryLine {
             role: role.into(),
-            content: MessageContent::Text(take),
+            text,
         });
-        if budget == 0 {
-            break;
-        }
     }
+    let mut messages = pack_guest_history(lines, &question_redacted);
     if messages.is_empty() {
-        messages.push(Message {
-            role: "user".into(),
-            content: MessageContent::Text(
-                state
-                    .env_redactor
-                    .redact(&question_owned)
-                    .chars()
-                    .take(GUEST_HISTORY_CHARS)
-                    .collect(),
-            ),
-        });
+        let fallback = take_head(&question_redacted, GUEST_HISTORY_CHARS);
+        if !fallback.is_empty() {
+            messages.push(Message {
+                role: "user".into(),
+                content: MessageContent::Text(fallback),
+            });
+        }
     }
 
     let (tx, rx) = oneshot::channel();
@@ -124,6 +116,7 @@ pub async fn run_guest_turn(
                     history_override: Some(messages),
                     tool_iteration_cap: None,
                     skip_recall: true,
+                    inbound_user_message_id: None,
                 },
                 None,
                 crate::agent::InboundImages::new(),
@@ -165,4 +158,175 @@ pub async fn run_guest_turn(
         "guest turn stored"
     );
     Ok(reply)
+}
+
+struct GuestHistoryLine {
+    role: String,
+    text: String,
+}
+
+/// Pack the guest window so the triggering question is the final user message.
+///
+/// History arrives oldest-first. The character budget is spent newest-first:
+/// the trailing user line (or `question`, when the slice does not end on the
+/// user) is reserved from the start of that text, then older lines fill what
+/// remains. A line that does not fit contributes its tail, the part nearest
+/// the question, and then the walk stops.
+fn pack_guest_history(mut history: Vec<GuestHistoryLine>, question: &str) -> Vec<Message> {
+    let stored_trigger = if history.last().is_some_and(|line| line.role == "user") {
+        history.pop()
+    } else {
+        None
+    };
+    let trigger_source = stored_trigger
+        .as_ref()
+        .map(|line| line.text.as_str())
+        .filter(|text| !text.is_empty())
+        .unwrap_or(question);
+    let trigger_text = take_head(trigger_source, GUEST_HISTORY_CHARS);
+    let mut budget = GUEST_HISTORY_CHARS.saturating_sub(trigger_text.chars().count());
+
+    let mut older_newest_first = Vec::new();
+    for line in history.into_iter().rev() {
+        if budget == 0 {
+            break;
+        }
+        let len = line.text.chars().count();
+        if len == 0 {
+            continue;
+        }
+        if len <= budget {
+            budget -= len;
+            older_newest_first.push(line);
+            continue;
+        }
+        let tail = take_tail(&line.text, budget);
+        if !tail.is_empty() {
+            older_newest_first.push(GuestHistoryLine {
+                role: line.role,
+                text: tail,
+            });
+        }
+        break;
+    }
+    older_newest_first.reverse();
+
+    let mut messages = Vec::with_capacity(older_newest_first.len() + 1);
+    for line in older_newest_first {
+        messages.push(Message {
+            role: line.role,
+            content: MessageContent::Text(line.text),
+        });
+    }
+    if !trigger_text.is_empty() {
+        messages.push(Message {
+            role: "user".into(),
+            content: MessageContent::Text(trigger_text),
+        });
+    }
+    messages
+}
+
+fn take_head(text: &str, budget: usize) -> String {
+    text.chars().take(budget).collect()
+}
+
+fn take_tail(text: &str, budget: usize) -> String {
+    let len = text.chars().count();
+    if len <= budget {
+        return text.to_string();
+    }
+    text.chars().skip(len - budget).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line(role: &str, text: &str) -> GuestHistoryLine {
+        GuestHistoryLine {
+            role: role.into(),
+            text: text.into(),
+        }
+    }
+
+    fn text_of(message: &Message) -> &str {
+        match &message.content {
+            MessageContent::Text(text) => text,
+            MessageContent::Blocks(_) => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn budget_keeps_the_triggering_question_when_older_replies_are_long() {
+        let older = "A".repeat(GUEST_HISTORY_CHARS);
+        let packed = pack_guest_history(
+            vec![
+                line("assistant", &older),
+                line("assistant", &older),
+                line("user", "@Reading_Pal_Developer Give me the summary"),
+            ],
+            "@Reading_Pal_Developer Give me the summary",
+        );
+        assert_eq!(packed.last().map(|m| m.role.as_str()), Some("user"));
+        assert_eq!(
+            text_of(packed.last().unwrap()),
+            "@Reading_Pal_Developer Give me the summary"
+        );
+        let prior_chars: usize = packed
+            .iter()
+            .rev()
+            .skip(1)
+            .map(|m| text_of(m).chars().count())
+            .sum();
+        assert!(prior_chars < GUEST_HISTORY_CHARS);
+        assert!(prior_chars > 0);
+    }
+
+    #[test]
+    fn partial_older_line_keeps_the_tail_nearest_the_question() {
+        let trigger = "ASK";
+        let older = format!("OLD_HEAD{}", "x".repeat(GUEST_HISTORY_CHARS));
+        let packed = pack_guest_history(
+            vec![line("assistant", &older), line("user", trigger)],
+            trigger,
+        );
+        assert_eq!(packed.len(), 2);
+        assert!(!text_of(&packed[0]).contains("OLD_HEAD"));
+        assert!(text_of(&packed[0]).ends_with('x'));
+        assert_eq!(text_of(&packed[1]), "ASK");
+        let total: usize = packed.iter().map(|m| text_of(m).chars().count()).sum();
+        assert_eq!(total, GUEST_HISTORY_CHARS);
+    }
+
+    #[test]
+    fn question_is_appended_when_the_slice_ends_on_the_assistant() {
+        let packed = pack_guest_history(
+            vec![line("assistant", "earlier reply")],
+            "the question that was not in the slice",
+        );
+        assert_eq!(packed.len(), 2);
+        assert_eq!(packed[0].role, "assistant");
+        assert_eq!(packed[1].role, "user");
+        assert_eq!(
+            text_of(&packed[1]),
+            "the question that was not in the slice"
+        );
+    }
+
+    #[test]
+    fn short_history_stays_in_order() {
+        let packed = pack_guest_history(
+            vec![
+                line("user", "first"),
+                line("assistant", "reply"),
+                line("user", "second"),
+            ],
+            "second",
+        );
+        assert_eq!(
+            packed.iter().map(|m| text_of(m)).collect::<Vec<_>>(),
+            vec!["first", "reply", "second"]
+        );
+    }
 }

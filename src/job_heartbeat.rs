@@ -69,6 +69,7 @@ pub fn signal_from_agent_event(evt: &AgentEvent) -> Option<HeartbeatSignal> {
             blocked_reason.as_deref().unwrap_or("-"),
         ))),
         AgentEvent::TextDelta { .. } => None,
+        AgentEvent::UserMessageRewritten { .. } => None,
         AgentEvent::FinalResponse { .. } => None,
     }
 }

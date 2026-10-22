@@ -47,7 +47,15 @@ export function IconSettings({ className }: { className?: string }) {
 }
 
 export function IconCopy({ className }: { className?: string }) {
-  return <Copy className={base(className, 'size-4 shrink-0')} aria-hidden />
+  return (
+    <Copy
+      className={base(className, 'size-4 shrink-0')}
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    />
+  )
 }
 
 export function IconReply({ className }: { className?: string }) {
@@ -71,7 +79,15 @@ export function IconMoreVertical({ className }: { className?: string }) {
 }
 
 export function IconCockpit({ className }: { className?: string }) {
-  return <Gauge className={base(className, 'size-5 shrink-0')} aria-hidden />
+  return (
+    <Gauge
+      className={base(className, 'size-4 shrink-0')}
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    />
+  )
 }
 
 export function IconSidebar({ className }: { className?: string }) {
@@ -166,16 +182,25 @@ export function IconRibbonBow({ className }: { className?: string }) {
   )
 }
 
-/** Parlor service bell for the inbox. */
+/** Parlor service bell for the inbox. Same 2px round stroke and 16px size as the cockpit gauge. */
 export function IconServiceBell({ className }: { className?: string }) {
   return (
-    <MaidSvg className={className} fallback="size-4 shrink-0">
+    <svg
+      className={base(className, 'size-4 shrink-0')}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
       <path d="M12 4.5v1.2" />
       <path d="M6.2 15.2a6.2 6.2 0 0 1 11.6 0" />
       <path d="M5 15.2h14" />
       <path d="M9.2 15.4a2.8 2.8 0 0 0 5.6 0" />
       <path d="M8 18.6h8" />
-    </MaidSvg>
+    </svg>
   )
 }
 

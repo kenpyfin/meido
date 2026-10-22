@@ -59,6 +59,22 @@ pub fn migrate(conn: &Connection) -> Result<(), FinallyAValueBotError> {
             "source_ref",
             "ALTER TABLE persona_todos ADD COLUMN source_ref TEXT",
         ),
+        (
+            "auto_advance",
+            "ALTER TABLE persona_todos ADD COLUMN auto_advance INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "stage_run_id",
+            "ALTER TABLE persona_todos ADD COLUMN stage_run_id TEXT",
+        ),
+        (
+            "stage_outcome",
+            "ALTER TABLE persona_todos ADD COLUMN stage_outcome TEXT",
+        ),
+        (
+            "deploy_prompt",
+            "ALTER TABLE persona_todos ADD COLUMN deploy_prompt TEXT",
+        ),
     ] {
         if !column_exists(conn, "persona_todos", column)? {
             conn.execute(ddl, [])?;
@@ -66,6 +82,30 @@ pub fn migrate(conn: &Connection) -> Result<(), FinallyAValueBotError> {
     }
     conn.execute(
         "UPDATE persona_todos SET status = 'todo' WHERE status = 'open'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE persona_todos SET completed_at = COALESCE(completed_at, updated_at) WHERE status = 'done'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE persona_todos SET status = 'deploy' WHERE status = 'done'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE persona_todos SET status = 'implement' WHERE status IN ('doing', 'blocked')",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE persona_todos SET status = 'plan' WHERE status = 'design'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE persona_todos SET status = 'build' WHERE status = 'implement'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE persona_todos SET status = 'verify' WHERE status IN ('test', 'deploy')",
         [],
     )?;
     conn.execute(
@@ -350,6 +390,20 @@ impl Database {
         Ok(())
     }
 
+    /// Marks every unread run in the chat read. One write, so the header count drops once.
+    pub fn mark_all_scheduled_runs_read(
+        &self,
+        chat_id: i64,
+    ) -> Result<usize, FinallyAValueBotError> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let cleared = conn.execute(
+            "UPDATE scheduled_runs SET read_at = ?1 WHERE chat_id = ?2 AND read_at IS NULL",
+            params![now, chat_id],
+        )?;
+        Ok(cleared)
+    }
+
     pub fn count_unread_runs(&self, chat_id: i64) -> Result<i64, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let n: i64 = conn.query_row(
@@ -363,7 +417,7 @@ impl Database {
     pub fn count_blocked_items(&self, chat_id: i64) -> Result<i64, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let n: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM persona_todos WHERE chat_id = ?1 AND status = 'blocked'",
+            "SELECT COUNT(*) FROM persona_todos WHERE chat_id = ?1 AND blocked_reason IS NOT NULL AND blocked_reason != ''",
             params![chat_id],
             |row| row.get(0),
         )?;
@@ -403,6 +457,12 @@ impl Database {
             return Ok(None);
         }
         let now = Utc::now().to_rfc3339();
+        let raw_status = patch
+            .status
+            .as_deref()
+            .map(|status| status.trim().to_ascii_lowercase());
+        let mark_complete = patch.completed == Some(true) || raw_status.as_deref() == Some("done");
+        let clear_complete = patch.completed == Some(false) && !mark_complete;
         let status = if let Some(raw) = patch.status.as_deref() {
             crate::db::normalize_board_status(raw)?.to_string()
         } else {
@@ -419,18 +479,35 @@ impl Database {
             .as_ref()
             .map(|d| clip_chars(d, 4000))
             .or(existing.description.clone());
+        let deploy_prompt = match patch.deploy_prompt.as_deref() {
+            Some(text) => {
+                let clipped = clip_chars(text, 4000);
+                if clipped.trim().is_empty() {
+                    None
+                } else {
+                    Some(clipped)
+                }
+            }
+            None => existing.deploy_prompt.clone(),
+        };
         let owner = patch.owner_persona_id.or(existing.owner_persona_id);
         let priority = patch.priority.unwrap_or(existing.priority);
         let due_at = patch.due_at.clone().or(existing.due_at.clone());
-        let blocked_reason = if status == "blocked" {
-            patch
-                .blocked_reason
-                .clone()
-                .or(existing.blocked_reason.clone())
-        } else if patch.status.is_some() {
-            None
-        } else {
-            existing.blocked_reason.clone()
+        let blocked_reason = match patch.blocked_reason.as_deref() {
+            Some(reason) => {
+                let trimmed = reason.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(clip_chars(trimmed, 500))
+                }
+            }
+            None => existing.blocked_reason.clone(),
+        };
+        let auto_advance = match patch.auto_advance {
+            Some(true) => 1,
+            Some(false) => 0,
+            None => existing.auto_advance,
         };
         let position = match (patch.before_position, patch.after_position) {
             (Some(a), Some(b)) => (a + b) / 2.0,
@@ -438,20 +515,30 @@ impl Database {
             (Some(a), None) => a + 1.0,
             (None, None) => patch.position.unwrap_or(existing.position),
         };
-        let completed_at: Option<String> = if status == "done" {
-            existing.completed_at.clone().or(Some(now.clone()))
+        let completed_at: Option<String> = if mark_complete {
+            Some(existing.completed_at.clone().unwrap_or_else(|| now.clone()))
+        } else if clear_complete {
+            None
+        } else if status == "verify" {
+            existing.completed_at.clone()
         } else if patch.status.is_some() {
             None
         } else {
             existing.completed_at.clone()
         };
+        let status_changed = existing.status != status;
+        let clear_stage = status_changed || mark_complete;
+        let clear_stage_flag: i64 = if clear_stage { 1 } else { 0 };
         let tx = conn.unchecked_transaction()?;
         tx.execute(
             "UPDATE persona_todos SET
                 title = ?1, status = ?2, description = ?3, owner_persona_id = ?4,
                 priority = ?5, due_at = ?6, blocked_reason = ?7, position = ?8,
-                updated_at = ?9, completed_at = ?10
-             WHERE id = ?11",
+                updated_at = ?9, completed_at = ?10, auto_advance = ?11,
+                stage_run_id = CASE WHEN ?12 = 1 THEN NULL ELSE stage_run_id END,
+                stage_outcome = CASE WHEN ?12 = 1 THEN NULL ELSE stage_outcome END,
+                deploy_prompt = ?13
+             WHERE id = ?14",
             params![
                 title,
                 status,
@@ -463,10 +550,13 @@ impl Database {
                 position,
                 now,
                 completed_at,
+                auto_advance,
+                clear_stage_flag,
+                deploy_prompt,
                 item_id
             ],
         )?;
-        if existing.status != status {
+        if status_changed || (mark_complete && existing.completed_at.is_none()) {
             tx.execute(
                 "INSERT INTO board_item_events (chat_id, item_id, from_status, to_status, actor_kind, actor_persona_id, at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -486,6 +576,143 @@ impl Database {
         self.get_persona_todo(item_id)
     }
 
+    pub fn mark_board_stage_running(
+        &self,
+        item_id: i64,
+        run_id: &str,
+    ) -> Result<(), FinallyAValueBotError> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE persona_todos
+             SET stage_run_id = ?1, stage_outcome = 'running', blocked_reason = NULL, updated_at = ?2
+             WHERE id = ?3",
+            params![run_id, now, item_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_board_stage_failed(
+        &self,
+        item_id: i64,
+        error: &str,
+    ) -> Result<(), FinallyAValueBotError> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        let reason = clip_chars(error.trim(), 500);
+        conn.execute(
+            "UPDATE persona_todos
+             SET stage_run_id = NULL,
+                 stage_outcome = 'failed',
+                 blocked_reason = CASE
+                   WHEN blocked_reason IS NULL OR blocked_reason = '' THEN ?1
+                   ELSE blocked_reason
+                 END,
+                 updated_at = ?2
+             WHERE id = ?3",
+            params![reason, now, item_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_board_stage_run(&self, item_id: i64) -> Result<(), FinallyAValueBotError> {
+        let conn = self.conn.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE persona_todos
+             SET stage_run_id = NULL,
+                 stage_outcome = CASE
+                   WHEN stage_outcome IN ('running', 'passed') THEN NULL
+                   ELSE stage_outcome
+                 END,
+                 updated_at = ?1
+             WHERE id = ?2",
+            params![now, item_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_board_stage_outcome(
+        &self,
+        chat_id: i64,
+        item_id: i64,
+        outcome: &str,
+        blocked_reason: Option<&str>,
+        note: Option<&str>,
+    ) -> Result<Option<PersonaTodo>, FinallyAValueBotError> {
+        if outcome != "passed" && outcome != "blocked" {
+            return Err(FinallyAValueBotError::ToolExecution(
+                "stage outcome must be pass or blocked".into(),
+            ));
+        }
+        let conn = self.conn.lock().unwrap();
+        let existing = match conn.query_row(
+            &format!("SELECT {PERSONA_TODO_COLS} FROM persona_todos WHERE id = ?1"),
+            params![item_id],
+            map_persona_todo,
+        ) {
+            Ok(row) => row,
+            Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        if existing.chat_id != chat_id {
+            return Ok(None);
+        }
+        let blocked = if outcome == "passed" {
+            None
+        } else {
+            let reason = blocked_reason.unwrap_or("").trim();
+            if reason.is_empty() {
+                return Err(FinallyAValueBotError::ToolExecution(
+                    "blocked_reason is required when the stage is blocked".into(),
+                ));
+            }
+            Some(clip_chars(reason, 500))
+        };
+        let description = match note.map(str::trim).filter(|text| !text.is_empty()) {
+            Some(note) => {
+                let merged = match existing
+                    .description
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                {
+                    Some(previous) => format!("{previous}\n\n{note}"),
+                    None => note.to_string(),
+                };
+                Some(clip_chars(&merged, 4000))
+            }
+            None => existing.description.clone(),
+        };
+        let now = Utc::now().to_rfc3339();
+        let completed_at = if outcome == "passed" && existing.status == "verify" {
+            Some(now.clone())
+        } else {
+            existing.completed_at.clone()
+        };
+        let stored_outcome = if outcome == "passed" {
+            "passed"
+        } else {
+            "blocked"
+        };
+        conn.execute(
+            "UPDATE persona_todos
+             SET stage_outcome = ?1, stage_run_id = NULL, blocked_reason = ?2,
+                 description = ?3, completed_at = ?4, updated_at = ?5
+             WHERE id = ?6",
+            params![
+                stored_outcome,
+                blocked,
+                description,
+                completed_at,
+                now,
+                item_id
+            ],
+        )?;
+        drop(conn);
+        self.get_persona_todo(item_id)
+    }
+
     pub fn set_todo_source(
         &self,
         chat_id: i64,
@@ -500,6 +727,46 @@ impl Database {
             params![source_kind, source_ref, item_id, chat_id],
         )?;
         Ok(())
+    }
+
+    pub fn list_board_item_events(
+        &self,
+        chat_id: i64,
+        item_id: i64,
+        limit: usize,
+    ) -> Result<Option<Vec<BoardItemEvent>>, FinallyAValueBotError> {
+        let conn = self.conn.lock().unwrap();
+        let owner_chat: Option<i64> = match conn.query_row(
+            "SELECT chat_id FROM persona_todos WHERE id = ?1",
+            params![item_id],
+            |row| row.get(0),
+        ) {
+            Ok(chat) => Some(chat),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(err) => return Err(err.into()),
+        };
+        if owner_chat != Some(chat_id) {
+            return Ok(None);
+        }
+        let limit = limit.clamp(1, 100) as i64;
+        let mut stmt = conn.prepare(
+            "SELECT id, from_status, to_status, actor_kind, actor_persona_id, at
+             FROM board_item_events
+             WHERE chat_id = ?1 AND item_id = ?2
+             ORDER BY at ASC, id ASC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![chat_id, item_id, limit], |row| {
+            Ok(BoardItemEvent {
+                id: row.get(0)?,
+                from_status: row.get(1)?,
+                to_status: row.get(2)?,
+                actor_kind: row.get(3)?,
+                actor_persona_id: row.get(4)?,
+                at: row.get(5)?,
+            })
+        })?;
+        Ok(Some(rows.collect::<Result<Vec<_>, _>>()?))
     }
 
     pub fn list_board_events_since(
@@ -1004,6 +1271,65 @@ impl Database {
         Ok(id)
     }
 
+    pub fn coordinator_persona_id(
+        &self,
+        chat_id: i64,
+    ) -> Result<Option<i64>, FinallyAValueBotError> {
+        let conn = self.conn.lock().unwrap();
+        match conn.query_row(
+            "SELECT id FROM personas WHERE chat_id = ?1 AND lower(name) = 'coordinator' LIMIT 1",
+            params![chat_id],
+            |row| row.get::<_, i64>(0),
+        ) {
+            Ok(id) => Ok(Some(id)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Latest assistant line for this persona at or after `since` (RFC3339).
+    pub fn latest_bot_message_since(
+        &self,
+        chat_id: i64,
+        persona_id: i64,
+        since: &str,
+    ) -> Result<Option<(String, String)>, FinallyAValueBotError> {
+        let conn = self.conn.lock().unwrap();
+        match conn.query_row(
+            "SELECT content, timestamp FROM messages
+             WHERE chat_id = ?1 AND persona_id = ?2 AND is_from_bot = 1 AND timestamp >= ?3
+             ORDER BY timestamp DESC, id DESC
+             LIMIT 1",
+            params![chat_id, persona_id, since],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        ) {
+            Ok(pair) => Ok(Some(pair)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn latest_brief_run(
+        &self,
+        chat_id: i64,
+        prompt_prefix: &str,
+    ) -> Result<Option<ScheduledRunRow>, FinallyAValueBotError> {
+        let conn = self.conn.lock().unwrap();
+        let like = format!("{prompt_prefix}%");
+        let sql = "SELECT r.id, r.task_id, r.chat_id, r.persona_id, r.started_at, r.finished_at,
+                    r.status, r.preview, r.output, r.output_path, r.error, r.read_at
+             FROM scheduled_runs r
+             JOIN scheduled_tasks t ON t.id = r.task_id
+             WHERE r.chat_id = ?1 AND t.prompt LIKE ?2
+             ORDER BY r.finished_at DESC, r.id DESC
+             LIMIT 1";
+        match conn.query_row(&sql, params![chat_id, like], map_run) {
+            Ok(row) => Ok(Some(row)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     pub fn previous_brief_preview(
         &self,
         chat_id: i64,
@@ -1127,6 +1453,21 @@ pub struct BoardPatch<'a> {
     pub after_position: Option<f64>,
     pub actor_kind: &'a str,
     pub actor_persona_id: Option<i64>,
+    pub auto_advance: Option<bool>,
+    /// `Some(true)` marks the card complete without requiring a column change.
+    /// `Some(false)` clears `completed_at`.
+    pub completed: Option<bool>,
+    pub deploy_prompt: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoardItemEvent {
+    pub id: i64,
+    pub from_status: Option<String>,
+    pub to_status: String,
+    pub actor_kind: String,
+    pub actor_persona_id: Option<i64>,
+    pub at: String,
 }
 
 #[derive(Debug, Clone)]

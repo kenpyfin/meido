@@ -80,7 +80,13 @@ export function SchedulesDialog(props: SchedulesDialogProps) {
             style={borderStyle}
           >
             {view === 'runs' ? (
-              <ScheduleRunsPanel api={api} chatId={chatId} />
+              <ScheduleRunsPanel
+                api={api}
+                chatId={chatId}
+                personas={personas}
+                acknowledgeUnread
+                onAcknowledged={schedules.onUnreadCleared}
+              />
             ) : (
             <>
             <ul className="mb-3 min-h-0 min-w-0 flex-1 list-none space-y-3 overflow-y-auto overflow-x-hidden overscroll-contain pr-1">

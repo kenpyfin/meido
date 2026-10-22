@@ -61,6 +61,7 @@ export function useOpsPoll({
   unreadRuns: number
   blockedItems: number
   invalidateOps: (chatIdOverride?: number | null) => Promise<void>
+  clearUnreadRuns: () => void
 } {
   const queryClient = useQueryClient()
   const lastPersonasRef = useRef<Persona[] | null>(null)
@@ -131,6 +132,14 @@ export function useOpsPoll({
     [chatId, queryClient],
   )
 
+  const clearUnreadRuns = useCallback(() => {
+    if (chatId == null) return
+    queryClient.setQueryData<OpsPollBundle>(['opsPoll', chatId], (current) => {
+      if (!current) return current
+      return { ...current, collab: { ...current.collab, unreadRuns: 0 } }
+    })
+  }, [chatId, queryClient])
+
   return {
     queueLane,
     queueLanesAll,
@@ -141,5 +150,6 @@ export function useOpsPoll({
     unreadRuns: query.data?.collab.unreadRuns ?? 0,
     blockedItems: query.data?.collab.blockedItems ?? 0,
     invalidateOps,
+    clearUnreadRuns,
   }
 }

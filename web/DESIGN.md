@@ -222,7 +222,7 @@ No dramatic drop shadows. A 1px top sheen on lifted panels is enough.
 
 ### `katyusha-header-bar`
 
-Sticky header. Surface-1 at 95%, then a 14px scallop (`.mc-katyusha-lace`) along the bottom edge. The straight rule is gone; the canvas shows in the dips. The persona name is display type. The inbox control carries the service-bell icon.
+Sticky header. Surface-1 at 95%, then a 14px scallop (`.mc-katyusha-lace`) along the bottom edge. The straight rule is gone; the canvas shows in the dips. The persona name is display type. On a desk the bar is one row: persona and session on the left, then three tool clusters separated by hairlines. Live attention is `Cockpit`, `Inbox` (Lucide inbox, same stroke as Copy), and `Schedules` when unread runs exist. Configuration is `Persona` and `Settings`. The `Records` menu holds `Schedules` when idle, `Artifacts`, `Terminal`, `Principles`, `Memory`, and `Last agent run`. On a phone the persona name keeps a reserved width so a long chat name ellipsizes beside it.
 
 ### `apron-message-card`
 
@@ -238,7 +238,7 @@ Pill for a live count. Brass or ribbon fill, espresso numerals. One badge per cl
 
 ### `ledger-dialog`
 
-Settings and Persona. Canvas field, panel header, katyusha scallop under the header, uppercase eyebrow with a brass brooch (`Household ledger`, `Attendant dossier`), display title. A section is a hairline panel with a top sheen. A brass pin-tuck on the leading edge means that section is owed (missing setup or restart). Status rows say Ready, Missing, Restart needed, or No restart owed. Brass repeats an owed word. Muted repeats a settled word.
+Settings and Persona. Canvas field, panel header, katyusha scallop under the header, uppercase eyebrow with a brass brooch (`Household ledger`, `Attendant dossier`), display title. On a desk the body is a 220px index rail and a page. On a phone the index is the list, and a page opens with Back. A brass word on an index row repeats an owed state. A section is a hairline panel with a top sheen. Its header carries a scope tag: Applies live in muted ink, or Requires restart in brass while that section’s draft differs. A brass pin-tuck on the leading edge means that section is owed (missing setup or restart). Long rules sit in a closed Service note. Persona → Engine is a 2×2 grid: name, one-line summary, and Ready or Needs setup, then the active engine’s settings card. Status rows say Ready, Missing, Restart needed, or No restart owed. Brass repeats an owed word. Muted repeats a settled word. A missing row is a jump (`Open Connections`, `Open persona engine`). The footer switches between the household ledger and the attendant dossier.
 
 ### `service-ledger-strip`
 
@@ -258,6 +258,14 @@ Empty thread. Centered crest, display greeting, one line of instruction, then th
 | `sakura` | Sakura Cafe | `#f472b6` | `#140b10` |
 | `matcha` | Matcha Parlor | `#4ade80` | `#07120c` |
 | `royal` | Victorian Parlour | `#7aa2f7` | `#070b14` |
+| `lit` | Lit Parlor | `#e25b78` | `#0c0a10` |
+| `lit-sakura` | Sakura Gaslight | `#f472b6` | `#120a0f` |
+| `lit-matcha` | Matcha Tea Room | `#4ade80` | `#08100c` |
+| `lit-salon` | Velvet Salon | `#7aa2f7` | `#080b12` |
+| `lit-amber` | Amber Hearth | `#f59e42` | `#110c08` |
+| `lit-wisteria` | Wisteria Room | `#b48ef7` | `#0d0914` |
+
+`lit` and the five `lit-*` rooms share one dark parlor structure. The crest sits on the sidebar with a transparent background. The composer field is a dark recessed well (`color-mix` of wool and panel) inside a ribbon-tinted tray. Porcelain (`--mc-porcelain`) is only the schedule run-sheet header. Each room sets its own wool, lamp glow, scallop, ribbon, brass, and warm shadow. The assistant apron is `22px 22px 22px 8px`. Warm shadows stay on the apron, the composer tray, and the desktop run sheet. Light mode keeps the shared linen surfaces and retints `--mc-accent` and `--mc-accent-brass`. Kuro-Meido stays the default.
 
 Older presets (`linear`, `green`, `blue`, and the rest) stay available under "More colors". They change accent and, in dark mode, the surface tint. Lace, apron cards, and display type stay.
 
@@ -283,7 +291,7 @@ Interaction is specified in `docs/design-system.md` (Interaction) and `.cursor/r
 - Don't add a second CTA color.
 - Don't use emoji as icons.
 - Don't load Google Fonts in the embedded UI.
-- Don't put drop shadows on cards (`0 25px 50px` and similar).
+- Don't put drop shadows on cards (`0 25px 50px` and similar), except the apron, composer tray, and desktop run sheet on the dark `lit` family.
 - Don't restyle the agent persona or system prompt from this file. Voice is not a coat of paint.
 - Don't pill-round primary buttons or fill large regions with the ribbon.
 

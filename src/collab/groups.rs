@@ -327,6 +327,7 @@ async fn speak(
             history_override: Some(history),
             tool_iteration_cap: Some(GROUP_TOOL_CAP),
             skip_recall: true,
+            inbound_user_message_id: None,
         },
         None,
         crate::agent::InboundImages::new(),

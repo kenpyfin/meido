@@ -1,5 +1,13 @@
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { ChevronDown } from 'lucide-react'
 import React from 'react'
 import type { InstallationStatus, QueueLane } from '../types'
 import { IconInbox } from './icons'
@@ -106,6 +114,81 @@ export type MobileOpsSheetProps = {
   agentHistoryDisabled?: boolean
   onOpenPersona?: () => void
   onOpenSettings?: () => void
+}
+
+export type RecordsMenuProps = {
+  personaModule: boolean
+  terminalAvailable: boolean
+  schedulesBadgeCount: number
+  agentHistoryDisabled: boolean
+  onOpenSchedules: () => void
+  onOpenPrinciples: () => void
+  onOpenArtifacts: () => void
+  onOpenMemory: () => void
+  onOpenAgentHistory: () => void
+  onOpenTerminal?: () => void
+}
+
+export function RecordsMenu({
+  personaModule,
+  terminalAvailable,
+  schedulesBadgeCount,
+  agentHistoryDisabled,
+  onOpenSchedules,
+  onOpenPrinciples,
+  onOpenArtifacts,
+  onOpenMemory,
+  onOpenAgentHistory,
+  onOpenTerminal,
+}: RecordsMenuProps) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          className="!hidden md:!inline-flex items-center gap-1"
+          aria-label="Open Records menu"
+        >
+          Records
+          <ChevronDown className="size-3.5 shrink-0" aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="mc-records-menu">
+        {schedulesBadgeCount === 0 ? (
+          <DropdownMenuItem onSelect={onOpenSchedules}>
+            Schedules
+          </DropdownMenuItem>
+        ) : null}
+        <DropdownMenuItem onSelect={onOpenArtifacts}>
+          Artifacts
+        </DropdownMenuItem>
+        {terminalAvailable && onOpenTerminal ? (
+          <DropdownMenuItem onSelect={onOpenTerminal}>
+            Terminal
+          </DropdownMenuItem>
+        ) : null}
+        {personaModule ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={onOpenPrinciples}>
+              Principles
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={onOpenMemory}>
+              Memory
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={agentHistoryDisabled}
+              onSelect={onOpenAgentHistory}
+            >
+              Last agent run
+            </DropdownMenuItem>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
 }
 
 export function MobileOpsSheet({

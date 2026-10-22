@@ -3,7 +3,7 @@
 
 # Vault location, first match wins:
 #   1. ORIGIN_VAULT_PATH
-#   2. <MEIDO_WORKSPACE_DIR | WORKSPACE_DIR>/shared/ORIGIN
+#   2. <WORKSPACE_DIR>/shared/ORIGIN
 #   3. relative to this script: <workspace>/skills/vault-sync -> <workspace>/shared/ORIGIN,
 #      or <repo>/builtin_skills/vault-sync -> <repo>/workspace/shared/ORIGIN
 resolve_vault_dir() {
@@ -11,7 +11,7 @@ resolve_vault_dir() {
         echo "$ORIGIN_VAULT_PATH"
         return
     fi
-    local ws="${MEIDO_WORKSPACE_DIR:-${WORKSPACE_DIR:-}}"
+    local ws="${WORKSPACE_DIR:-}"
     if [ -n "$ws" ]; then
         echo "${ws%/}/shared/ORIGIN"
         return

@@ -515,11 +515,23 @@ pub(super) async fn api_setup_action_post(
     Ok(Json(json!({ "ok": true, "message": message })))
 }
 
-pub(super) async fn installation_needs_initialization(state: &WebState) -> bool {
+pub(super) struct InstallationFlags {
+    pub needs_initialization: bool,
+    pub workspace_configured: bool,
+}
+
+pub(super) async fn installation_flags(state: &WebState) -> InstallationFlags {
     let Ok(loaded) = load_env(state).await else {
-        return true;
+        return InstallationFlags {
+            needs_initialization: true,
+            workspace_configured: false,
+        };
     };
     let sync_values = loaded.values;
     let extras = readiness(state, &sync_values).await;
-    dotenv_sync::initializer_status(&sync_values, &extras).needs_initialization
+    let status = dotenv_sync::initializer_status(&sync_values, &extras);
+    InstallationFlags {
+        needs_initialization: status.needs_initialization,
+        workspace_configured: status.workspace_configured,
+    }
 }

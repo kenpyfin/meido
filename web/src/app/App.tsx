@@ -83,6 +83,7 @@ import {
   type ScheduleTask,
   type PersonaTodo,
 } from '../types'
+import type { PersonaLedgerPage, SettingsLedgerPage } from './dialogs/types'
 
 const GroupsWorkspace = lazy(() =>
   import('./workspaces/groups-workspace').then((mod) => ({ default: mod.GroupsWorkspace })),
@@ -99,6 +100,12 @@ type UiTheme =
   | 'sakura'
   | 'matcha'
   | 'royal'
+  | 'lit'
+  | 'lit-sakura'
+  | 'lit-matcha'
+  | 'lit-salon'
+  | 'lit-amber'
+  | 'lit-wisteria'
   | 'linear'
   | 'green'
   | 'blue'
@@ -117,6 +124,12 @@ const UI_THEME_OPTIONS: { key: UiTheme; label: string; color: string; canvas: st
   { key: 'sakura', label: 'Sakura Cafe', color: '#f472b6', canvas: '#140b10' },
   { key: 'matcha', label: 'Matcha Parlor', color: '#4ade80', canvas: '#07120c' },
   { key: 'royal', label: 'Victorian Parlour', color: '#7aa2f7', canvas: '#070b14' },
+  { key: 'lit', label: 'Lit Parlor', color: '#e25b78', canvas: '#0c0a10' },
+  { key: 'lit-sakura', label: 'Sakura Gaslight', color: '#f472b6', canvas: '#120a0f' },
+  { key: 'lit-matcha', label: 'Matcha Tea Room', color: '#4ade80', canvas: '#08100c' },
+  { key: 'lit-salon', label: 'Velvet Salon', color: '#7aa2f7', canvas: '#080b12' },
+  { key: 'lit-amber', label: 'Amber Hearth', color: '#f59e42', canvas: '#110c08' },
+  { key: 'lit-wisteria', label: 'Wisteria Room', color: '#b48ef7', canvas: '#0d0914' },
   { key: 'linear', label: 'Linear', color: '#5e6ad2', canvas: '#010102' },
   { key: 'green', label: 'Green', color: '#34d399', canvas: '#02110d' },
   { key: 'blue', label: 'Blue', color: '#60a5fa', canvas: '#030b14' },
@@ -268,10 +281,15 @@ async function extractAttachmentFromUnknown(
 async function extractLatestUserInput(
   messages: readonly ChatModelRunOptions['messages'][number][],
   opts: ExtractAttachmentOptions,
-): Promise<{ text: string; attachments: SendAttachmentRef[] }> {
+): Promise<{ text: string; attachments: SendAttachmentRef[]; messageId?: string }> {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i]
     if (message.role !== 'user') continue
+
+    const messageId =
+      typeof (message as { id?: unknown }).id === 'string'
+        ? (message as { id: string }).id
+        : undefined
 
     // Runtime may supply string or non-array shapes; library types are array-only for user messages.
     const content = message.content as unknown
@@ -320,7 +338,7 @@ async function extractLatestUserInput(
           `attachments=${attachments.length}`,
         )
       }
-      return { text, attachments }
+      return { text, attachments, messageId }
     }
   }
   return { text: '', attachments: [] }
@@ -517,6 +535,9 @@ export function App({
   } = side
 
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
+  const [rewrittenMessages, setRewrittenMessages] = useState<
+    Record<string, { original: string; rewritten: string }>
+  >({})
   const [threadSurface, setThreadSurface] = useState<ThreadSurface>(() =>
     readThreadSurface(typeof localStorage === 'undefined' ? null : localStorage),
   )
@@ -698,6 +719,7 @@ export function App({
   const [inboxTodos, setInboxTodos] = useState<PersonaTodo[]>([])
   const [inboxLoading, setInboxLoading] = useState(false)
   const [inboxBusyTodoId, setInboxBusyTodoId] = useState<number | null>(null)
+  const [boardFocusTodoId, setBoardFocusTodoId] = useState<number | null>(null)
   const [memoryDialogOpen, setMemoryDialogOpen] = useState<boolean>(false)
   const [artifactsDialogOpen, setArtifactsDialogOpen] = useState<boolean>(false)
   useEffect(() => {
@@ -749,8 +771,12 @@ export function App({
   const [agentsMdError, setAgentsMdError] = useState('')
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false)
   const [settingsError, setSettingsError] = useState('')
+  const [settingsPage, setSettingsPage] = useState<SettingsLedgerPage>('overview')
+  const [settingsReveal, setSettingsReveal] = useState(0)
   const [personaDialogOpen, setPersonaDialogOpen] = useState(false)
   const [personaError, setPersonaError] = useState('')
+  const [personaPage, setPersonaPage] = useState<PersonaLedgerPage>('profile')
+  const [personaReveal, setPersonaReveal] = useState(0)
   const [installationStatus, setInstallationStatus] = useState<InstallationStatus | null>(null)
   const [restartBusy, setRestartBusy] = useState(false)
   const [restartNotice, setRestartNotice] = useState<string | null>(null)
@@ -956,7 +982,7 @@ export function App({
   const handleOpenTopics = useCallback(() => {
     setTopicsSheetOpen(true)
   }, [])
-  const { queueLane, queueLanesAll, otherPersonasPending, backgroundActiveCount, backgroundJobs, queueSampledAt, unreadRuns, blockedItems, invalidateOps } =
+  const { queueLane, queueLanesAll, otherPersonasPending, backgroundActiveCount, backgroundJobs, queueSampledAt, unreadRuns, blockedItems, invalidateOps, clearUnreadRuns } =
     useOpsPoll({
       chatId,
       activePersonaId,
@@ -1137,6 +1163,7 @@ export function App({
       run: async function* (options): AsyncGenerator<ChatModelRunResult, void> {
         let userText = ''
         let attachments: SendAttachmentRef[] = []
+        let localUserMessageId: string | undefined
         try {
           const extracted = await extractLatestUserInput(options.messages, {
             chatId,
@@ -1145,6 +1172,7 @@ export function App({
           })
           userText = extracted.text
           attachments = extracted.attachments
+          localUserMessageId = extracted.messageId
         } catch (e) {
           // Upload failed/stalled/aborted while extracting attachments. Reset the
           // composer state so the app does not stay stuck on "Uploading…".
@@ -1311,12 +1339,48 @@ export function App({
             throw new Error(`stream subscribe failed (HTTP ${sseResp.status})`)
           }
 
+          let storedUserMessageId = ''
+
           try {
             for await (const evt of parseSseEvents(sseResp)) {
               if (options.abortSignal.aborted) break
 
               if (evt.event === 'message_stored') {
+                const obj = parseJsonObject(evt.data)
+                if (typeof obj?.message_id === 'string' && obj.message_id) {
+                  storedUserMessageId = obj.message_id
+                }
                 void invalidateOps(chatIdForRun)
+                continue
+              }
+
+              if (evt.event === 'message_rewritten') {
+                const obj = parseJsonObject(evt.data)
+                const msgId =
+                  typeof obj?.message_id === 'string' && obj.message_id
+                    ? obj.message_id
+                    : storedUserMessageId
+                const original = typeof obj?.original === 'string' ? obj.original : ''
+                const rewritten = typeof obj?.rewritten === 'string' ? obj.rewritten : ''
+                if (rewritten) {
+                  const entry = { original: original || messageText, rewritten }
+                  setRewrittenMessages((prev) => {
+                    const next = { ...prev }
+                    if (msgId) next[msgId] = entry
+                    if (localUserMessageId) next[localUserMessageId] = entry
+                    return next
+                  })
+                  if (msgId) {
+                    chat.setHistorySeed((prev) =>
+                      prev.map((m) =>
+                        m.id === msgId
+                          ? { ...m, content: [{ type: 'text' as const, text: rewritten }] }
+                          : m,
+                      ),
+                    )
+                  }
+                  setStatusText('Message rewritten')
+                }
                 continue
               }
 
@@ -1554,7 +1618,7 @@ export function App({
     try {
       await api(`/api/todos/${todoId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ status: 'done' }),
+        body: JSON.stringify({ completed: true }),
       })
       setInboxTodos((prev) => prev.filter((t) => t.id !== todoId))
     } catch (e) {
@@ -1993,12 +2057,29 @@ export function App({
 
   const handleOpenSettings = useCallback(() => {
     setPersonaDialogOpen(false)
+    setSettingsPage('overview')
+    setSettingsDialogOpen(true)
+  }, [])
+
+  const openSettingsPage = useCallback((page: SettingsLedgerPage) => {
+    setPersonaDialogOpen(false)
+    setSettingsPage(page)
+    setSettingsReveal((n) => n + 1)
     setSettingsDialogOpen(true)
   }, [])
 
   const handleOpenPersona = useCallback(() => {
     setSettingsDialogOpen(false)
     setPersonaError('')
+    setPersonaPage('profile')
+    setPersonaDialogOpen(true)
+  }, [])
+
+  const openPersonaPage = useCallback((page?: PersonaLedgerPage) => {
+    setSettingsDialogOpen(false)
+    setPersonaError('')
+    setPersonaPage(page ?? 'profile')
+    if (page) setPersonaReveal((n) => n + 1)
     setPersonaDialogOpen(true)
   }, [])
 
@@ -2348,8 +2429,8 @@ export function App({
             <div
               className={
                 appearance === 'dark'
-                  ? 'relative flex min-h-0 min-w-0 flex-1 flex-col bg-[linear-gradient(to_bottom,var(--mc-bg-panel),var(--mc-bg-main)_28%)]'
-                  : 'relative flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--mc-bg-main)]'
+                  ? 'mc-work-column relative flex min-h-0 min-w-0 flex-1 flex-col bg-[linear-gradient(to_bottom,var(--mc-bg-panel),var(--mc-bg-main)_28%)]'
+                  : 'mc-work-column relative flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--mc-bg-main)]'
               }
             >
               <div
@@ -2541,6 +2622,7 @@ export function App({
                       onSplitTopic={handleSplitTopic}
                       mentionPersonas={personas}
                       hostPersonaId={activePersonaId}
+                      rewrittenMessages={rewrittenMessages}
                       focusSlot={
                         threadSurface === 'focus' ? (
                           <TopicFocusView
@@ -2658,6 +2740,8 @@ export function App({
                     <CoordinatorWorkspace
                       chatId={chatId}
                       personas={personas}
+                      focusTodoId={boardFocusTodoId}
+                      onFocusTodoHandled={() => setBoardFocusTodoId(null)}
                       onOpenPersona={(personaId, sessionId) => {
                         const persona = personas.find((item) => item.id === personaId)
                         if (persona) {
@@ -2800,7 +2884,14 @@ export function App({
           bindings,
           updateChannelPersonaPolicy,
           reloadInstallationStatus: loadSettings,
+          page: settingsPage,
+          onPageChange: (page) => {
+            setSettingsPage(page)
+            setSettingsReveal((n) => n + 1)
+          },
+          revealPage: settingsReveal,
         }}
+        onConfigurePersona={openPersonaPage}
         persona={{
           open: personaDialogOpen,
           onOpenChange: (open) => {
@@ -2813,6 +2904,18 @@ export function App({
           onCreatePersona: handleCreatePersonaClick,
           onRenamePersona: handleRenamePersona,
           onDeletePersona: handleDeletePersonaClick,
+          page: personaPage,
+          onPageChange: (page) => {
+            setPersonaPage(page)
+            setPersonaReveal((n) => n + 1)
+          },
+          revealPage: personaReveal,
+          onOpenHousehold: handleOpenSettings,
+          onOpenSettingsPage: openSettingsPage,
+          engineMark:
+            installationStatus?.agent_engine === 'cursor' && installationStatus.cursor_engine_ready === false
+              ? 'Missing'
+              : undefined,
         }}
         queue={{
           open: queueDialogOpen,
@@ -2848,6 +2951,7 @@ export function App({
           setNewPersonaId: setNewSchedulePersonaId,
           createSchedule,
           updateSchedule,
+          onUnreadCleared: clearUnreadRuns,
           openDetail: (t) => {
             setScheduleDetailTask(t)
             setScheduleDetailPrompt(t.prompt)
@@ -2869,6 +2973,10 @@ export function App({
           onOpenTarget: (target) => {
             const p = personas.find((x) => x.id === target.personaId)
             if (p) void switchPersona(p.name, { sessionId: target.sessionId })
+          },
+          onOpenTodo: (todoId) => {
+            setBoardFocusTodoId(todoId)
+            setMode('coordinator')
           },
           onCompleteTodo: (todoId) => {
             void completeInboxTodo(todoId)

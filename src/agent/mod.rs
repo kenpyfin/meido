@@ -301,7 +301,12 @@ pub struct AppState {
 
 impl AppState {
     pub fn external_roots_for_persona(&self, persona_id: i64) -> Vec<std::path::PathBuf> {
-        self.persona_external_paths.paths_for(persona_id)
+        let mut paths = self.persona_external_paths.paths_for(persona_id);
+        crate::self_repo::append_auto_approved_app_directory(
+            &self.config.workspace_root_absolute(),
+            &mut paths,
+        );
+        paths
     }
 
     pub fn primary_telegram_bot(&self) -> Option<&Bot> {
@@ -337,6 +342,8 @@ pub struct AgentRequestContext<'a> {
     pub tool_iteration_cap: Option<usize>,
     /// When true, skip recall ingestion. Used by guest and group turns.
     pub skip_recall: bool,
+    /// Stored user row to rewrite before history is loaded. `None` skips the rewrite.
+    pub inbound_user_message_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -388,6 +395,11 @@ pub enum AgentEvent {
         matched_hook_ids: Vec<i64>,
         blocked_reason: Option<String>,
         additional_context_count: usize,
+    },
+    UserMessageRewritten {
+        message_id: String,
+        original: String,
+        rewritten: String,
     },
     FinalResponse {
         text: String,
@@ -454,6 +466,14 @@ pub async fn process_with_agent_with_events(
         })
         .await;
     }
+    crate::user_message_rewrite::apply_before_run(
+        state,
+        &context,
+        override_prompt,
+        event_tx,
+        cancel.clone(),
+    )
+    .await;
     let global_engine = state.runtime_toggles.agent_engine();
     let run_engine = call_blocking(state.db.clone(), move |db| {
         Ok(
@@ -4810,6 +4830,16 @@ Be concise and helpful. When executing commands or tools, show the relevant resu
             section.push_str(&crate::self_repo::self_repo_ban_prompt_section(
                 &std::path::PathBuf::from(workspace_data_root_display),
             ));
+            let workspace_for_approval = std::path::PathBuf::from(workspace_data_root_display);
+            if let Some(app) =
+                crate::self_repo::auto_approved_app_directory(&workspace_for_approval)
+            {
+                section.push_str(&format!(
+                    "\n- **Workspace outside the app:** `{workspace}` is approved for reads and writes by every persona. The app directory `{app}` is approved for every persona as well.\n",
+                    workspace = workspace_for_approval.display(),
+                    app = app.display(),
+                ));
+            }
             section
         },
     );

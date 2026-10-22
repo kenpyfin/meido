@@ -107,6 +107,13 @@ fn default_max_document_size_mb() -> u64 {
 fn default_workspace_dir() -> String {
     "./workspace".into()
 }
+
+/// `WORKSPACE_DIR` is the only workspace key. Drop leftover aliases so a restart
+/// cannot keep a path that `.env` no longer sets.
+fn forget_workspace_alias_env() {
+    std::env::remove_var("MEIDO_WORKSPACE_DIR");
+    std::env::remove_var("FINALLY_A_VALUE_BOT_WORKSPACE_DIR");
+}
 fn default_timezone() -> String {
     "UTC".into()
 }
@@ -963,8 +970,8 @@ impl Config {
     pub fn publish_workspace_paths(&self) {
         let root = self.workspace_root_absolute();
         let root_text = root.to_string_lossy().to_string();
+        forget_workspace_alias_env();
         std::env::set_var("WORKSPACE_DIR", &root_text);
-        std::env::set_var(crate::meido_env::WORKSPACE_DIR.preferred, &root_text);
         let Some(vault) = &self.vault else {
             return;
         };
@@ -1175,6 +1182,7 @@ impl Config {
 
     /// Build Config from current environment (after dotenvy has loaded .env).
     pub fn load_from_env() -> Self {
+        forget_workspace_alias_env();
         let vault = {
             let has_vault = Self::env("VAULT_ORIGIN_VAULT_PATH").is_some()
                 || Self::env("VAULT_VECTOR_DB_PATH").is_some()
@@ -1706,9 +1714,6 @@ impl Config {
             {
                 self.llm_base_url = Some(url.to_string());
             }
-        }
-        if let Some(dir) = crate::meido_env::get(crate::meido_env::WORKSPACE_DIR) {
-            self.workspace_dir = dir;
         }
         if self.workspace_dir.trim().is_empty() {
             self.workspace_dir = default_workspace_dir();
@@ -2330,6 +2335,27 @@ mod tests {
         let mut config: Config = serde_yaml::from_str(yaml).unwrap();
         config.post_deserialize().unwrap();
         assert_eq!(config.workspace_dir, "./workspace");
+    }
+
+    #[test]
+    fn workspace_aliases_do_not_replace_workspace_dir() {
+        let previous_alias = std::env::var("MEIDO_WORKSPACE_DIR").ok();
+        let previous_legacy = std::env::var("FINALLY_A_VALUE_BOT_WORKSPACE_DIR").ok();
+        std::env::set_var("MEIDO_WORKSPACE_DIR", "/tmp/alias-workspace");
+        std::env::set_var("FINALLY_A_VALUE_BOT_WORKSPACE_DIR", "/tmp/legacy-workspace");
+        let yaml = "telegram_bot_token: tok\nbot_username: bot\napi_key: key\nworkspace_dir: /tmp/from-file\n";
+        let mut config: Config = serde_yaml::from_str(yaml).unwrap();
+        let parsed = config.post_deserialize();
+        match previous_alias {
+            Some(value) => std::env::set_var("MEIDO_WORKSPACE_DIR", value),
+            None => std::env::remove_var("MEIDO_WORKSPACE_DIR"),
+        }
+        match previous_legacy {
+            Some(value) => std::env::set_var("FINALLY_A_VALUE_BOT_WORKSPACE_DIR", value),
+            None => std::env::remove_var("FINALLY_A_VALUE_BOT_WORKSPACE_DIR"),
+        }
+        parsed.expect("post_deserialize");
+        assert_eq!(config.workspace_dir, "/tmp/from-file");
     }
 
     #[test]

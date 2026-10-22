@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ModelSelect } from './model-select'
+import { LedgerSection, ServiceNote } from './ledger-chrome'
 import { useCallback, useEffect, useState } from 'react'
 
 type ConnectionRow = {
@@ -233,15 +234,14 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
   const apiKeys = rows.filter((row) => row.kind === 'secret' && row.id !== 'cursor')
   const cursor = rows.find((row) => row.id === 'cursor')
 
+  const cursorDirty = cursor != null && (drafts.cursor ?? '') !== cursorMask(rows)
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <p className="text-sm text-muted-foreground">
-          Connectors this install supports. The installer writes one starting key; the others are set here. A value in{' '}
-          <code className="text-xs">.env</code> is used when it is set. Otherwise a key saved here is used. Saved keys
-          stay on this machine and are not shown again. The Cursor bridge key can be replaced below even when it is
-          already in <code className="text-xs">.env</code>.
-        </p>
+        <ServiceNote summary="Save a provider key here when .env does not already set it. The next call uses that key.">
+          The installer writes one starting key. A value already in .env is the one Meido uses, and a key saved here is not shown again. The Cursor bridge key can still be replaced below. The sidecar reads that key the next time it starts.
+        </ServiceNote>
         <Button
           type="button"
           size="sm"
@@ -254,8 +254,7 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
       </div>
 
       {apiKeys.length > 0 ? (
-        <section className="flex flex-col gap-3">
-          <span className="font-medium">API keys</span>
+        <LedgerSection title="API keys" scope="live" className="flex flex-col gap-3">
           {apiKeys.map((row) => (
             <KeyCard
               key={row.id}
@@ -267,16 +266,14 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
               onClear={() => void clearSaved(row)}
             />
           ))}
-        </section>
+        </LedgerSection>
       ) : null}
 
       {cursor ? (
-        <section className="flex flex-col gap-3">
-          <span className="font-medium">Bridge agent</span>
-          <span className="text-xs text-muted-foreground">
-            Cursor runs as the bridge agent. A key already in .env is shown masked. Replace it and save to override
-            that value. The sidecar uses the new key the next time it starts.
-          </span>
+        <LedgerSection title="Bridge agent" scope="restart" dirty={cursorDirty} className="flex flex-col gap-3">
+          <ServiceNote summary="Replace the Cursor bridge key here. The sidecar uses it the next time it starts.">
+            A key already in .env is shown masked. Saving writes over that value. Meido itself keeps running; only the bridge sidecar needs to start again.
+          </ServiceNote>
           <KeyCard
             row={cursor}
             draft={drafts.cursor ?? ''}
@@ -286,14 +283,13 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
             onSave={() => void saveSecret(cursor)}
             onClear={() => void clearSaved(cursor)}
           />
-        </section>
+        </LedgerSection>
       ) : null}
 
-      <section className="flex flex-col gap-2 rounded-md border p-3" style={{ borderColor: 'var(--gray-6)' }}>
-        <span className="font-medium">Local model server</span>
-        <span className="text-xs text-muted-foreground">
-          OpenAI-compatible server. System LLM uses this URL when its provider is local. Cost routing stores its own URL on the Persona page.
-        </span>
+      <LedgerSection title="Local model server" scope="live" className="flex flex-col gap-2">
+        <ServiceNote summary="Save the shared local server. System LLM uses it on the next local call.">
+          The server must speak the OpenAI API. Cost routing keeps a separate URL on the Persona page.
+        </ServiceNote>
         <Input
           value={localUrl}
           placeholder="http://127.0.0.1:8080/v1"
@@ -335,7 +331,7 @@ export function SettingsConnectionsPanel({ api, onError }: Props) {
             {testNotice}
           </span>
         ) : null}
-      </section>
+      </LedgerSection>
 
       {notice ? (
         <p className="text-xs text-muted-foreground" role="status">
@@ -364,7 +360,7 @@ function KeyCard({
   onClear: () => void
 }) {
   return (
-    <div className="flex flex-col gap-2 rounded-md border p-3" style={{ borderColor: 'var(--gray-6)' }}>
+    <div className="flex flex-col gap-2 rounded-md border p-3" style={{ borderColor: 'var(--mc-border-soft)' }}>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <span className="font-medium">{row.label}</span>
         <span className="text-xs text-muted-foreground">{sourceLabel(row.source)}</span>

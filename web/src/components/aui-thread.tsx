@@ -32,12 +32,11 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CircleXIcon,
-  CopyIcon,
   FileIcon,
   PaperclipIcon,
   SquareIcon,
 } from 'lucide-react'
-import { IconSendBow } from './icons'
+import { IconCopy, IconSendBow } from './icons'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -219,7 +218,7 @@ function CodeHeader({ language, code }: { language?: string; code?: string }) {
     <div className="aui-code-header-root">
       <span className="aui-code-header-language">{language}</span>
       <TooltipIconButton tooltip={tooltip} onClick={onCopy} type="button">
-        {!copied ? <CopyIcon /> : <CheckIcon />}
+        {!copied ? <IconCopy /> : <CheckIcon className="size-4 shrink-0" />}
       </TooltipIconButton>
     </div>
   )

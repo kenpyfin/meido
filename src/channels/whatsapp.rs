@@ -528,6 +528,7 @@ async fn process_webhook(state: &WhatsAppState, payload: WebhookPayload) -> anyh
                     origin: crate::db::message_origin_interactive(),
                     speaker_persona_id: None,
                 };
+                let inbound_user_message_id = stored.id.clone();
                 let _ = call_blocking(state.app_state.db.clone(), move |db| {
                     db.store_message(&stored)
                 })
@@ -597,6 +598,7 @@ async fn process_webhook(state: &WhatsAppState, payload: WebhookPayload) -> anyh
                                 history_override: None,
                                 tool_iteration_cap: None,
                                 skip_recall: false,
+                                inbound_user_message_id: Some(inbound_user_message_id),
                             },
                             None,
                             images,

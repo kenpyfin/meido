@@ -104,7 +104,7 @@ const MAIN_CHAT_MESSAGE_VISIBILITY: &str = "(
     )
 )";
 
-const PERSONA_SELECT_COLS: &str = "id, chat_id, name, model_override, recent_history_min_user, recent_history_min_assistant, operator_memo, dense_delivery_enabled, dense_delivery_messaging_max_chars, dense_delivery_web_max_chars, dense_delivery_summary_chars, agent_engine_override, gemini_adk_topology, cursor_sdk_model, cursor_sdk_model_params, llm_provider_override, llm_base_url_override, local_delegate_base_url, local_delegate_model, local_delegate_tools_ok";
+const PERSONA_SELECT_COLS: &str = "id, chat_id, name, model_override, recent_history_min_user, recent_history_min_assistant, operator_memo, dense_delivery_enabled, dense_delivery_messaging_max_chars, dense_delivery_web_max_chars, dense_delivery_summary_chars, agent_engine_override, gemini_adk_topology, cursor_sdk_model, cursor_sdk_model_params, llm_provider_override, llm_base_url_override, local_delegate_base_url, local_delegate_model, local_delegate_tools_ok, user_message_rewrite_enabled";
 
 fn persona_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Persona> {
     Ok(Persona {
@@ -128,6 +128,7 @@ fn persona_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Persona> {
         local_delegate_base_url: row.get(17)?,
         local_delegate_model: row.get(18)?,
         local_delegate_tools_ok: row.get::<_, Option<i64>>(19)?.map(|value| value != 0),
+        user_message_rewrite_enabled: row.get::<_, i64>(20)? != 0,
     })
 }
 
@@ -212,6 +213,8 @@ pub struct Persona {
     pub local_delegate_model: Option<String>,
     /// Cost-routing tool-call check. `None` or false stops a cost-routing turn.
     pub local_delegate_tools_ok: Option<bool>,
+    /// When true, the system LLM rewrites the inbound user message before the persona sees it.
+    pub user_message_rewrite_enabled: bool,
 }
 
 /// Maximum `operator_memo` length (characters) for storage and prompt injection.
@@ -795,9 +798,14 @@ pub struct PersonaTodo {
     pub position: f64,
     pub source_kind: String,
     pub source_ref: Option<String>,
+    pub auto_advance: i64,
+    pub stage_run_id: Option<String>,
+    pub stage_outcome: Option<String>,
+    /// Operator instruction sent on Deploy. Stage output stays in `description`.
+    pub deploy_prompt: Option<String>,
 }
 
-pub(crate) const PERSONA_TODO_COLS: &str = "id, chat_id, persona_id, title, status, source_hint, created_at, updated_at, completed_at, description, owner_persona_id, priority, due_at, blocked_reason, position, source_kind, source_ref";
+pub(crate) const PERSONA_TODO_COLS: &str = "id, chat_id, persona_id, title, status, source_hint, created_at, updated_at, completed_at, description, owner_persona_id, priority, due_at, blocked_reason, position, source_kind, source_ref, auto_advance, stage_run_id, stage_outcome, deploy_prompt";
 
 pub(crate) fn map_persona_todo(row: &rusqlite::Row<'_>) -> rusqlite::Result<PersonaTodo> {
     Ok(PersonaTodo {
@@ -821,18 +829,45 @@ pub(crate) fn map_persona_todo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Pers
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "manual".into()),
         source_ref: row.get(16)?,
+        auto_advance: row.get(17).unwrap_or(0),
+        stage_run_id: row.get(18)?,
+        stage_outcome: row.get(19)?,
+        deploy_prompt: row.get(20)?,
     })
 }
 
-pub(crate) fn normalize_board_status(status: &str) -> Result<&str, FinallyAValueBotError> {
-    match status.trim() {
+pub(crate) fn normalize_board_status(status: &str) -> Result<&'static str, FinallyAValueBotError> {
+    let normalized = status.trim().to_ascii_lowercase();
+    match normalized.as_str() {
         "open" | "todo" => Ok("todo"),
-        "doing" => Ok("doing"),
-        "blocked" => Ok("blocked"),
-        "done" => Ok("done"),
-        other => Err(FinallyAValueBotError::ToolExecution(format!(
-            "Todo status must be open, todo, doing, blocked, or done (got '{other}')"
+        "plan" | "design" => Ok("plan"),
+        "doing" | "implement" | "blocked" | "build" => Ok("build"),
+        "test" | "deploy" | "done" | "verify" => Ok("verify"),
+        _ => Err(FinallyAValueBotError::ToolExecution(format!(
+            "Todo status must be todo, plan, build, or verify (got '{normalized}')"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod board_status_tests {
+    use super::normalize_board_status;
+
+    #[test]
+    fn maps_legacy_columns_onto_four_stages() {
+        assert_eq!(normalize_board_status("open").unwrap(), "todo");
+        assert_eq!(normalize_board_status("todo").unwrap(), "todo");
+        assert_eq!(normalize_board_status("design").unwrap(), "plan");
+        assert_eq!(normalize_board_status("plan").unwrap(), "plan");
+        assert_eq!(normalize_board_status("doing").unwrap(), "build");
+        assert_eq!(normalize_board_status("implement").unwrap(), "build");
+        assert_eq!(normalize_board_status("blocked").unwrap(), "build");
+        assert_eq!(normalize_board_status("build").unwrap(), "build");
+        assert_eq!(normalize_board_status("test").unwrap(), "verify");
+        assert_eq!(normalize_board_status("deploy").unwrap(), "verify");
+        assert_eq!(normalize_board_status("done").unwrap(), "verify");
+        assert_eq!(normalize_board_status("verify").unwrap(), "verify");
+        assert!(normalize_board_status("shipped").is_err());
     }
 }
 
@@ -1204,6 +1239,7 @@ impl Database {
         Self::migrate_background_jobs_session_schema(&conn)?;
         Self::migrate_personas_prompt_context(&conn)?;
         Self::migrate_personas_dense_delivery_and_engine(&conn)?;
+        Self::migrate_persona_user_message_rewrite(&conn)?;
         Self::migrate_gemini_adk_and_retire_deterministic(&conn)?;
         Self::migrate_persona_explicit_engine_and_cursor_model(&conn)?;
         Self::migrate_persona_llm_selection(&conn)?;
@@ -1990,6 +2026,18 @@ impl Database {
             // One-time seed for selling_oversea (persona 28 / operator inbox).
             conn.execute(
                 "UPDATE personas SET dense_delivery_enabled = 1 WHERE id = 28 AND chat_id = 997894126",
+                [],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn migrate_persona_user_message_rewrite(
+        conn: &Connection,
+    ) -> Result<(), FinallyAValueBotError> {
+        if !Self::column_exists(conn, "personas", "user_message_rewrite_enabled")? {
+            conn.execute(
+                "ALTER TABLE personas ADD COLUMN user_message_rewrite_enabled INTEGER NOT NULL DEFAULT 0",
                 [],
             )?;
         }
@@ -6682,8 +6730,9 @@ impl Database {
                 "SELECT {PERSONA_TODO_COLS}
                  FROM persona_todos
                  WHERE chat_id = ?1 AND persona_id = ?2 AND (
-                   (?3 = 'open' AND status IN ('open','todo','doing','blocked'))
-                   OR (?3 <> 'open' AND status = ?3)
+                   (?3 = 'open' AND completed_at IS NULL)
+                   OR (?3 = 'done' AND completed_at IS NOT NULL)
+                   OR (?3 NOT IN ('open', 'done') AND status = ?3)
                  )
                  ORDER BY updated_at DESC
                  LIMIT ?4"
@@ -6701,7 +6750,7 @@ impl Database {
                  FROM persona_todos
                  WHERE chat_id = ?1 AND persona_id = ?2
                  ORDER BY
-                   CASE WHEN status IN ('open','todo','doing','blocked') THEN 0 ELSE 1 END,
+                   CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END,
                    position ASC,
                    updated_at DESC
                  LIMIT ?3"
@@ -6728,8 +6777,9 @@ impl Database {
                 "SELECT {PERSONA_TODO_COLS}
                  FROM persona_todos
                  WHERE chat_id = ?1 AND (
-                   (?2 = 'open' AND status IN ('open','todo','doing','blocked'))
-                   OR (?2 <> 'open' AND status = ?2)
+                   (?2 = 'open' AND completed_at IS NULL)
+                   OR (?2 = 'done' AND completed_at IS NOT NULL)
+                   OR (?2 NOT IN ('open', 'done') AND status = ?2)
                  )
                  ORDER BY position ASC, updated_at DESC
                  LIMIT ?3"
@@ -6744,7 +6794,7 @@ impl Database {
                  FROM persona_todos
                  WHERE chat_id = ?1
                  ORDER BY
-                   CASE WHEN status IN ('open','todo','doing','blocked') THEN 0 ELSE 1 END,
+                   CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END,
                    position ASC,
                    updated_at DESC
                  LIMIT ?2"
@@ -6779,37 +6829,43 @@ impl Database {
         todo_id: i64,
         status: &str,
     ) -> Result<Option<PersonaTodo>, FinallyAValueBotError> {
+        let mark_complete = status.trim().eq_ignore_ascii_case("done");
         let status = normalize_board_status(status)?;
         let conn = self.conn.lock().unwrap();
-        let previous: Option<String> = conn
+        let current: Option<(String, Option<String>)> = conn
             .query_row(
-                "SELECT status FROM persona_todos WHERE id = ?1",
+                "SELECT status, stage_outcome FROM persona_todos WHERE id = ?1",
                 params![todo_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .ok();
+        let Some((previous, stage_outcome)) = current else {
+            return Ok(None);
+        };
+        if stage_outcome.as_deref() == Some("running") && !mark_complete {
+            return Err(FinallyAValueBotError::ToolExecution(
+                "status change ignored while a stage is running".into(),
+            ));
+        }
         let now = chrono::Utc::now().to_rfc3339();
-        let completed_at: Option<String> = if status == "done" {
+        let completed_at: Option<String> = if mark_complete {
             Some(now.clone())
         } else {
             None
         };
         let rows = conn.execute(
             "UPDATE persona_todos
-             SET status = ?1, updated_at = ?2, completed_at = ?3
+             SET status = ?1, updated_at = ?2, completed_at = ?3,
+                 stage_run_id = NULL, stage_outcome = NULL
              WHERE id = ?4",
             params![status, now, completed_at, todo_id],
         )?;
-        if rows > 0 {
-            if let Some(from) = previous.as_deref() {
-                if from != status {
-                    conn.execute(
-                        "INSERT INTO board_item_events (chat_id, item_id, from_status, to_status, actor_kind, actor_persona_id, at)
-                         SELECT chat_id, id, ?1, ?2, 'persona', persona_id, ?3 FROM persona_todos WHERE id = ?4",
-                        params![from, status, now, todo_id],
-                    )?;
-                }
-            }
+        if rows > 0 && previous != status {
+            conn.execute(
+                "INSERT INTO board_item_events (chat_id, item_id, from_status, to_status, actor_kind, actor_persona_id, at)
+                 SELECT chat_id, id, ?1, ?2, 'persona', persona_id, ?3 FROM persona_todos WHERE id = ?4",
+                params![previous, status, now, todo_id],
+            )?;
         }
         if rows == 0 {
             return Ok(None);
@@ -8645,6 +8701,20 @@ impl Database {
                 persona_id,
                 chat_id
             ],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn set_persona_user_message_rewrite(
+        &self,
+        chat_id: i64,
+        persona_id: i64,
+        enabled: bool,
+    ) -> Result<bool, FinallyAValueBotError> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute(
+            "UPDATE personas SET user_message_rewrite_enabled = ?1 WHERE id = ?2 AND chat_id = ?3",
+            params![if enabled { 1 } else { 0 }, persona_id, chat_id],
         )?;
         Ok(rows > 0)
     }

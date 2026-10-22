@@ -1,10 +1,10 @@
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogClose, DialogContent } from '@/components/ui/dialog'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useIsMobile } from '@/lib/use-is-mobile'
 import React from 'react'
-import { LedgerDialogHeader, LedgerSection } from '../../components/ledger-chrome'
+import { LedgerBook, LedgerDialogHeader, LedgerJump, LedgerSection, ServiceNote, type LedgerIndexEntry } from '../../components/ledger-chrome'
 import { SettingsPanelSkeleton } from '../../components/skeleton'
-import type { PersonaDialogProps } from './types'
+import type { PersonaDialogProps, PersonaLedgerPage } from './types'
 
 const SettingsAgentEnginePanel = React.lazy(() =>
   import('../../components/settings-agent-engine').then((m) => ({ default: m.SettingsAgentEnginePanel })),
@@ -111,12 +111,11 @@ function VaultedSecretsPanel({
   const legacyItems = activePersonaId == null ? [] : items.filter((item) => item.legacy === true)
 
   return (
-    <LedgerSection title="Vaulted secrets" className="mb-4">
-      <p className="mt-1 text-xs text-muted-foreground">
-        Names stored for this persona after the agent calls vault_secret. Values stay in the
-        runtime secrets file and are not shown here. Older secrets saved before persona tagging
-        appear under Shared (legacy).
-      </p>
+    <LedgerSection title="Vaulted secrets" scope="live" className="mb-4">
+      <ServiceNote summary="Forget removes a name stored for this persona. The value is not shown.">
+        The agent stores the name when it calls vault_secret. The value stays in the runtime secrets
+        file. Names saved before persona tagging are listed under Shared (legacy).
+      </ServiceNote>
       {error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}
       {personaItems.length === 0 && legacyItems.length === 0 ? (
         <p className="mt-2 text-sm text-muted-foreground">No vaulted secrets for this persona.</p>
@@ -139,15 +138,31 @@ function VaultedSecretsPanel({
   )
 }
 
+const PAGE_LABELS: Record<PersonaLedgerPage, string> = {
+  profile: 'Profile',
+  engine: 'Engine',
+  hooks: 'Hooks',
+  skills: 'Skills',
+}
+
+function indexEntries(engineMark: 'Missing' | undefined): LedgerIndexEntry[] {
+  return (Object.keys(PAGE_LABELS) as PersonaLedgerPage[]).map((id) => {
+    if (id === 'engine' && engineMark) return { id, label: PAGE_LABELS[id], state: engineMark }
+    return { id, label: PAGE_LABELS[id] }
+  })
+}
+
 export function PersonaDialog({ api, activePersonaId, personas, persona }: PersonaDialogProps) {
   const personaName = personas.find((item) => item.id === activePersonaId)?.name ?? null
   const onCreatePersona = persona.onCreatePersona
   const onRenamePersona = persona.onRenamePersona
   const onDeletePersona = persona.onDeletePersona
+  const mobile = useIsMobile()
+  const page = persona.page
 
   return (
     <Dialog open={persona.open} onOpenChange={persona.onOpenChange}>
-      <DialogContent className="mc-ledger-dialog max-w-[920px]">
+      <DialogContent className="mc-ledger-dialog max-w-[1040px]">
         <LedgerDialogHeader
           eyebrow="Attendant dossier"
           title={personaName ?? 'Persona'}
@@ -159,15 +174,18 @@ export function PersonaDialog({ api, activePersonaId, personas, persona }: Perso
             {persona.error}
           </div>
         ) : null}
-        <Tabs defaultValue="profile">
-          <TabsList className="mc-settings-tabs-sticky mb-3 h-auto flex-wrap">
-            <TabsTrigger value="profile">Profile</TabsTrigger>
-            <TabsTrigger value="engine">Engine</TabsTrigger>
-            <TabsTrigger value="hooks">Hooks</TabsTrigger>
-            <TabsTrigger value="skills">Skills</TabsTrigger>
-          </TabsList>
+        <LedgerBook
+          label="Attendant index"
+          entries={indexEntries(persona.engineMark)}
+          page={page}
+          onPageChange={(id) => persona.onPageChange(id as PersonaLedgerPage)}
+          revealPage={persona.revealPage}
+          open={persona.open}
+          mobile={mobile}
+        >
           <React.Suspense fallback={<SettingsPanelSkeleton />}>
-            <TabsContent value="profile">
+            {page === 'profile' ? (
+              <>
               {onCreatePersona && onRenamePersona && onDeletePersona ? (
                 <div className="mb-3">
                   <SettingsPersonaPanel
@@ -180,33 +198,40 @@ export function PersonaDialog({ api, activePersonaId, personas, persona }: Perso
                 </div>
               ) : null}
               <VaultedSecretsPanel api={api} open={persona.open} activePersonaId={activePersonaId} />
-            </TabsContent>
-            <TabsContent value="engine">
+              </>
+            ) : null}
+            {page === 'engine' ? (
               <SettingsAgentEnginePanel
                 api={api}
                 onError={persona.setError}
                 activePersonaId={activePersonaId}
                 personas={personas}
                 onPersonaBulletinChanged={persona.onPersonaBulletinChanged}
+                onOpenConnections={
+                  persona.onOpenSettingsPage ? () => persona.onOpenSettingsPage?.('connections') : undefined
+                }
               />
-            </TabsContent>
-            <TabsContent value="hooks">
+            ) : null}
+            {page === 'hooks' ? (
               <SettingsHooksPanel
                 api={api}
                 onError={persona.setError}
                 activePersonaId={activePersonaId}
               />
-            </TabsContent>
-            <TabsContent value="skills">
+            ) : null}
+            {page === 'skills' ? (
               <SettingsSkillsPanel
                 api={api}
                 onError={persona.setError}
                 activePersonaId={activePersonaId}
               />
-            </TabsContent>
+            ) : null}
           </React.Suspense>
-        </Tabs>
-        <div className="flex justify-end mt-4">
+        </LedgerBook>
+        <div className="mc-ledger-footer">
+          {persona.onOpenHousehold ? (
+            <LedgerJump onClick={persona.onOpenHousehold}>Open household settings</LedgerJump>
+          ) : <span />}
           <DialogClose>
             <Button variant="secondary">Close</Button>
           </DialogClose>

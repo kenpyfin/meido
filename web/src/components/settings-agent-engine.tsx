@@ -4,7 +4,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { Input } from '@/components/ui/input'
 import { ConfirmDialog } from './confirm-dialog'
 import { asEngineId, engineLabel, ENGINE_OPTIONS, type EngineId } from '../lib/agent-engine'
-import { LedgerSection, LedgerStatusRow } from './ledger-chrome'
+import { LedgerJump, LedgerSection, LedgerStatusRow, ServiceNote } from './ledger-chrome'
 import { SettingsPanelSkeleton } from './skeleton'
 import { LocalModelFields } from './llm-model-fields'
 import { SettingsLlmPanel } from './settings-llm'
@@ -71,12 +71,36 @@ async function missingModelNotice(
   return null
 }
 
+async function engineCardLabel(
+  api: Api,
+  personaId: number | null,
+  engine: EngineId,
+): Promise<'Ready' | 'Needs setup'> {
+  if (personaId == null) return 'Needs setup'
+  try {
+    const gap = await missingModelNotice(api, personaId, engine)
+    if (gap) return 'Needs setup'
+    if (engine === 'cursor') {
+      const cursor = await api<CursorEngineConfigResponse>(`/api/cursor-engine?persona_id=${personaId}`)
+      if (!cursor.engine_ready) return 'Needs setup'
+    }
+    if (engine === 'gemini_adk') {
+      const gemini = await api<GeminiAdkConfigResponse>('/api/gemini-adk')
+      if (!gemini.engine_ready) return 'Needs setup'
+    }
+    return 'Ready'
+  } catch {
+    return 'Needs setup'
+  }
+}
+
 type Props = {
   api: <T>(path: string, init?: RequestInit) => Promise<T>
   onError: (message: string) => void
   activePersonaId: number | null
   personas: Persona[]
   onPersonaBulletinChanged?: () => void | Promise<void>
+  onOpenConnections?: () => void
 }
 
 class ConfigPanelErrorBoundary extends Component<{ children: ReactNode }, { message: string | null }> {
@@ -105,6 +129,7 @@ export function SettingsAgentEnginePanel({
   activePersonaId,
   personas,
   onPersonaBulletinChanged,
+  onOpenConnections,
 }: Props) {
   const [runtime, setRuntime] = useState<RuntimeConfigResponse | null>(null)
   const [cursorStatus, setCursorStatus] = useState<CursorEngineConfigResponse | null>(null)
@@ -114,6 +139,7 @@ export function SettingsAgentEnginePanel({
   const [savingKey, setSavingKey] = useState<string | null>(null)
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
   const [modelGap, setModelGap] = useState<string | null>(null)
+  const [cards, setCards] = useState<Partial<Record<EngineId, 'Ready' | 'Needs setup'>>>({})
   const loadOnceRef = useRef(false)
 
   const activePersona = personas.find((p) => p.id === activePersonaId) ?? null
@@ -191,6 +217,10 @@ export function SettingsAgentEnginePanel({
         } catch {
           setModelGap(null)
         }
+        const labels = await Promise.all(
+          ENGINE_OPTIONS.map(async (opt) => [opt.id, await engineCardLabel(api, activePersonaId, opt.id)] as const),
+        )
+        setCards(Object.fromEntries(labels))
       } catch (e) {
         onError(e instanceof Error ? e.message : String(e))
         if (!opts?.silent) {
@@ -251,16 +281,33 @@ export function SettingsAgentEnginePanel({
   const geminiMissing = selectedEngine === 'gemini_adk' && geminiStatus != null && !geminiStatus.engine_ready
   const engineMissing = cursorMissing || geminiMissing
   const engineOwed = activePersonaId == null || engineMissing || modelGap != null
-  const engineDetail = cursorMissing
+  const cursorDetail = cursorMissing
     ? `${cursorStatus?.sidecar_reachable ? 'Sidecar up' : 'Sidecar down'}, API key ${cursorStatus?.api_key_configured ? 'set' : 'missing'}, health ${cursorStatus?.sdk_runner_ok ? 'verified' : 'not verified'}. Finish setup in the Cursor panel below.`
-    : geminiMissing
-      ? `API key ${geminiStatus?.api_key_configured ? 'set' : 'missing'}. Add the Gemini key under Settings → Connections, then finish setup in the Gemini ADK panel below.`
-      : undefined
+    : undefined
+  const geminiDetail = geminiMissing ? (
+    <>
+      {`API key ${geminiStatus?.api_key_configured ? 'set' : 'missing'}. `}
+      {onOpenConnections ? (
+        <LedgerJump onClick={onOpenConnections}>Open Connections</LedgerJump>
+      ) : (
+        'Add the Gemini key under Settings → Connections'
+      )}
+      {'. Then finish setup in the Gemini ADK panel below.'}
+    </>
+  ) : undefined
 
   const refreshModelGap = useCallback(() => {
-    void missingModelNotice(api, activePersonaId, selectedEngine)
-      .then(setModelGap)
-      .catch(() => setModelGap(null))
+    void (async () => {
+      try {
+        setModelGap(await missingModelNotice(api, activePersonaId, selectedEngine))
+      } catch {
+        setModelGap(null)
+      }
+      const labels = await Promise.all(
+        ENGINE_OPTIONS.map(async (opt) => [opt.id, await engineCardLabel(api, activePersonaId, opt.id)] as const),
+      )
+      setCards(Object.fromEntries(labels))
+    })()
   }, [activePersonaId, api, selectedEngine])
 
   if (loading) {
@@ -277,7 +324,7 @@ export function SettingsAgentEnginePanel({
         onPersonaBulletinChanged={onPersonaBulletinChanged}
       />
 
-      <LedgerSection title="Agent engine" owed={engineOwed} className="flex flex-col gap-2">
+      <LedgerSection title="Agent engine" owed={engineOwed} scope="live" className="flex flex-col gap-2">
         <div className="mc-ledger-rows">
           {activePersonaId == null ? (
             <LedgerStatusRow
@@ -289,40 +336,45 @@ export function SettingsAgentEnginePanel({
             <LedgerStatusRow
               label="Engine"
               state={engineMissing ? 'Missing' : 'Ready'}
-              detail={engineDetail}
+              detail={cursorMissing ? cursorDetail : geminiDetail}
             />
           )}
           {modelGap ? <LedgerStatusRow label="Model" state="Missing" detail={modelGap} /> : null}
         </div>
         {activePersonaId == null ? (
-          <span>
-            Select a persona in the sidebar to set its engine. Choosing an engine saves it and shows
-            its settings below.
-          </span>
+          <ServiceNote summary="Select a persona in the sidebar to set its engine.">
+            Choosing an engine saves it and shows its settings on the card below.
+          </ServiceNote>
         ) : (
-          <span>
-            Engine for <span className="font-medium">{personaName}</span>. Click to save —
-            settings for that engine appear below. A new persona starts on the engine chosen in
-            the create dialog, and the conversation window can change it later.
-          </span>
+          <ServiceNote summary={`Choose an engine for ${personaName}. The choice saves immediately, and the next turn uses it.`}>
+            A new persona starts on the engine chosen in the create dialog. The conversation window can change it later. Settings for the chosen engine are on the card below.
+          </ServiceNote>
         )}
-        <div className="flex gap-2 flex-wrap">
-          {ENGINE_OPTIONS.map((opt) => (
-            <button
-              key={opt.id}
-              type="button"
-              disabled={busy || activePersonaId == null}
-              className={
-                selectedEngine === opt.id
-                  ? 'mc-engine-option mc-engine-option--active'
-                  : 'mc-engine-option'
-              }
-              title={opt.subtitle}
-              onClick={() => void patchPersonaEngine(opt.id)}
-            >
-              {opt.label}
-            </button>
-          ))}
+        <div className="mc-engine-grid">
+          {ENGINE_OPTIONS.map((opt) => {
+            const label = cards[opt.id] ?? 'Needs setup'
+            const ready = label === 'Ready'
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                disabled={busy || activePersonaId == null}
+                aria-pressed={selectedEngine === opt.id}
+                className={
+                  selectedEngine === opt.id
+                    ? 'mc-engine-option mc-engine-option--active'
+                    : 'mc-engine-option'
+                }
+                onClick={() => void patchPersonaEngine(opt.id)}
+              >
+                <span className="mc-engine-option-name">{opt.label}</span>
+                <span className="mc-engine-option-summary">{opt.subtitle}</span>
+                <span className={ready ? 'mc-ledger-state mc-ledger-state--settled' : 'mc-ledger-state mc-ledger-state--owed'}>
+                  {label}
+                </span>
+              </button>
+            )
+          })}
         </div>
 
         {saveNotice ? (
@@ -331,6 +383,8 @@ export function SettingsAgentEnginePanel({
 
       </LedgerSection>
 
+      <div className="mc-engine-config">
+        <h3 className="mc-ledger-section-title">{engineLabel(selectedEngine)}</h3>
       <ConfigPanelErrorBoundary key={selectedEngine}>
         {selectedEngine === 'classic' ? (
           <div className="flex flex-col gap-3">
@@ -383,6 +437,7 @@ export function SettingsAgentEnginePanel({
           />
         ) : null}
       </ConfigPanelErrorBoundary>
+      </div>
     </div>
   )
 }
@@ -479,7 +534,7 @@ function PersonaLocalDelegate({
 
   const ready = baseUrl.trim().length > 0 && model.trim().length > 0 && toolsOk
   return (
-    <LedgerSection title="Local delegate" owed={!ready} className="flex flex-col gap-2">
+    <LedgerSection title="Local delegate" owed={!ready} scope="live" className="flex flex-col gap-2">
       <div className="mc-ledger-rows">
         <LedgerStatusRow
           label="Delegate"

@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 
-const NARROW_SCREEN = '(max-width: 1024px)'
+const NARROW_SCREEN = '(max-width: 767px)'
 
 /**
  * Publish the visible viewport size so the app shell can shrink with the
@@ -16,6 +16,11 @@ export function useVisualViewportFrame(): void {
       if (!narrow.matches || viewport == null) {
         root.style.removeProperty('--mc-visual-viewport-height')
         root.style.removeProperty('--mc-vv-offset-top')
+        // iPad and other non-phone widths keep the desktop shell. A leftover
+        // window scroll from the phone pin would otherwise open the page at the bottom.
+        if (window.scrollX !== 0 || window.scrollY !== 0) {
+          window.scrollTo(0, 0)
+        }
         return
       }
       root.style.setProperty('--mc-visual-viewport-height', `${viewport.height}px`)

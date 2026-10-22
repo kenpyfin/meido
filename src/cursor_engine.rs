@@ -1794,6 +1794,7 @@ mod tests {
             history_override: None,
             tool_iteration_cap: None,
             skip_recall: false,
+            inbound_user_message_id: None,
         };
         assert_eq!(
             cursor_session_scope(&ctx),

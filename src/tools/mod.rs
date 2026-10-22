@@ -691,6 +691,13 @@ pub fn assert_persona_tool_path_allowed_with_memory(
         );
     }
 
+    // A data workspace that does not overlap the app checkout is editable by every persona.
+    if crate::self_repo::workspace_disjoint_from_app(workspace_root)
+        && crate::self_repo::is_under_workspace_data(workspace_root, resolved_path)
+    {
+        return Ok(());
+    }
+
     let registry =
         locate::build_registry_with_origin(workspace_root, Some(auth), memory, origin_vault);
     let mut allowed_labels: Vec<String> = locate::directory_roots(&registry)
@@ -933,6 +940,7 @@ impl ToolRegistry {
             Box::new(collab_tools::ListPersonaActivityTool::new(db.clone())),
             Box::new(collab_tools::ListScheduledRunsTool::new(db.clone())),
             Box::new(collab_tools::ProposeBoardChangeTool::new(db.clone())),
+            Box::new(collab_tools::FinishPipelineStageTool::new(db.clone())),
             Box::new(
                 search_history::SearchHistoryTool::new(db.clone()).with_recall(recall.clone()),
             ),
@@ -1686,11 +1694,77 @@ mod tests {
             assert_persona_tool_path_allowed(&root, &missing, Some(&auth), false).is_ok(),
             "missing in-scope path should be allowed (not-found is for read_file)"
         );
-        let outside = root.join("elsewhere").join("x.md");
-        std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+        let outside = std::env::temp_dir().join(format!(
+            "meido_missing_scope_outside_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&outside).unwrap();
+        let outside_file = outside.join("x.md");
+        std::fs::write(&outside_file, "x").unwrap();
         let err =
-            assert_persona_tool_path_allowed(&root, &outside, Some(&auth), false).unwrap_err();
+            assert_persona_tool_path_allowed(&root, &outside_file, Some(&auth), false).unwrap_err();
         assert!(err.contains("Permission denied"));
+        let loose = root.join("loose.md");
+        std::fs::write(&loose, "x").unwrap();
+        assert!(
+            assert_persona_tool_path_allowed(&root, &loose, Some(&auth), true).is_ok(),
+            "a workspace outside the app directory is editable by every persona"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn test_workspace_inside_app_does_not_blanket_approve_loose_files() {
+        let app = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let root = app
+            .join("target")
+            .join(format!("meido_inside_ws_{}", uuid::Uuid::new_v4()));
+        let auth = ToolAuthContext {
+            run_id: None,
+            caller_channel: "web".to_string(),
+            caller_chat_id: 10,
+            caller_persona_id: 2,
+            control_chat_ids: vec![],
+            is_scheduled_task: false,
+            session_id: None,
+            vector_db_root: None,
+            external_roots: Vec::new(),
+        };
+        let persona = persona_shared_dir(&root, 10, 2);
+        std::fs::create_dir_all(&persona).unwrap();
+        let loose = root.join("loose.md");
+        std::fs::write(&loose, "x").unwrap();
+        let err = assert_persona_tool_path_allowed(&root, &loose, Some(&auth), true).unwrap_err();
+        assert!(err.contains("Permission denied"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_app_directory_is_editable_when_workspace_is_outside() {
+        let root = std::env::temp_dir().join(format!("meido_app_allow_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut external_roots = Vec::new();
+        crate::self_repo::append_auto_approved_app_directory(&root, &mut external_roots);
+        let app = crate::self_repo::current_app_directory().expect("app checkout");
+        let file = app.join("Cargo.toml");
+        let auth = ToolAuthContext {
+            run_id: None,
+            caller_channel: "web".to_string(),
+            caller_chat_id: 10,
+            caller_persona_id: 2,
+            control_chat_ids: vec![],
+            is_scheduled_task: false,
+            session_id: None,
+            vector_db_root: None,
+            external_roots,
+        };
+        let persona = persona_shared_dir(&root, 10, 2);
+        std::fs::create_dir_all(&persona).unwrap();
+        assert!(
+            assert_persona_tool_path_allowed(&root, &file, Some(&auth), true).is_ok(),
+            "the app directory is approved for every persona when the workspace is outside it"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

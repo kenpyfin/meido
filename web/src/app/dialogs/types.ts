@@ -27,7 +27,20 @@ export interface AppDialogsSettingsProps {
     personaId?: number,
   ) => Promise<void>
   reloadInstallationStatus: () => Promise<void>
+  page: SettingsLedgerPage
+  onPageChange: (page: SettingsLedgerPage) => void
+  revealPage: number
 }
+
+export type SettingsLedgerPage =
+  | 'overview'
+  | 'environment'
+  | 'system-llm'
+  | 'connections'
+  | 'integrations'
+  | 'channels'
+
+export type PersonaLedgerPage = 'profile' | 'engine' | 'hooks' | 'skills'
 
 export interface AppDialogsPersonaProps {
   open: boolean
@@ -38,6 +51,12 @@ export interface AppDialogsPersonaProps {
   onCreatePersona?: () => void | Promise<void>
   onRenamePersona?: (personaId: number, name: string) => Promise<void>
   onDeletePersona?: (personaId: number) => void
+  page: PersonaLedgerPage
+  onPageChange: (page: PersonaLedgerPage) => void
+  revealPage: number
+  onOpenHousehold?: () => void
+  onOpenSettingsPage?: (page: SettingsLedgerPage) => void
+  engineMark?: 'Missing'
 }
 
 export interface AppDialogsQueueProps {
@@ -83,6 +102,8 @@ export interface AppDialogsSchedulesProps {
   ) => Promise<void>
   updateSchedule: (id: number, patch: Partial<ScheduleTask>) => Promise<void>
   openDetail: (task: ScheduleTask) => void
+  /** Drops the schedules count after All runs marks every unread run read. */
+  onUnreadCleared?: () => void
 }
 
 export interface AppDialogsInboxProps {
@@ -100,6 +121,7 @@ export interface AppDialogsInboxProps {
   busyTodoId: number | null
   onRefresh: () => void
   onOpenTarget: (target: { personaId: number; sessionId: string | null }) => void
+  onOpenTodo: (todoId: number) => void
   onCompleteTodo: (todoId: number) => void
 }
 
@@ -191,6 +213,7 @@ export interface AppDialogsProps {
   activePersonaId: number | null
   personas: Persona[]
   settings: AppDialogsSettingsProps
+  onConfigurePersona?: (page?: PersonaLedgerPage) => void
   persona: AppDialogsPersonaProps
   queue: AppDialogsQueueProps
   schedules: AppDialogsSchedulesProps
@@ -211,6 +234,7 @@ export type SettingsDialogProps = {
   personas: Persona[]
   settings: AppDialogsSettingsProps
   onRunSetupWizard?: () => void
+  onConfigurePersona?: (page?: PersonaLedgerPage) => void
 }
 
 export type PersonaDialogProps = {

@@ -52,7 +52,8 @@ FEATURES:
 
 SETUP:
     1. Copy .env.example to .env and set bootstrap values:
-       MEIDO_WORKSPACE_DIR (or WORKSPACE_DIR), WEB_HOST/WEB_PORT, WEB_AUTH_TOKEN when exposing non-local.
+       WORKSPACE_DIR, WEB_HOST/WEB_PORT, WEB_AUTH_TOKEN when exposing non-local.
+       When WORKSPACE_DIR is missing, the web UI opens the setup wizard.
     2. Start the app: meido start
     3. Open Web UI: http://127.0.0.1:10961 and finish runtime settings there.
 
@@ -69,7 +70,8 @@ CONFIG FILE (.env):
       llm_base_url           Custom base URL (optional)
 
     Runtime:
-      workspace_dir          Workspace root (default: ./workspace). Layout: runtime/, skills/, shared/ under this path. Copy to migrate.
+      WORKSPACE_DIR          Workspace root. Layout: runtime/, skills/, shared/ under this path. Copy to migrate.
+                             When unset, the process can still boot and the web UI opens the setup wizard.
       max_tokens             Max tokens per response (default: 8192)
       max_tool_iterations    Max tool loop iterations (default: 100)
       max_history_messages   Chat history context size (default: 50)

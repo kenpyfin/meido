@@ -1130,6 +1130,7 @@ mod tests {
             local_delegate_base_url: None,
             local_delegate_model: None,
             local_delegate_tools_ok: None,
+            user_message_rewrite_enabled: false,
         }
     }
 

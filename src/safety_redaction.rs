@@ -24,13 +24,11 @@ const SKIP_DIR_NAMES: &[&str] = &[".git", "node_modules", "target", "runtime"];
 const NON_SECRET_ENV_KEYS: &[&str] = &[
     "WORKSPACE_DIR",
     // MEIDO_* preferred + FINALLY_A_VALUE_BOT_* legacy (see meido_env::NON_SECRET_KEYS)
-    "MEIDO_WORKSPACE_DIR",
     "MEIDO_CONFIG",
     "MEIDO_BUILTIN_SKILLS",
     "MEIDO_BUILTIN_HOOKS",
     "MEIDO_SELF_REPO",
     "MEIDO_RUNTIME_DATA",
-    "FINALLY_A_VALUE_BOT_WORKSPACE_DIR",
     "FINALLY_A_VALUE_BOT_CONFIG",
     "FINALLY_A_VALUE_BOT_BUILTIN_SKILLS",
     "FINALLY_A_VALUE_BOT_BUILTIN_HOOKS",

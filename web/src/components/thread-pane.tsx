@@ -166,6 +166,7 @@ type ThreadPaneUiContextValue = {
   onSplitTopic?: (messageId: string) => void
   mentionPersonas?: MentionPersona[]
   hostPersonaId?: number | null
+  rewrittenMessages?: Record<string, { original: string; rewritten: string }>
 }
 
 const ThreadPaneUiContext = React.createContext<ThreadPaneUiContextValue>({
@@ -191,6 +192,7 @@ const ThreadPaneUiContext = React.createContext<ThreadPaneUiContextValue>({
   onSplitTopic: undefined,
   mentionPersonas: undefined,
   hostPersonaId: null,
+  rewrittenMessages: undefined,
 })
 
 function ComposerQuotePreview() {
@@ -298,10 +300,42 @@ function UserAttachmentStrip({ attachments }: { attachments: UserAttachmentNote[
 }
 
 function UserMessageDisplayBody() {
+  const { rewrittenMessages } = React.useContext(ThreadPaneUiContext)
+  const messageId = useMessage((m) => (typeof m.id === 'string' ? m.id : ''))
+  const isLastUserMessage = useAuiState(({ thread, message }) => {
+    if (message.role !== 'user') return false
+    for (let i = thread.messages.length - 1; i > message.index; i -= 1) {
+      if (thread.messages[i]?.role === 'user') return false
+    }
+    return true
+  })
   const rawText = useMessage((m) => messageTextContent(m.content))
-  const notes = React.useMemo(() => parseUserAttachmentNotes(rawText), [rawText])
+  const rewriteEntry = React.useMemo(() => {
+    if (!rewrittenMessages) return undefined
+    if (messageId && rewrittenMessages[messageId]) {
+      return rewrittenMessages[messageId]
+    }
+    if (isLastUserMessage && rawText) {
+      for (const entry of Object.values(rewrittenMessages)) {
+        if (
+          entry.original.trim() === rawText.trim() ||
+          entry.rewritten.trim() === rawText.trim()
+        ) {
+          return entry
+        }
+      }
+    }
+    return undefined
+  }, [rewrittenMessages, messageId, isLastUserMessage, rawText])
+  const [showOriginal, setShowOriginal] = React.useState(false)
+  const effectiveText = rewriteEntry
+    ? showOriginal
+      ? rewriteEntry.original
+      : rewriteEntry.rewritten
+    : rawText
+  const notes = React.useMemo(() => parseUserAttachmentNotes(effectiveText), [effectiveText])
   const parsed = React.useMemo(() => parseReplyForDisplay(notes.text), [notes.text])
-  if (!parsed && notes.attachments.length === 0) {
+  if (!parsed && notes.attachments.length === 0 && !rewriteEntry) {
     return <UserMessage.Content />
   }
   return (
@@ -315,6 +349,23 @@ function UserMessageDisplayBody() {
         <p className="aui-text">{notes.text}</p>
       ) : null}
       {notes.attachments.length > 0 ? <UserAttachmentStrip attachments={notes.attachments} /> : null}
+      {rewriteEntry ? (
+        <div className="mc-msg-rewritten-row">
+          <button
+            type="button"
+            className="mc-msg-rewritten-badge"
+            onClick={() => setShowOriginal((prev) => !prev)}
+            title={
+              showOriginal
+                ? `Showing original · Click to view rewritten: ${rewriteEntry.rewritten}`
+                : `Original: ${rewriteEntry.original}`
+            }
+            aria-pressed={showOriginal}
+          >
+            {showOriginal ? 'Original · View rewritten' : 'Rewritten · View original'}
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -934,6 +985,7 @@ export type ThreadPaneProps = {
   onSplitTopic?: (messageId: string) => void
   mentionPersonas?: MentionPersona[]
   hostPersonaId?: number | null
+  rewrittenMessages?: Record<string, { original: string; rewritten: string }>
   /** Replaces the transcript viewport. */
   focusSlot?: React.ReactNode
   /** Replaces the composer while focusSlot is shown. */
@@ -1133,6 +1185,7 @@ export const ThreadPane = React.memo(function ThreadPane({
   onSplitTopic,
   mentionPersonas,
   hostPersonaId = null,
+  rewrittenMessages,
   focusSlot = null,
   composerSlot = null,
 }: ThreadPaneProps) {
@@ -1302,6 +1355,7 @@ export const ThreadPane = React.memo(function ThreadPane({
       onSplitTopic,
       mentionPersonas,
       hostPersonaId,
+      rewrittenMessages,
     }),
     [
       activeSubthreadMessageId,
@@ -1322,6 +1376,7 @@ export const ThreadPane = React.memo(function ThreadPane({
       onSplitTopic,
       mentionPersonas,
       hostPersonaId,
+      rewrittenMessages,
       onToggleBookmark,
       pendingReply,
       topicStarts,
@@ -1451,6 +1506,9 @@ export const ThreadPane = React.memo(function ThreadPane({
 
   const suppressScroll =
     Boolean(targetScrollMessageId) || suppressAutoScroll || holdStillForPrepend
+  const showLoadNewer = Boolean(historyHasNewer && onLoadNewer)
+  const showJumpToLatest = historyMode === 'anchored' && Boolean(onJumpToLatest)
+  const floatExtra = (showLoadNewer ? 1 : 0) + (showJumpToLatest ? 1 : 0)
 
   return (
     <ThreadPaneUiContext.Provider value={uiContextValue}>
@@ -1483,7 +1541,10 @@ export const ThreadPane = React.memo(function ThreadPane({
           }}
           className="h-full min-h-0 min-w-0"
         >
-          <div className="mc-thread-shell flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+          <div
+            className="mc-thread-shell flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+            data-float-extra={focusSlot ? 0 : floatExtra}
+          >
             {focusSlot ? (
               <div className="min-h-0 flex-1 overflow-hidden">{focusSlot}</div>
             ) : historyLoading ? (
@@ -1519,29 +1580,27 @@ export const ThreadPane = React.memo(function ThreadPane({
                 }}
               />
               <Thread.FollowupSuggestions />
-              {historyHasNewer && onLoadNewer ? (
-                <LoadNewerMessages
-                  loading={historyLoadingNewer}
-                  onLoadMore={handleLoadNewer}
-                />
-              ) : null}
             </ThreadPrimitive.Viewport>
             )}
-            {historyMode === 'anchored' && onJumpToLatest && !focusSlot ? (
-              <JumpToLatestPill
-                newMessagesPending={newMessagesPending}
-                onJump={onJumpToLatest}
-              />
-            ) : null}
             {focusSlot ? (
               composerSlot
             ) : (
             <div className="mc-thread-composer-stack">
-              {!historyLoading ? (
-                <div className="mc-scroll-to-latest-wrap">
-                  <ScrollToLatest />
-                </div>
-              ) : null}
+              <div className="mc-thread-float-stack">
+                {showLoadNewer ? (
+                  <LoadNewerMessages
+                    loading={historyLoadingNewer}
+                    onLoadMore={handleLoadNewer}
+                  />
+                ) : null}
+                {showJumpToLatest ? (
+                  <JumpToLatestPill
+                    newMessagesPending={newMessagesPending}
+                    onJump={onJumpToLatest}
+                  />
+                ) : null}
+                {!historyLoading ? <ScrollToLatest /> : null}
+              </div>
               <div
                 className="mc-thread-composer-dock"
                 onFocusCapture={() =>

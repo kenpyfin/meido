@@ -2881,7 +2881,7 @@ fn build_gemini_request(
             let func_decls: Vec<serde_json::Value> = tool_defs
                 .iter()
                 .map(|t| {
-                    let parameters = sanitize_oai_parameters(&t.input_schema);
+                    let parameters = sanitize_gemini_parameters(&t.input_schema);
                     json!({
                         "name": t.name,
                         "description": t.description,
@@ -3331,6 +3331,237 @@ fn translate_messages_to_oai(system: &str, messages: &[Message]) -> Vec<serde_js
     }
 
     out
+}
+
+/// Gemini function declarations take one schema `type` string and do not accept
+/// JSON Schema keywords such as `additionalProperties`, `anyOf`, or `oneOf`.
+/// MCP tools (Robinhood) send nullable unions as `"type": ["null", "array"]`.
+fn sanitize_gemini_parameters(schema: &serde_json::Value) -> serde_json::Value {
+    let mut cleaned = sanitize_gemini_schema(schema);
+    let Some(obj) = cleaned.as_object_mut() else {
+        return json!({"type": "object", "properties": {}});
+    };
+    obj.insert("type".to_string(), json!("object"));
+    obj.remove("nullable");
+    obj.remove("items");
+    obj.remove("enum");
+    obj.remove("format");
+    if obj.get("properties").and_then(|p| p.as_object()).is_none() {
+        obj.insert("properties".to_string(), json!({}));
+    }
+    let prop_keys: std::collections::HashSet<String> = obj
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .map(|props| props.keys().cloned().collect())
+        .unwrap_or_default();
+    let required: Vec<String> = obj
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|arr| {
+            let mut keys: Vec<String> = arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .filter(|k| prop_keys.contains(*k))
+                .map(str::to_string)
+                .collect();
+            keys.sort();
+            keys.dedup();
+            keys
+        })
+        .unwrap_or_default();
+    if required.is_empty() {
+        obj.remove("required");
+    } else {
+        obj.insert("required".to_string(), json!(required));
+    }
+    cleaned
+}
+
+fn gemini_named_type(raw: &str) -> (Option<String>, bool) {
+    let lower = raw.to_ascii_lowercase();
+    match lower.as_str() {
+        "null" => (None, true),
+        "object" | "array" | "string" | "number" | "integer" | "boolean" => (Some(lower), false),
+        _ => (Some("string".to_string()), false),
+    }
+}
+
+fn gemini_single_type(type_val: &serde_json::Value) -> (Option<String>, bool) {
+    match type_val {
+        serde_json::Value::String(raw) => gemini_named_type(raw),
+        serde_json::Value::Array(items) => {
+            let mut nullable = false;
+            let mut chosen = None;
+            for item in items {
+                let Some(raw) = item.as_str() else {
+                    continue;
+                };
+                let (ty, is_null) = gemini_named_type(raw);
+                nullable |= is_null;
+                if chosen.is_none() && ty.is_some() {
+                    chosen = ty;
+                }
+            }
+            (chosen, nullable)
+        }
+        _ => (None, false),
+    }
+}
+
+fn is_null_schema_branch(obj: &serde_json::Map<String, serde_json::Value>) -> bool {
+    match obj.get("type") {
+        Some(type_val) => {
+            let (ty, nullable) = gemini_single_type(type_val);
+            ty.is_none() && nullable
+        }
+        None => false,
+    }
+}
+
+/// Collapse `anyOf` / `oneOf` null unions when the node has no `type` of its own.
+fn collapse_gemini_union(
+    map: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    if map.contains_key("type") {
+        return map.clone();
+    }
+    let Some(items) = map
+        .get("anyOf")
+        .or_else(|| map.get("oneOf"))
+        .and_then(|v| v.as_array())
+    else {
+        return map.clone();
+    };
+    let mut nullable = map
+        .get("nullable")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let mut branch: Option<serde_json::Map<String, serde_json::Value>> = None;
+    for item in items {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        if is_null_schema_branch(obj) {
+            nullable = true;
+            continue;
+        }
+        if branch.is_none() {
+            branch = Some(obj.clone());
+        }
+    }
+    let Some(mut branch) = branch else {
+        return map.clone();
+    };
+    if nullable {
+        branch.insert("nullable".to_string(), json!(true));
+    }
+    if !branch.contains_key("description") {
+        if let Some(desc) = map.get("description").cloned() {
+            branch.insert("description".to_string(), desc);
+        }
+    }
+    branch
+}
+
+fn sanitize_gemini_schema(schema: &serde_json::Value) -> serde_json::Value {
+    let Some(map) = schema.as_object() else {
+        return json!({"type": "string"});
+    };
+    let collapsed = collapse_gemini_union(map);
+    let mut nullable = collapsed
+        .get("nullable")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let (mut ty, type_nullable) = collapsed
+        .get("type")
+        .map(gemini_single_type)
+        .unwrap_or((None, false));
+    nullable |= type_nullable;
+    if ty.is_none() {
+        ty = Some(
+            if collapsed
+                .get("properties")
+                .and_then(|p| p.as_object())
+                .is_some()
+            {
+                "object".to_string()
+            } else if collapsed.get("items").is_some() {
+                "array".to_string()
+            } else {
+                "string".to_string()
+            },
+        );
+    }
+    let ty = ty.unwrap_or_else(|| "string".to_string());
+
+    let mut out = serde_json::Map::new();
+    out.insert("type".to_string(), json!(ty.as_str()));
+    if nullable {
+        out.insert("nullable".to_string(), json!(true));
+    }
+    if let Some(desc) = collapsed.get("description").and_then(|d| d.as_str()) {
+        let desc = desc.trim();
+        if !desc.is_empty() {
+            out.insert("description".to_string(), json!(desc));
+        }
+    }
+    if let Some(fmt) = collapsed.get("format").and_then(|f| f.as_str()) {
+        if !fmt.is_empty() && fmt.len() < 64 && !fmt.contains(' ') {
+            out.insert("format".to_string(), json!(fmt));
+        }
+    }
+
+    if ty == "object" {
+        let mut props = serde_json::Map::new();
+        if let Some(incoming) = collapsed.get("properties").and_then(|p| p.as_object()) {
+            for (key, value) in incoming {
+                props.insert(key.clone(), sanitize_gemini_schema(value));
+            }
+        }
+        let prop_keys: std::collections::HashSet<String> = props.keys().cloned().collect();
+        out.insert("properties".to_string(), serde_json::Value::Object(props));
+        if let Some(req) = collapsed.get("required").and_then(|r| r.as_array()) {
+            let mut required: Vec<String> = req
+                .iter()
+                .filter_map(|v| v.as_str())
+                .filter(|k| prop_keys.contains(*k))
+                .map(str::to_string)
+                .collect();
+            required.sort();
+            required.dedup();
+            if !required.is_empty() {
+                out.insert("required".to_string(), json!(required));
+            }
+        }
+    } else if ty == "array" {
+        let items = match collapsed.get("items") {
+            Some(items) if items.is_array() => items
+                .as_array()
+                .and_then(|arr| arr.first())
+                .map(sanitize_gemini_schema)
+                .unwrap_or_else(|| json!({"type": "string"})),
+            Some(items) => sanitize_gemini_schema(items),
+            None => json!({"type": "string"}),
+        };
+        out.insert("items".to_string(), items);
+    } else if ty == "string" {
+        if let Some(values) = collapsed.get("enum").and_then(|e| e.as_array()) {
+            let enums: Vec<String> = values
+                .iter()
+                .filter_map(|v| match v {
+                    serde_json::Value::String(s) => Some(s.clone()),
+                    serde_json::Value::Number(n) => Some(n.to_string()),
+                    serde_json::Value::Bool(b) => Some(b.to_string()),
+                    _ => None,
+                })
+                .collect();
+            if !enums.is_empty() {
+                out.insert("enum".to_string(), json!(enums));
+            }
+        }
+    }
+
+    serde_json::Value::Object(out)
 }
 
 /// Sanitize tool parameters schema so that `required` only lists keys present in
@@ -3880,6 +4111,135 @@ mod tests {
         assert!(required
             .iter()
             .all(|r| props.contains_key(r.as_str().unwrap())));
+    }
+
+    fn schema_is_gemini_safe(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Array(items) => items.iter().all(schema_is_gemini_safe),
+            serde_json::Value::Object(map) => {
+                if map.contains_key("additionalProperties")
+                    || map.contains_key("anyOf")
+                    || map.contains_key("oneOf")
+                    || map.contains_key("allOf")
+                {
+                    return false;
+                }
+                if matches!(map.get("type"), Some(serde_json::Value::Array(_))) {
+                    return false;
+                }
+                map.values().all(schema_is_gemini_safe)
+            }
+            _ => true,
+        }
+    }
+
+    #[test]
+    fn test_sanitize_gemini_parameters_robinhood_nullable_array() {
+        let schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "chart_id": { "type": "string", "description": "chart" },
+                "note": { "type": ["string", "null"], "description": "optional" },
+                "parameters": {
+                    "description": "overrides",
+                    "type": ["null", "array"],
+                    "items": {
+                        "additionalProperties": false,
+                        "type": "object",
+                        "required": ["name", "value", "missing"],
+                        "properties": {
+                            "name": { "type": "string" },
+                            "value": { "type": "string" }
+                        }
+                    }
+                }
+            },
+            "required": ["chart_id", "missing"]
+        });
+        let out = sanitize_gemini_parameters(&schema);
+        assert!(schema_is_gemini_safe(&out), "{out}");
+        assert_eq!(out["type"], "object");
+        assert!(out.get("additionalProperties").is_none());
+        let required = out["required"].as_array().unwrap();
+        assert_eq!(required, &vec![json!("chart_id")]);
+        let note = &out["properties"]["note"];
+        assert_eq!(note["type"], "string");
+        assert_eq!(note["nullable"], true);
+        let params = &out["properties"]["parameters"];
+        assert_eq!(params["type"], "array");
+        assert_eq!(params["nullable"], true);
+        assert_eq!(params["description"], "overrides");
+        let items = &params["items"];
+        assert_eq!(items["type"], "object");
+        assert!(items.get("additionalProperties").is_none());
+        assert_eq!(items["required"], json!(["name", "value"]));
+    }
+
+    #[test]
+    fn test_sanitize_gemini_parameters_anyof_null_union() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "parameters": {
+                    "description": "overrides",
+                    "anyOf": [
+                        {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": { "name": { "type": "string" } }
+                            }
+                        },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        });
+        let out = sanitize_gemini_parameters(&schema);
+        assert!(schema_is_gemini_safe(&out), "{out}");
+        let params = &out["properties"]["parameters"];
+        assert_eq!(params["type"], "array");
+        assert_eq!(params["nullable"], true);
+        assert_eq!(params["description"], "overrides");
+        assert_eq!(params["items"]["type"], "object");
+        assert!(params["items"].get("additionalProperties").is_none());
+    }
+
+    #[test]
+    fn test_build_gemini_request_strips_robinhood_schema() {
+        let tools = vec![ToolDefinition::new(
+            "add_legend_indicator",
+            "Apply indicator",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "parameters": {
+                        "type": ["null", "array"],
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": { "name": { "type": "string" } }
+                        }
+                    }
+                },
+                "required": ["parameters"]
+            }),
+        )];
+        let req = build_gemini_request(
+            "sync",
+            &[],
+            Some(tools),
+            256,
+            "gemini-2.5-flash",
+            false,
+            false,
+        );
+        let params = &req["tools"][0]["functionDeclarations"][0]["parameters"];
+        assert!(schema_is_gemini_safe(params), "{params}");
+        assert_eq!(params["properties"]["parameters"]["type"], "array");
     }
 
     // -----------------------------------------------------------------------

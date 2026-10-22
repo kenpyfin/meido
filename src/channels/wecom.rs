@@ -581,6 +581,7 @@ pub(crate) async fn ingest_wecom_incoming(
         origin: crate::db::message_origin_interactive(),
         speaker_persona_id: None,
     };
+    let inbound_user_message_id = stored.id.clone();
     let _ = call_blocking(app_state.db.clone(), move |db| db.store_message(&stored)).await;
 
     info!(
@@ -643,6 +644,7 @@ pub(crate) async fn ingest_wecom_incoming(
                     history_override: None,
                     tool_iteration_cap: None,
                     skip_recall: false,
+                    inbound_user_message_id: Some(inbound_user_message_id),
                 },
                 None,
                 images,

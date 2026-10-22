@@ -4,6 +4,7 @@ import React from 'react'
 import { SessionPicker } from '../components/session-picker'
 import { SideChatsPicker } from '../components/side-chats-picker'
 import { IconCockpit, IconOps, IconRibbonBow, IconServiceBell, IconSidebar } from '../components/icons'
+import { RecordsMenu } from '../components/ops-ui'
 import type { ChatSession, InstallationStatus, QueueLane, SideChatSummary } from '../types'
 
 type Appearance = 'dark' | 'light'
@@ -159,9 +160,9 @@ export const AppHeader = React.memo(function AppHeader({
           : 'mc-katyusha-lace sticky top-0 z-30 bg-[color:var(--mc-surface-elevated)]/92 backdrop-blur-sm md:top-0'
       }
     >
-      <div className="mc-app-header-bar px-3 max-md:py-2 md:px-4 md:py-3">
-        <div className="flex justify-between items-center gap-2 flex-wrap w-full flex-col md:flex-row md:flex-wrap">
-          <div className="flex items-center gap-2 min-w-0 w-full min-h-[44px] md:flex-1">
+      <div className="mc-app-header-bar px-3 max-md:py-2 md:px-4 md:py-2">
+        <div className="mc-app-header-row flex w-full min-w-0 items-center gap-2">
+          <div className="flex min-h-[44px] min-w-0 flex-1 items-center gap-2 md:min-h-0">
             <Button
               size="icon-lg"
               variant="secondary"
@@ -195,7 +196,7 @@ export const AppHeader = React.memo(function AppHeader({
             {personaModule ? (
               <button
                 type="button"
-                className="mc-display-title flex min-h-10 min-w-0 flex-1 items-center gap-1 text-left text-[1.35rem] leading-none md:!hidden"
+                className="mc-display-title mc-header-mobile-title flex min-h-10 min-w-0 flex-1 items-center gap-1 text-left text-[1.35rem] leading-none md:!hidden"
                 aria-expanded={mobileContextOpen}
                 aria-haspopup="dialog"
                 title="Session, topics, and view"
@@ -204,9 +205,9 @@ export const AppHeader = React.memo(function AppHeader({
                 {activePersonaName ? (
                   <IconRibbonBow className="size-4 shrink-0 text-[color:var(--mc-accent)]" />
                 ) : null}
-                <span className="truncate">{mobileTitle}</span>
+                <span className="mc-header-persona">{mobileTitle}</span>
                 {sessionCaption ? (
-                  <span className="truncate font-sans text-xs font-normal text-[color:var(--mc-text-muted)]">
+                  <span className="mc-header-session font-sans text-xs font-normal text-[color:var(--mc-text-muted)]">
                     {sessionCaption}
                   </span>
                 ) : null}
@@ -220,13 +221,13 @@ export const AppHeader = React.memo(function AppHeader({
             ) : (
               <h1 className="mc-display-title min-w-0 flex-1 truncate text-[1.35rem] md:!hidden">{mobileTitle}</h1>
             )}
-            <h1 className="mc-display-title hidden min-w-0 shrink items-center gap-1.5 text-2xl md:!flex">
+            <h1 className="mc-display-title hidden min-w-0 max-w-[16rem] shrink items-center gap-1.5 overflow-hidden text-2xl md:!flex">
               {personaModule && activePersonaName ? (
                 <IconRibbonBow className="size-4 shrink-0 text-[color:var(--mc-accent)]" />
               ) : null}
-              <span className="truncate">{mobileTitle}</span>
+              <span className="min-w-0 truncate">{mobileTitle}</span>
             </h1>
-            {renderSessionControls('max-md:!hidden')}
+            {renderSessionControls('max-md:!hidden shrink')}
             {personaModule ? (
               <button
                 type="button"
@@ -263,101 +264,86 @@ export const AppHeader = React.memo(function AppHeader({
               ) : null}
             </button>
           </div>
-          <div className="flex items-center gap-2 flex-wrap justify-end w-full max-md:!hidden md:!flex">
-            {personaModule ? (
-            <button
-              type="button"
-              className="mc-cockpit-launch cursor-pointer"
-              data-active={cockpitExpanded ? 'true' : 'false'}
-              data-busy={cockpitBusyCount > 0 ? 'true' : 'false'}
-              aria-pressed={cockpitExpanded}
-              aria-label={
-                cockpitBusyCount > 0 ? `Cockpit, ${cockpitBusyCount} active` : 'Cockpit'
-              }
-              title="Cockpit"
-              onClick={onToggleCockpit}
-            >
-              <IconCockpit className="size-4 shrink-0" />
-              <span className="mc-cockpit-launch-label">Cockpit</span>
-              {cockpitBusyCount > 0 ? (
-                <span className="mc-badge-counter" aria-hidden>
-                  {cockpitBusyCount > 99 ? '99+' : cockpitBusyCount}
-                </span>
+          <div className="mc-header-tools ml-auto hidden shrink-0 items-center gap-2 md:!flex">
+            <div className="mc-header-cluster" data-cluster="attention">
+              {personaModule ? (
+                <button
+                  type="button"
+                  className="mc-cockpit-launch cursor-pointer"
+                  data-active={cockpitExpanded ? 'true' : 'false'}
+                  data-busy={cockpitBusyCount > 0 ? 'true' : 'false'}
+                  aria-pressed={cockpitExpanded}
+                  aria-label={
+                    cockpitBusyCount > 0 ? `Cockpit, ${cockpitBusyCount} active` : 'Cockpit'
+                  }
+                  title="Cockpit"
+                  onClick={onToggleCockpit}
+                >
+                  <IconCockpit className="size-4 shrink-0" />
+                  <span className="mc-cockpit-launch-label">Cockpit</span>
+                  {cockpitBusyCount > 0 ? (
+                    <span className="mc-badge-counter" aria-hidden>
+                      {cockpitBusyCount > 99 ? '99+' : cockpitBusyCount}
+                    </span>
+                  ) : null}
+                </button>
               ) : null}
-            </button>
-            ) : null}
-            <button
-              type="button"
-              className="mc-inbox-launch !hidden md:!inline-flex"
-              data-has-items={inboxBadgeCount > 0 ? 'true' : 'false'}
-              aria-label={
-                inboxBadgeCount > 0 ? `Inbox, ${inboxBadgeCount} items` : 'Open Inbox'
-              }
-              title="Inbox — new messages and todos"
-              onClick={onOpenInbox}
-            >
-              <IconServiceBell className="size-3.5 shrink-0" />
-              Inbox
-              {inboxBadgeCount > 0 ? (
-                <span className="mc-inbox-launch__badge" aria-hidden>
-                  {inboxBadgeCount > 99 ? '99+' : inboxBadgeCount}
-                </span>
-              ) : null}
-            </button>
-            <span className="mc-toolbar-divider !hidden md:!inline-block" aria-hidden />
-            <Button size="sm" variant="secondary" className="!hidden md:!inline-flex" onClick={onOpenPersona}>
-              Persona
-            </Button>
-            <Button size="sm" variant="secondary" className="!hidden md:!inline-flex" onClick={onOpenSettings}>
-              Settings
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              className="!hidden md:!inline-flex"
-              aria-label={
-                schedulesBadgeCount > 0
-                  ? `Schedules, ${schedulesBadgeCount} unread runs`
-                  : 'Open Schedules'
-              }
-              onClick={onOpenSchedules}
-            >
-              Schedules
+              <button
+                type="button"
+                className="mc-cockpit-launch cursor-pointer !hidden md:!inline-flex"
+                aria-label={
+                  inboxBadgeCount > 0 ? `Inbox, ${inboxBadgeCount} items` : 'Open Inbox'
+                }
+                title="Inbox — new messages and todos"
+                onClick={onOpenInbox}
+              >
+                <IconServiceBell className="size-4 shrink-0" />
+                <span className="mc-cockpit-launch-label">Inbox</span>
+                {inboxBadgeCount > 0 ? (
+                  <span className="mc-badge-counter" aria-hidden>
+                    {inboxBadgeCount > 99 ? '99+' : inboxBadgeCount}
+                  </span>
+                ) : null}
+              </button>
               {schedulesBadgeCount > 0 ? (
-                <span className="mc-inbox-launch__badge" aria-hidden>
-                  {schedulesBadgeCount > 99 ? '99+' : schedulesBadgeCount}
-                </span>
-              ) : null}
-            </Button>
-            {personaModule ? (
-            <Button size="sm" variant="secondary" className="!hidden md:!inline-flex" onClick={onOpenPrinciples}>
-              Principles
-            </Button>
-            ) : null}
-            <Button size="sm" variant="secondary" className="!hidden md:!inline-flex" onClick={onOpenArtifacts}>
-              Artifacts
-            </Button>
-            {terminalAvailable && onOpenTerminal ? (
-              <Button size="sm" variant="secondary" className="!hidden md:!inline-flex" onClick={onOpenTerminal}>
-                Terminal
-              </Button>
-            ) : null}
-            {personaModule ? (
-              <>
-                <Button size="sm" variant="secondary" className="!hidden md:!inline-flex" onClick={onOpenMemory}>
-                  Memory
-                </Button>
                 <Button
                   size="sm"
                   variant="secondary"
                   className="!hidden md:!inline-flex"
-                  disabled={agentHistoryDisabled}
-                  onClick={onOpenAgentHistory}
+                  aria-label={`Schedules, ${schedulesBadgeCount} unread runs`}
+                  onClick={onOpenSchedules}
                 >
-                  Last agent run
+                  Schedules
+                  <span className="mc-inbox-launch__badge" aria-hidden>
+                    {schedulesBadgeCount > 99 ? '99+' : schedulesBadgeCount}
+                  </span>
                 </Button>
-              </>
-            ) : null}
+              ) : null}
+            </div>
+            <span className="mc-toolbar-divider !hidden md:!inline-block" aria-hidden />
+            <div className="mc-header-cluster" data-cluster="configuration">
+              <Button size="sm" variant="secondary" className="!hidden md:!inline-flex" onClick={onOpenPersona}>
+                Persona
+              </Button>
+              <Button size="sm" variant="secondary" className="!hidden md:!inline-flex" onClick={onOpenSettings}>
+                Settings
+              </Button>
+            </div>
+            <span className="mc-toolbar-divider !hidden md:!inline-block" aria-hidden />
+            <div className="mc-header-cluster" data-cluster="records">
+              <RecordsMenu
+                personaModule={personaModule}
+                terminalAvailable={terminalAvailable}
+                schedulesBadgeCount={schedulesBadgeCount}
+                agentHistoryDisabled={agentHistoryDisabled}
+                onOpenSchedules={onOpenSchedules}
+                onOpenPrinciples={onOpenPrinciples}
+                onOpenArtifacts={onOpenArtifacts}
+                onOpenMemory={onOpenMemory}
+                onOpenAgentHistory={onOpenAgentHistory}
+                onOpenTerminal={onOpenTerminal}
+              />
+            </div>
           </div>
         </div>
       </div>

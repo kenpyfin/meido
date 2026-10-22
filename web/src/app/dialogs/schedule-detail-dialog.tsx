@@ -146,7 +146,12 @@ const { appearance, api, chatId, personas, scheduleDetail } = props
             </div>
             <span className="mb-1 mt-3 block font-semibold">Recent runs</span>
             <div className="mb-3">
-              <ScheduleRunsPanel api={api} chatId={chatId} taskId={scheduleDetailTask.id} />
+              <ScheduleRunsPanel
+                api={api}
+                chatId={chatId}
+                taskId={scheduleDetailTask.id}
+                personas={personas}
+              />
             </div>
             <span className="mb-1 mt-3 block font-semibold">Schedule</span>
             <div className="flex gap-2 items-center flex-wrap mb-2">

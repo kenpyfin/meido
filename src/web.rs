@@ -581,7 +581,7 @@ struct TodosQuery {
 
 #[derive(Debug, Deserialize)]
 struct TodoPatchRequest {
-    /// open | todo | doing | blocked | done
+    /// todo | plan | build | verify, plus legacy names normalized by the server
     #[serde(default)]
     status: Option<String>,
     #[serde(default)]
@@ -602,11 +602,33 @@ struct TodoPatchRequest {
     before_position: Option<f64>,
     #[serde(default)]
     after_position: Option<f64>,
+    #[serde(default)]
+    auto_advance: Option<bool>,
+    /// When true, sets completed_at without moving the column.
+    #[serde(default)]
+    completed: Option<bool>,
+    #[serde(default)]
+    deploy_prompt: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TodoRunRequest {
+    #[serde(default)]
+    deploy_prompt: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct TodoPathParams {
     id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct TodoCreateRequest {
+    chat_id: Option<i64>,
+    title: String,
+    persona_id: Option<i64>,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1087,6 +1109,20 @@ async fn api_send(
     Json(body): Json<SendRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     require_auth(&headers, state.auth_token.as_deref())?;
+    enqueue_persona_turn(state, body, None).await.map(Json)
+}
+
+#[derive(Clone, Copy)]
+struct BoardStageFollowUp {
+    item_id: i64,
+    chain_remaining: u8,
+}
+
+async fn enqueue_persona_turn(
+    state: WebState,
+    body: SendRequest,
+    follow_up: Option<BoardStageFollowUp>,
+) -> Result<serde_json::Value, (StatusCode, String)> {
     let start = Instant::now();
     let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
     let key = format!("chat:{}", chat_id);
@@ -1156,9 +1192,20 @@ async fn api_send(
         workflow_id: None,
         on_hard_abort: Some(abort_hook),
     };
+    if let Some(follow) = follow_up {
+        let db = state.app_state.db.clone();
+        let run_for_mark = run_id.clone();
+        let item_id = follow.item_id;
+        call_blocking(db, move |db| {
+            db.mark_board_stage_running(item_id, &run_for_mark)
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
     let state_for_task = state.clone();
     let run_id_for_task = run_id.clone();
     let limits = state.limits.clone();
+    let stage_follow_up = follow_up;
     let (queue_position, _) = state
         .app_state
         .chat_queue
@@ -1172,7 +1219,7 @@ async fn api_send(
                     limits.run_history_limit,
                 )
                 .await;
-            match send_and_store_response_with_events(
+            let turn_error = match send_and_store_response_with_events(
                 state_for_task.clone(),
                 body,
                 None,
@@ -1220,6 +1267,7 @@ async fn api_send(
                             limits.run_history_limit,
                         )
                         .await;
+                    None
                 }
                 Err((_, err_msg)) => {
                     state_for_task
@@ -1231,7 +1279,11 @@ async fn api_send(
                             limits.run_history_limit,
                         )
                         .await;
+                    Some(err_msg)
                 }
+            };
+            if let Some(follow) = stage_follow_up {
+                settle_board_stage(state_for_task.clone(), follow, turn_error).await;
             }
             state_for_task
                 .run_hub
@@ -1239,6 +1291,18 @@ async fn api_send(
                 .await;
         })
         .await;
+    if queue_position == 0 {
+        if let Some(follow) = follow_up {
+            let db = state.app_state.db.clone();
+            let item_id = follow.item_id;
+            let _ = call_blocking(db, move |db| db.clear_board_stage_run(item_id)).await;
+        }
+        state.request_hub.end_with_limits(&key, &state.limits).await;
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "persona_id must be positive".into(),
+        ));
+    }
     state
         .run_hub
         .publish(
@@ -1265,13 +1329,148 @@ async fn api_send(
         latency_ms = start.elapsed().as_millis(),
         "Accepted queued request"
     );
-    Ok(Json(json!({
+    Ok(json!({
         "ok": true,
         "chat_id": chat_id,
         "run_id": run_id,
         "state": "queued",
         "queue_position": queue_position,
-    })))
+    }))
+}
+
+async fn settle_board_stage(
+    state: WebState,
+    follow: BoardStageFollowUp,
+    turn_error: Option<String>,
+) {
+    let item_id = follow.item_id;
+    if let Some(err) = turn_error {
+        let db = state.app_state.db.clone();
+        let _ = call_blocking(db, move |db| db.mark_board_stage_failed(item_id, &err)).await;
+        return;
+    }
+    let loaded = call_blocking(state.app_state.db.clone(), move |db| {
+        db.get_persona_todo(item_id)
+    })
+    .await;
+    let Ok(Some(todo)) = loaded else {
+        return;
+    };
+    let outcome = todo.stage_outcome.clone().unwrap_or_default();
+    if outcome.is_empty() || outcome == "running" {
+        let db = state.app_state.db.clone();
+        let _ = call_blocking(db, move |db| {
+            db.mark_board_stage_failed(item_id, "Stage ended without finish_pipeline_stage")
+        })
+        .await;
+        return;
+    }
+    if outcome == "passed" && todo.auto_advance != 0 && follow.chain_remaining > 0 {
+        if let Some(next) = crate::board_pipeline::next_stage(&todo.status) {
+            if next != todo.status {
+                let chat_id = todo.chat_id;
+                let mut advanced = todo.clone();
+                advanced.status = next.to_string();
+                advanced.blocked_reason = None;
+                advanced.stage_outcome = None;
+                advanced.stage_run_id = None;
+                let patch = crate::db_collab::BoardPatch {
+                    status: Some(next.to_string()),
+                    title: None,
+                    description: None,
+                    owner_persona_id: None,
+                    priority: None,
+                    due_at: None,
+                    blocked_reason: Some(String::new()),
+                    position: None,
+                    before_position: None,
+                    after_position: None,
+                    actor_kind: "pipeline",
+                    actor_persona_id: todo.owner_persona_id,
+                    auto_advance: None,
+                    completed: None,
+                    deploy_prompt: None,
+                };
+                let moved = call_blocking(state.app_state.db.clone(), move |db| {
+                    db.apply_board_patch(chat_id, item_id, &patch)
+                })
+                .await;
+                if moved.ok().flatten().is_none() {
+                    return;
+                }
+                let remaining = follow.chain_remaining.saturating_sub(1);
+                if let Err((_, message)) =
+                    start_board_stage(state.clone(), &advanced, remaining).await
+                {
+                    let db = state.app_state.db.clone();
+                    let _ =
+                        call_blocking(db, move |db| db.mark_board_stage_failed(item_id, &message))
+                            .await;
+                }
+                return;
+            }
+        }
+    }
+    let db = state.app_state.db.clone();
+    let _ = call_blocking(db, move |db| db.clear_board_stage_run(item_id)).await;
+}
+
+type BoardStageStart = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<serde_json::Value, (StatusCode, String)>> + Send>,
+>;
+
+fn start_board_stage(
+    state: WebState,
+    todo: &crate::db::PersonaTodo,
+    chain_remaining: u8,
+) -> BoardStageStart {
+    let todo = todo.clone();
+    Box::pin(async move { start_board_stage_inner(state, &todo, chain_remaining).await })
+}
+
+async fn start_board_stage_inner(
+    state: WebState,
+    todo: &crate::db::PersonaTodo,
+    chain_remaining: u8,
+) -> Result<serde_json::Value, (StatusCode, String)> {
+    if !crate::board_pipeline::is_runnable_stage(&todo.status) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "This column does not run a stage".into(),
+        ));
+    }
+    let owner = todo.owner_persona_id.filter(|id| *id > 0).ok_or((
+        StatusCode::BAD_REQUEST,
+        "Assign an owner before running this stage".into(),
+    ))?;
+    if todo.stage_outcome.as_deref() == Some("running") {
+        return Err((StatusCode::CONFLICT, "This stage is already running".into()));
+    }
+    let chat_id = todo.chat_id;
+    let sessions = call_blocking(state.app_state.db.clone(), move |db| {
+        db.list_chat_sessions(chat_id, owner)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let session_id = sessions.into_iter().next().map(|session| session.id);
+    let body = SendRequest {
+        chat_id: Some(chat_id),
+        persona_id: Some(owner),
+        sender_name: Some("Board".to_string()),
+        message: crate::board_pipeline::build_stage_prompt(todo),
+        session_id,
+        guest_persona_id: None,
+        attachments: Vec::new(),
+    };
+    enqueue_persona_turn(
+        state,
+        body,
+        Some(BoardStageFollowUp {
+            item_id: todo.id,
+            chain_remaining,
+        }),
+    )
+    .await
 }
 
 async fn api_send_stream(
@@ -1467,6 +1666,25 @@ async fn api_send_stream(
                                         "matched_hook_ids": matched_hook_ids,
                                         "blocked_reason": blocked_reason,
                                         "additional_context_count": additional_context_count,
+                                    })
+                                    .to_string(),
+                                    run_history_limit,
+                                )
+                                .await;
+                        }
+                        AgentEvent::UserMessageRewritten {
+                            message_id,
+                            original,
+                            rewritten,
+                        } => {
+                            run_hub
+                                .publish(
+                                    &run_id_for_events,
+                                    "message_rewritten",
+                                    json!({
+                                        "message_id": message_id,
+                                        "original": original,
+                                        "rewritten": rewritten,
                                     })
                                     .to_string(),
                                     run_history_limit,
@@ -1966,6 +2184,25 @@ async fn api_subthread_stream(
                                 )
                                 .await;
                         }
+                        AgentEvent::UserMessageRewritten {
+                            message_id,
+                            original,
+                            rewritten,
+                        } => {
+                            run_hub
+                                .publish(
+                                    &run_id_for_events,
+                                    "message_rewritten",
+                                    json!({
+                                        "message_id": message_id,
+                                        "original": original,
+                                        "rewritten": rewritten,
+                                    })
+                                    .to_string(),
+                                    run_history_limit,
+                                )
+                                .await;
+                        }
                         AgentEvent::FinalResponse { text } => {
                             if !text.is_empty() {
                                 run_hub
@@ -1997,6 +2234,7 @@ async fn api_subthread_stream(
                     history_override: Some(history_override),
                     tool_iteration_cap: None,
                     skip_recall: false,
+                    inbound_user_message_id: None,
                 },
                 None,
                 InboundImages::new(),
@@ -2927,6 +3165,7 @@ async fn send_and_store_response_with_events(
         origin: crate::db::message_origin_interactive(),
         speaker_persona_id: None,
     };
+    let inbound_user_message_id = user_msg.id.clone();
     call_blocking(state.app_state.db.clone(), move |db| {
         db.store_message(&user_msg)
     })
@@ -2957,7 +3196,11 @@ async fn send_and_store_response_with_events(
             .publish(
                 run_id,
                 "message_stored",
-                json!({ "persona_id": persona_id }).to_string(),
+                json!({
+                    "persona_id": persona_id,
+                    "message_id": inbound_user_message_id,
+                })
+                .to_string(),
                 state.limits.run_history_limit,
             )
             .await;
@@ -2978,6 +3221,7 @@ async fn send_and_store_response_with_events(
             history_override: None,
             tool_iteration_cap: None,
             skip_recall: false,
+            inbound_user_message_id: Some(inbound_user_message_id),
         },
         None,
         images,
@@ -3889,6 +4133,8 @@ struct PersonaBulletinPatchBody {
     #[serde(default)]
     dense_delivery_enabled: Option<bool>,
     #[serde(default)]
+    user_message_rewrite_enabled: Option<bool>,
+    #[serde(default)]
     #[serde(deserialize_with = "deserialize_patch_field")]
     dense_delivery_messaging_max_chars: Option<Option<i64>>,
     #[serde(default)]
@@ -4239,6 +4485,7 @@ async fn bootstrap_chat_session_context(
             history_override: None,
             tool_iteration_cap: None,
             skip_recall: false,
+            inbound_user_message_id: None,
         },
         Some(&bootstrap_prompt),
         InboundImages::new(),
@@ -4985,6 +5232,7 @@ async fn api_persona_bulletin_get(
         "history_suffix": hs_json,
         "operator_memo": persona.as_ref().and_then(|p| p.operator_memo.clone()),
         "dense_delivery_enabled": persona.as_ref().map(|p| p.dense_delivery_enabled).unwrap_or(false),
+        "user_message_rewrite_enabled": persona.as_ref().map(|p| p.user_message_rewrite_enabled).unwrap_or(false),
         "dense_delivery": delivery_json,
         "agent_engine_override": persona.as_ref().and_then(|p| p.agent_engine_override.clone()),
         "agent_engine_global": global_engine.as_str(),
@@ -5011,6 +5259,7 @@ async fn api_persona_bulletin_patch(
         && body.recent_history_min_assistant.is_none()
         && body.operator_memo.is_none()
         && body.dense_delivery_enabled.is_none()
+        && body.user_message_rewrite_enabled.is_none()
         && body.dense_delivery_messaging_max_chars.is_none()
         && body.dense_delivery_web_max_chars.is_none()
         && body.dense_delivery_summary_chars.is_none()
@@ -5018,7 +5267,7 @@ async fn api_persona_bulletin_patch(
     {
         return Err((
             StatusCode::BAD_REQUEST,
-            "no fields to update (send recent_history_min_user, recent_history_min_assistant, operator_memo, dense_delivery_enabled, and/or agent_engine_override)"
+            "no fields to update (send recent_history_min_user, recent_history_min_assistant, operator_memo, dense_delivery_enabled, user_message_rewrite_enabled, and/or agent_engine_override)"
                 .into(),
         ));
     }
@@ -5103,10 +5352,16 @@ async fn api_persona_bulletin_patch(
     let mut engine_ov = current.agent_engine_override.clone();
     let mut patch_delivery = false;
     let mut patch_engine = false;
+    let mut patch_rewrite = false;
+    let mut rewrite_enabled = current.user_message_rewrite_enabled;
 
     if let Some(v) = body.dense_delivery_enabled {
         dense_enabled = v;
         patch_delivery = true;
+    }
+    if let Some(v) = body.user_message_rewrite_enabled {
+        rewrite_enabled = v;
+        patch_rewrite = true;
     }
     if let Some(v) = body.dense_delivery_messaging_max_chars {
         msg_max = v.filter(|n| *n > 0);
@@ -5157,6 +5412,9 @@ async fn api_persona_bulletin_patch(
                 web_max,
                 summary_chars,
             )?;
+        }
+        if patch_rewrite {
+            db.set_persona_user_message_rewrite(chat_id, pid, rewrite_enabled)?;
         }
         if patch_engine {
             db.set_persona_engine_override(chat_id, pid, engine_ov.as_deref())?;
@@ -6988,11 +7246,26 @@ struct PersonaExternalPathsBody {
     paths: Vec<String>,
 }
 
-fn persona_external_paths_json(persona_id: i64, paths: &[std::path::PathBuf]) -> serde_json::Value {
+fn persona_external_paths_json(
+    persona_id: i64,
+    paths: &[std::path::PathBuf],
+    workspace_root: &std::path::Path,
+) -> serde_json::Value {
+    let mut automatic_paths = Vec::new();
+    if crate::self_repo::workspace_disjoint_from_app(workspace_root) {
+        automatic_paths.push(workspace_root.to_string_lossy().to_string());
+        if let Some(app) = crate::self_repo::auto_approved_app_directory(workspace_root) {
+            let app_text = app.to_string_lossy().to_string();
+            if !automatic_paths.iter().any(|p| p == &app_text) {
+                automatic_paths.push(app_text);
+            }
+        }
+    }
     json!({
         "persona_id": persona_id,
         "env_key": crate::persona_external_paths::env_key(persona_id),
         "paths": paths.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+        "automatic_paths": automatic_paths,
     })
 }
 
@@ -7014,7 +7287,8 @@ async fn api_persona_external_paths_get(
         return Err((StatusCode::NOT_FOUND, "persona not found".into()));
     }
     let paths = state.app_state.persona_external_paths.paths_for(pid);
-    Ok(Json(persona_external_paths_json(pid, &paths)))
+    let workspace = state.app_state.config.workspace_root_absolute();
+    Ok(Json(persona_external_paths_json(pid, &paths, &workspace)))
 }
 
 async fn api_persona_external_paths_put(
@@ -7046,7 +7320,8 @@ async fn api_persona_external_paths_put(
         .persona_external_paths
         .set(pid, &body.paths)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-    Ok(Json(persona_external_paths_json(pid, &saved)))
+    let workspace = state.app_state.config.workspace_root_absolute();
+    Ok(Json(persona_external_paths_json(pid, &saved, &workspace)))
 }
 
 async fn api_personas_delete(
@@ -7210,6 +7485,10 @@ fn persona_todo_to_json(t: &crate::db::PersonaTodo) -> serde_json::Value {
         "position": t.position,
         "source_kind": t.source_kind,
         "source_ref": t.source_ref,
+        "auto_advance": t.auto_advance != 0,
+        "stage_run_id": t.stage_run_id,
+        "stage_outcome": t.stage_outcome,
+        "deploy_prompt": t.deploy_prompt,
     })
 }
 
@@ -7230,13 +7509,11 @@ async fn api_todos_list(
         .to_ascii_lowercase();
     let status_filter: Option<String> = match status_raw.as_str() {
         "all" => None,
-        "open" | "done" | "todo" | "doing" | "blocked" => Some(status_raw.clone()),
-        other => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("Invalid status '{other}'; use open, todo, doing, blocked, done, or all"),
-            ));
-        }
+        "open" | "done" => Some(status_raw.clone()),
+        other => match crate::db::normalize_board_status(other) {
+            Ok(status) => Some(status.to_string()),
+            Err(err) => return Err((StatusCode::BAD_REQUEST, err.to_string())),
+        },
     };
 
     let filter = status_filter.clone();
@@ -7281,6 +7558,9 @@ async fn api_todos_patch(
         after_position: body.after_position,
         actor_kind: "operator",
         actor_persona_id: None,
+        auto_advance: body.auto_advance,
+        completed: body.completed,
+        deploy_prompt: body.deploy_prompt,
     };
     let updated = call_blocking(state.app_state.db.clone(), move |db| {
         db.apply_board_patch(chat_id, todo_id, &patch)
@@ -7296,6 +7576,158 @@ async fn api_todos_patch(
         "ok": true,
         "todo": persona_todo_to_json(&todo),
     })))
+}
+
+async fn api_todos_create(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Json(body): Json<TodoCreateRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_auth(&headers, state.auth_token.as_deref())?;
+    let title = body.title.trim().to_string();
+    if title.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "title is required".into()));
+    }
+    let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
+    ensure_web_binding_for_universal(&state, chat_id).await?;
+    let requested_persona = body.persona_id.filter(|id| *id > 0);
+    let description = body
+        .description
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty());
+    let created = call_blocking(state.app_state.db.clone(), move |db| {
+        let persona_id = if let Some(pid) = requested_persona {
+            if !db.persona_exists(chat_id, pid)? {
+                return Err(crate::error::FinallyAValueBotError::ToolExecution(format!(
+                    "Persona {pid} does not exist for this chat"
+                )));
+            }
+            pid
+        } else {
+            db.get_current_persona_id(chat_id)?
+        };
+        db.add_persona_todo(chat_id, persona_id, &title, Some("board"))
+    })
+    .await
+    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let todo = if let Some(description) = description {
+        let todo_id = created.id;
+        let patch = crate::db_collab::BoardPatch {
+            status: None,
+            title: None,
+            description: Some(description),
+            owner_persona_id: None,
+            priority: None,
+            due_at: None,
+            blocked_reason: None,
+            position: None,
+            before_position: None,
+            after_position: None,
+            actor_kind: "operator",
+            actor_persona_id: None,
+            auto_advance: None,
+            completed: None,
+            deploy_prompt: None,
+        };
+        call_blocking(state.app_state.db.clone(), move |db| {
+            db.apply_board_patch(chat_id, todo_id, &patch)
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .unwrap_or(created)
+    } else {
+        created
+    };
+    Ok(Json(json!({
+        "ok": true,
+        "todo": persona_todo_to_json(&todo),
+    })))
+}
+
+async fn api_todos_events(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Path(path): Path<TodoPathParams>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_auth(&headers, state.auth_token.as_deref())?;
+    let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
+    ensure_web_binding_for_universal(&state, chat_id).await?;
+    let todo_id = path.id;
+    let events = call_blocking(state.app_state.db.clone(), move |db| {
+        db.list_board_item_events(chat_id, todo_id, 100)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let Some(events) = events else {
+        return Err((StatusCode::NOT_FOUND, "todo not found".into()));
+    };
+    let items: Vec<serde_json::Value> = events
+        .iter()
+        .map(|event| {
+            json!({
+                "id": event.id,
+                "from_status": event.from_status,
+                "to_status": event.to_status,
+                "actor_kind": event.actor_kind,
+                "actor_persona_id": event.actor_persona_id,
+                "at": event.at,
+            })
+        })
+        .collect();
+    Ok(Json(json!({
+        "ok": true,
+        "events": items,
+    })))
+}
+
+async fn api_todos_run(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Path(path): Path<TodoPathParams>,
+    Json(body): Json<TodoRunRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_auth(&headers, state.auth_token.as_deref())?;
+    let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
+    ensure_web_binding_for_universal(&state, chat_id).await?;
+    let todo_id = path.id;
+    let todo = call_blocking(state.app_state.db.clone(), move |db| {
+        db.get_persona_todo(todo_id)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let Some(mut todo) = todo.filter(|item| item.chat_id == chat_id) else {
+        return Err((StatusCode::NOT_FOUND, "todo not found".into()));
+    };
+    if let Some(prompt) = body.deploy_prompt {
+        let patch = crate::db_collab::BoardPatch {
+            status: None,
+            title: None,
+            description: None,
+            owner_persona_id: None,
+            priority: None,
+            due_at: None,
+            blocked_reason: None,
+            position: None,
+            before_position: None,
+            after_position: None,
+            actor_kind: "operator",
+            actor_persona_id: None,
+            auto_advance: None,
+            completed: None,
+            deploy_prompt: Some(prompt),
+        };
+        let updated = call_blocking(state.app_state.db.clone(), move |db| {
+            db.apply_board_patch(chat_id, todo_id, &patch)
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let Some(updated) = updated else {
+            return Err((StatusCode::NOT_FOUND, "todo not found".into()));
+        };
+        todo = updated;
+    }
+    let queued = start_board_stage(state, &todo, crate::board_pipeline::AUTO_CHAIN_BUDGET).await?;
+    Ok(Json(queued))
 }
 
 async fn api_schedules_create(
@@ -10092,6 +10524,7 @@ async fn api_settings_get(
     let mm_cfg = state.app_state.llm.local_delegate_config();
     let agent_engine = state.app_state.runtime_toggles.agent_engine();
     let local_delegate_ready = mm_cfg.local_routable();
+    let installation = env_config::installation_flags(&state).await;
     Ok(Json(json!({
         "ok": true,
         "settings": items,
@@ -10110,7 +10543,8 @@ async fn api_settings_get(
             "agent_engine": agent_engine.as_str(),
             "cost_routing_effective": crate::local_delegate::cost_routing_effective(agent_engine, &mm_cfg),
             "web_enabled": cfg.web_enabled,
-            "needs_initialization": env_config::installation_needs_initialization(&state).await,
+            "needs_initialization": installation.needs_initialization,
+            "workspace_configured": installation.workspace_configured,
             "requires_restart_for_env_changes": env_config::note_disk_changes(&state).await,
             "runtime_env_merge_from_app_settings": true,
             "llm_model_from_app_settings": true,
@@ -10689,7 +11123,11 @@ pub async fn bind_web_listener(
     host: &str,
     port: u16,
 ) -> Result<(tokio::net::TcpListener, u16), std::io::Error> {
-    let walk = port == crate::config::default_web_port();
+    let exact = std::env::var(crate::daemon::RESTART_EXACT_PORT_ENV)
+        .ok()
+        .as_deref()
+        == Some("1");
+    let walk = !exact && port == crate::config::default_web_port();
     let mut candidate = port;
     let bind_host = crate::config::web_bind_host(host);
     if bind_host != host.trim() {
@@ -11167,7 +11605,9 @@ fn build_router(web_state: WebState) -> Router {
             get(api_schedules_list).post(api_schedules_create),
         )
         .route("/api/schedules/:id", patch(api_schedules_update))
-        .route("/api/todos", get(api_todos_list))
+        .route("/api/todos", get(api_todos_list).post(api_todos_create))
+        .route("/api/todos/:id/run", post(api_todos_run))
+        .route("/api/todos/:id/events", get(api_todos_events))
         .route("/api/todos/:id", patch(api_todos_patch))
         .route("/api/background_jobs", get(api_background_jobs_list))
         .route("/api/background_jobs/:job_id", get(api_background_job_get))

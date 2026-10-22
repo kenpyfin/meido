@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { useIsMobile } from '@/lib/use-is-mobile'
 import React from 'react'
 
@@ -16,14 +16,28 @@ export type ScheduledRunItem = {
 
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>
 
+type PersonaRef = { id: number; name: string }
+
+function ownerName(personas: PersonaRef[], personaId: number): string {
+  const name = personas.find((p) => p.id === personaId)?.name?.trim()
+  return name ? name : `Persona #${personaId}`
+}
+
 export function ScheduleRunsPanel({
   api,
   chatId,
   taskId,
+  personas = [],
+  acknowledgeUnread = false,
+  onAcknowledged,
 }: {
   api: Api
   chatId: number | null
   taskId?: number
+  personas?: PersonaRef[]
+  /** All-runs view: mark every unread run read in one request. */
+  acknowledgeUnread?: boolean
+  onAcknowledged?: () => void
 }) {
   const [runs, setRuns] = React.useState<ScheduledRunItem[]>([])
   const [error, setError] = React.useState('')
@@ -32,20 +46,29 @@ export function ScheduleRunsPanel({
     output: string
     status: string
     error: string | null
+    owner: string
   } | null>(null)
   const [loadingId, setLoadingId] = React.useState<number | null>(null)
   const mobile = useIsMobile()
+
+  const onAcknowledgedRef = React.useRef(onAcknowledged)
+  onAcknowledgedRef.current = onAcknowledged
 
   const load = React.useCallback(async () => {
     if (chatId == null) {
       setRuns([])
       return
     }
+    if (acknowledgeUnread) {
+      const readParams = new URLSearchParams({ chat_id: String(chatId) })
+      await api(`/api/schedules/runs/read?${readParams.toString()}`, { method: 'POST' })
+      onAcknowledgedRef.current?.()
+    }
     const params = new URLSearchParams({ chat_id: String(chatId), limit: '20' })
     if (taskId != null) params.set('task_id', String(taskId))
     const data = await api<{ runs?: ScheduledRunItem[] }>(`/api/schedules/runs?${params.toString()}`)
     setRuns(Array.isArray(data.runs) ? data.runs : [])
-  }, [api, chatId, taskId])
+  }, [acknowledgeUnread, api, chatId, taskId])
 
   React.useEffect(() => {
     setSelected(null)
@@ -56,9 +79,17 @@ export function ScheduleRunsPanel({
   async function openRun(id: number): Promise<void> {
     setLoadingId(id)
     setError('')
+    const listed = runs.find((row) => row.id === id)
+    const owner = ownerName(personas, listed?.persona_id ?? 0)
     try {
       const data = await api<{
-        run?: { id: number; output?: string | null; status: string; error?: string | null }
+        run?: {
+          id: number
+          persona_id?: number
+          output?: string | null
+          status: string
+          error?: string | null
+        }
       }>(`/api/schedules/runs/${id}`)
       const run = data.run
       setSelected({
@@ -66,6 +97,7 @@ export function ScheduleRunsPanel({
         output: run?.output ?? '',
         status: run?.status ?? '',
         error: run?.error ?? null,
+        owner: run?.persona_id != null ? ownerName(personas, run.persona_id) : owner,
       })
       setRuns((prev) => prev.map((row) => (row.id === id ? { ...row, read: true } : row)))
     } catch (e) {
@@ -75,17 +107,27 @@ export function ScheduleRunsPanel({
     }
   }
 
-  const runPage = mobile && selected ? (
+  const runPage = selected ? (
     <Dialog open onOpenChange={(open) => { if (!open) setSelected(null) }}>
       <DialogContent
-        className="inset-0 top-0 left-0 flex h-[100dvh] max-h-[100dvh] w-full max-w-none translate-x-0 translate-y-0 flex-col gap-3 rounded-none"
-        style={{ inset: 0, transform: 'none', width: '100%', maxWidth: 'none', height: '100dvh', maxHeight: '100dvh', borderRadius: 0 }}
+        className={mobile
+          ? 'mc-run-sheet inset-0 top-0 left-0 z-[60] flex h-[100dvh] max-h-[100dvh] w-full max-w-none translate-x-0 translate-y-0 flex-col gap-3 rounded-none'
+          : 'mc-run-sheet z-[60] flex max-h-[min(80dvh,720px)] w-[min(92vw,640px)] max-w-[640px] flex-col gap-3 sm:max-w-[640px]'}
+        style={mobile
+          ? { inset: 0, transform: 'none', width: '100%', maxWidth: 'none', height: '100dvh', maxHeight: '100dvh', borderRadius: 0 }
+          : undefined}
       >
-        <Button type="button" variant="outline" size="sm" className="self-start" onClick={() => setSelected(null)}>
-          Back
-        </Button>
-        <DialogTitle>Run #{selected.id}</DialogTitle>
-        <p className="m-0 text-sm text-muted-foreground">{selected.status}</p>
+        {mobile ? (
+          <Button type="button" variant="outline" size="sm" className="self-start" onClick={() => setSelected(null)}>
+            Back
+          </Button>
+        ) : null}
+        <div className="mc-run-sheet-header flex flex-col gap-1">
+          <DialogTitle>Run #{selected.id}</DialogTitle>
+          <DialogDescription>
+            Owner {selected.owner} · {selected.status}
+          </DialogDescription>
+        </div>
         {selected.error ? <p role="alert" className="m-0 text-sm text-destructive">{selected.error}</p> : null}
         <pre className="m-0 min-h-0 flex-1 overflow-auto whitespace-pre-wrap font-mono text-xs">{selected.output || '(no output)'}</pre>
       </DialogContent>
@@ -108,7 +150,7 @@ export function ScheduleRunsPanel({
                 onClick={() => void openRun(run.id)}
               >
                 <span>
-                  #{run.id} · task #{run.task_id} · {run.status}
+                  #{run.id} · Owner {ownerName(personas, run.persona_id)} · task #{run.task_id} · {run.status}
                   {run.read ? '' : ' · unread'}
                   {loadingId === run.id ? ' · opening…' : ''}
                 </span>
@@ -119,20 +161,6 @@ export function ScheduleRunsPanel({
           ))}
         </ul>
       )}
-      {!mobile && selected ? (
-        <div className="max-h-64 overflow-auto rounded-md border p-2">
-          <div className="mb-1 flex items-center justify-between gap-2">
-            <span className="text-xs font-semibold">
-              Run #{selected.id} · {selected.status}
-            </span>
-            <Button size="sm" variant="secondary" onClick={() => setSelected(null)}>
-              Hide
-            </Button>
-          </div>
-          {selected.error ? <p className="m-0 mb-2 text-xs text-red-500">{selected.error}</p> : null}
-          <pre className="m-0 whitespace-pre-wrap font-mono text-xs">{selected.output || '(no output)'}</pre>
-        </div>
-      ) : null}
     </div>
   )
 }

@@ -37,10 +37,11 @@ pub enum SystemLlmJob {
     PromptHooks,
     Checks,
     Learn,
+    UserMessageRewrite,
 }
 
 impl SystemLlmJob {
-    pub const ALL: [SystemLlmJob; 9] = [
+    pub const ALL: [SystemLlmJob; 10] = [
         Self::TopicSplit,
         Self::Bulletin,
         Self::GroupSpeaker,
@@ -50,6 +51,7 @@ impl SystemLlmJob {
         Self::PromptHooks,
         Self::Checks,
         Self::Learn,
+        Self::UserMessageRewrite,
     ];
 
     pub fn id(self) -> &'static str {
@@ -63,6 +65,7 @@ impl SystemLlmJob {
             Self::PromptHooks => "prompt_hooks",
             Self::Checks => "checks",
             Self::Learn => "learn",
+            Self::UserMessageRewrite => "user_message_rewrite",
         }
     }
 
@@ -81,6 +84,7 @@ impl SystemLlmJob {
             Self::PromptHooks => "Prompt hooks",
             Self::Checks => "Post-tool check and delivery check",
             Self::Learn => "Learn and optimize",
+            Self::UserMessageRewrite => "User message rewrite",
         }
     }
 
@@ -101,6 +105,9 @@ impl SystemLlmJob {
             }
             Self::Checks => "Scores a tool round and the reply before send. One pair for both checks.",
             Self::Learn => "Reads an agent trace and writes the optimization note.",
+            Self::UserMessageRewrite => {
+                "Rewrites the inbound user message using the context-depth window and memory. The rewritten text is stored and shown in the chat. A missing pair keeps the original."
+            }
         }
     }
 
@@ -115,6 +122,7 @@ impl SystemLlmJob {
             Self::PromptHooks => "SYSTEM_LLM_PROMPT_HOOKS_PROVIDER",
             Self::Checks => "SYSTEM_LLM_CHECKS_PROVIDER",
             Self::Learn => "SYSTEM_LLM_LEARN_PROVIDER",
+            Self::UserMessageRewrite => "SYSTEM_LLM_USER_MESSAGE_REWRITE_PROVIDER",
         }
     }
 
@@ -129,6 +137,7 @@ impl SystemLlmJob {
             Self::PromptHooks => "SYSTEM_LLM_PROMPT_HOOKS_MODEL",
             Self::Checks => "SYSTEM_LLM_CHECKS_MODEL",
             Self::Learn => "SYSTEM_LLM_LEARN_MODEL",
+            Self::UserMessageRewrite => "SYSTEM_LLM_USER_MESSAGE_REWRITE_MODEL",
         }
     }
 }
