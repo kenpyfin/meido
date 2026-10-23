@@ -20,7 +20,7 @@ use super::{
     history_to_claude_messages, latest_user_text, latest_user_text_from_message,
     load_messages_from_db, sops_prompt_sections, split_trailing_user_request,
     trim_to_recent_balanced, trim_to_token_budget, user_request_is_conversational,
-    workspace_data_path_display, AgentRequestContext, AppState,
+    workspace_data_path_display, AgentRequestContext, AppState, EMPTY_USER_REQUEST,
 };
 
 /// Session block shared by the classic loop and `prepare_agent_run`.
@@ -278,7 +278,7 @@ pub async fn prepare_agent_run(
 
     let (history_messages, current_request) = split_trailing_user_request(messages);
     let Some(current_request) = current_request else {
-        return Err(anyhow::anyhow!("I didn't receive any message to process."));
+        return Err(anyhow::anyhow!(EMPTY_USER_REQUEST));
     };
 
     let bulletin_focus_for_prompt = call_blocking(state.db.clone(), {

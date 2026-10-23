@@ -357,8 +357,12 @@ struct SendRequest {
     #[serde(default)]
     session_id: Option<String>,
     /// When set, another persona answers this turn inside the host chat.
+    /// Kept for older clients. `guest_persona_ids` is the list the web UI sends.
     #[serde(default)]
     guest_persona_id: Option<i64>,
+    /// Tagged personas, in the order they should answer. The host does not answer.
+    #[serde(default)]
+    guest_persona_ids: Vec<i64>,
     #[serde(default)]
     attachments: Vec<SendAttachmentRequest>,
 }
@@ -1460,6 +1464,7 @@ async fn start_board_stage_inner(
         message: crate::board_pipeline::build_stage_prompt(todo),
         session_id,
         guest_persona_id: None,
+        guest_persona_ids: Vec::new(),
         attachments: Vec::new(),
     };
     enqueue_persona_turn(
@@ -1512,6 +1517,33 @@ async fn api_send_stream(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     };
+    let guest_ids =
+        crate::collab::guest::ordered_guest_ids(body.guest_persona_id, &body.guest_persona_ids);
+    if !guest_ids.is_empty() {
+        let db = state.app_state.db.clone();
+        let host_id = persona_id_queue;
+        let chat_for_guests = chat_id;
+        let checked = call_blocking(db, move |db| {
+            Ok(crate::collab::guest::validate_guest_ids(
+                db,
+                chat_for_guests,
+                host_id,
+                &guest_ids,
+            ))
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if let Err(msg) = checked {
+            state.request_hub.end_with_limits(&key, &state.limits).await;
+            state.run_hub.remove_later(run_id, 0).await;
+            let status = if msg.starts_with("Database error") {
+                StatusCode::INTERNAL_SERVER_ERROR
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            return Err((status, msg));
+        }
+    }
     let queue_label = text.chars().take(120).collect::<String>();
     let abort_hook = {
         let db = state.app_state.db.clone();
@@ -1718,6 +1750,32 @@ async fn api_send_stream(
             {
                 Ok(resp) => {
                     let v = resp.0;
+                    if let Some(err) = v.get("guest_error") {
+                        let name = err
+                            .get("persona_name")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("A tagged persona");
+                        let reason = err
+                            .get("error")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("the guest turn failed");
+                        let reason = reason.trim().trim_end_matches('.');
+                        state_for_task
+                            .run_hub
+                            .publish(
+                                &run_id_for_task,
+                                "error",
+                                json!({
+                                    "error": format!("{name} could not answer: {reason}. Nothing else ran."),
+                                    "kind": "guest",
+                                    "persona_id": err.get("persona_id").cloned().unwrap_or(serde_json::Value::Null),
+                                    "persona_name": name,
+                                })
+                                .to_string(),
+                                limits.run_history_limit,
+                            )
+                            .await;
+                    } else {
                     if let Some(jid) = v.get("background_job_id").and_then(|x| x.as_str()) {
                         if !jid.is_empty() {
                             state_for_task
@@ -1755,6 +1813,7 @@ async fn api_send_stream(
                             limits.run_history_limit,
                         )
                         .await;
+                    }
                 }
                 Err((_, err_msg)) => {
                     state_for_task
@@ -2985,6 +3044,29 @@ async fn api_background_job_cancel(
     Ok(Json(json!({ "ok": true })))
 }
 
+fn guest_turn_failure(
+    chat_id: i64,
+    persona_id: i64,
+    prompt: &str,
+    guest_id: Option<i64>,
+    guest_name: &str,
+    error: String,
+) -> Json<serde_json::Value> {
+    Json(json!({
+        "ok": false,
+        "chat_id": chat_id,
+        "persona_id": persona_id,
+        "prompt": prompt,
+        "response": "",
+        "background_job_queued": false,
+        "guest_error": {
+            "persona_id": guest_id,
+            "persona_name": guest_name,
+            "error": error,
+        }
+    }))
+}
+
 async fn send_and_store_response_with_events(
     state: WebState,
     body: SendRequest,
@@ -3172,23 +3254,38 @@ async fn send_and_store_response_with_events(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    if let Some(guest_persona_id) = body.guest_persona_id {
-        // Guest replies are stored on the host transcript, then the host turn continues
-        // so the stream still belongs to the host run.
-        if let Err(e) = crate::collab::guest::run_guest_turn(
-            state.app_state.clone(),
-            chat_id,
-            persona_id,
-            guest_persona_id,
-            body.session_id.clone(),
-            &text,
-            cancel.clone(),
-        )
+    let guest_ids =
+        crate::collab::guest::ordered_guest_ids(body.guest_persona_id, &body.guest_persona_ids);
+    let guests = if guest_ids.is_empty() {
+        Vec::new()
+    } else {
+        let db = state.app_state.db.clone();
+        let host_id = persona_id;
+        let chat_for_guests = chat_id;
+        let checked = call_blocking(db, move |db| {
+            Ok(crate::collab::guest::validate_guest_ids(
+                db,
+                chat_for_guests,
+                host_id,
+                &guest_ids,
+            ))
+        })
         .await
-        {
-            warn!(target: "collab", chat_id, error = %e, "guest turn failed");
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        match checked {
+            Ok(list) => list,
+            Err(msg) => {
+                return Ok(guest_turn_failure(
+                    chat_id,
+                    persona_id,
+                    &raw_text,
+                    None,
+                    "A tagged persona",
+                    msg,
+                ));
+            }
         }
-    }
+    };
 
     if let Some(run_id) = run_key {
         state
@@ -3204,6 +3301,86 @@ async fn send_and_store_response_with_events(
                 state.limits.run_history_limit,
             )
             .await;
+    }
+
+    if !guests.is_empty() {
+        // Tagged personas answer in order. The host turn does not run.
+        let total = guests.len();
+        let mut replies = Vec::with_capacity(total);
+        for (index, guest) in guests.iter().enumerate() {
+            if cancel
+                .as_ref()
+                .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
+            {
+                return Ok(guest_turn_failure(
+                    chat_id,
+                    persona_id,
+                    &raw_text,
+                    Some(guest.id),
+                    &guest.name,
+                    "Cancelled".into(),
+                ));
+            }
+            let position = index + 1;
+            if let Some(run_id) = run_key {
+                state
+                    .run_hub
+                    .publish(
+                        run_id,
+                        "status",
+                        json!({
+                            "message": format!(
+                                "{} is answering ({position} of {total})",
+                                guest.name
+                            )
+                        })
+                        .to_string(),
+                        state.limits.run_history_limit,
+                    )
+                    .await;
+            }
+            match crate::collab::guest::run_guest_turn(
+                state.app_state.clone(),
+                chat_id,
+                persona_id,
+                guest.id,
+                body.session_id.clone(),
+                &text,
+                position,
+                total,
+                cancel.clone(),
+            )
+            .await
+            {
+                Ok(reply) => replies.push(format!("[Guest: {}]\n{reply}", guest.name)),
+                Err(error) => {
+                    warn!(
+                        target: "collab",
+                        chat_id,
+                        guest_persona_id = guest.id,
+                        error = %error,
+                        "guest turn failed"
+                    );
+                    return Ok(guest_turn_failure(
+                        chat_id,
+                        persona_id,
+                        &raw_text,
+                        Some(guest.id),
+                        &guest.name,
+                        error,
+                    ));
+                }
+            }
+        }
+        return Ok(Json(json!({
+            "ok": true,
+            "chat_id": chat_id,
+            "persona_id": persona_id,
+            "prompt": raw_text,
+            "response": replies.join("\n\n"),
+            "background_job_queued": false,
+            "background_job_id": serde_json::Value::Null,
+        })));
     }
 
     let agent_result = process_with_agent_with_events(

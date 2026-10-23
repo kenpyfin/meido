@@ -1,21 +1,73 @@
-# Meido
+<p align="center">
+  <img src="web/public/meido-crest.svg" alt="Meido crest" width="180">
+</p>
 
-Finally a helpful one.
+<h1 align="center">Meido</h1>
 
-Meido is an agentic assistant with a web-first operator UI. Telegram, Discord, WhatsApp and WeCom are optional delivery channels. It has direct access to your local workspace, tools, and Obsidian vault.
+<p align="center"><strong>A personal agent operating system built beyond single-thread chatbots.</strong></p>
 
-## Key Features
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="README.zh-CN.md">简体中文</a> ·
+  <a href="README.ja.md">日本語</a>
+</p>
 
-- **Agentic Loop**: Autonomous reasoning using LLMs (Claude, GPT, etc.).
-- **Local Workspace**: Access to your files, bash, and browser.
-- **Obsidian Integration**: Uses your vault as a knowledge base with semantic search.
-- **Skill System**: Extensible with custom instructions and tools.
-- **Multi-Channel**: Syncs conversations across Telegram, Discord, WhatsApp, and Web.
-- **Self-Indexing**: Automatically schedules vault indexing and updates.
+Meido gives personal agents continuity: what matters now, what happened before, what your
+knowledge base knows, and which operating procedures must govern the next action. Instead of
+isolated prompt-and-response sessions, it combines multi-dimensional context management,
+durable execution, and one operator-controlled runtime.
+
+One Rust runtime orchestrates **40+ modular skills**, **35+ MCP tools**, scheduled jobs, and
+multiple agent engines across the web and chat. Every channel enters the same agent path, so
+memory, permissions, safety policy, and traceability stay consistent.
+
+## Why Meido
+
+Most assistants reset at the edge of a chat window. Meido maintains a working context system:
+
+- **Three-tier session memory** — durable identity and principles, active projects, and recent
+  focus are stored separately so short-term noise does not overwrite long-term context.
+- **MemPalace recall** — semantic retrieval brings back relevant knowledge without stuffing the
+  entire archive into every prompt.
+- **Bulletin focus** — each persona carries a concise, visible statement of what matters now.
+- **Obsidian knowledge vault** — Markdown remains human-readable, portable, and directly
+  editable; Meido can search, index, and work with it.
+- **Traceable agent history** — append-only memory events and run artifacts make agent behavior
+  inspectable instead of opaque.
+
+## One runtime, many surfaces
+
+- **Shared agent path** — web, Telegram, Discord, WhatsApp, WeCom, and scheduled jobs resolve to
+  the same orchestration entry point.
+- **Multiple agent engines** — run Classic, Cursor, or Gemini ADK per persona while preserving
+  the same surrounding context and controls.
+- **Modular capability layer** — activate skills only when needed and connect MCP servers without
+  building a separate bot for every workflow.
+- **Scheduled and background work** — recurring jobs and long-running tasks use the same personas,
+  memory, tools, and delivery paths as live conversations.
+- **Web operator cockpit** — manage personas, models, channels, hooks, skills, schedules, memory,
+  and system status from one interface.
+
+## Safety is part of the operating system
+
+Meido does not treat safety as a prompt suffix. Vault SOPs are injected into agent context,
+tool access is authorized server-side, secrets stay masked and redacted, paths are scoped per
+persona, and consequential work remains reviewable through agent history and artifacts.
+
+## Core capabilities
+
+- Local workspace access for files, shell commands, browser work, and repository-aware editing
+- Obsidian vault search, semantic recall, self-indexing, and Markdown-native knowledge
+- Persona-specific memory, models, hooks, skills, permissions, and external paths
+- Multi-persona collaboration, guest turns, a shared board, and background handoffs
+- Provider support for Anthropic, OpenAI, Gemini, local models, and other configured connectors
+- Cross-channel delivery through Web, Telegram, Discord, WhatsApp, and WeCom
+- Cron-style scheduling, background jobs, status tracking, and result delivery
+- Extensible skills and MCP tooling with SOP-enforced operational guardrails
 
 ## Quick Start
 
-Meido is its own app. The command is `meido`. It does not replace or share a service with Finally a Value Bot. Prefer `MEIDO_*` environment keys.
+The command is `meido`.
 
 ### 1. Install the binary
 

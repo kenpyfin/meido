@@ -11,10 +11,10 @@ import { CockpitBar } from '../components/cockpit-bar'
 import { CommandPalette, useCommandPaletteOpenState } from '../components/command-palette'
 import { SessionSidebar } from '../components/session-sidebar'
 import { readSidebarMode, SIDEBAR_MODE_TITLES, writeSidebarMode, type SidebarMode } from './sidebar-mode'
-import { matchGuestPersona } from '../lib/guest-mention'
+import { GUEST_MAX_PER_TURN, GUEST_TURN_CAP_NOTICE, parseGuestMentions } from '../lib/guest-mention'
 import { SubthreadSidePane } from '../components/subthread-side-pane'
 import { SideChatOverlay, useNarrowViewport } from '../components/side-chat-overlay'
-import { ThreadPane } from '../components/thread-pane'
+import { ThreadPane, type ComposerNotice } from '../components/thread-pane'
 import { TopicFocusView } from '../components/topic-focus-view'
 import { TopicSessionAction } from '../components/topic-session-action'
 import { TopicOutlineRail } from '../components/topic-outline-rail'
@@ -509,6 +509,28 @@ export function App({
     setDraftByThreadKey,
     setPendingReplyByThreadKey,
   } = chat
+
+  const [composerAlert, setComposerAlert] = useState<string | null>(null)
+  const alertDraftRef = useRef<string | null>(null)
+  const showComposerAlert = useCallback((text: string, draft: string) => {
+    alertDraftRef.current = draft
+    setComposerAlert(text)
+  }, [])
+  const onComposerDraftChange = useCallback((text: string) => {
+    if (alertDraftRef.current != null && text !== alertDraftRef.current) {
+      alertDraftRef.current = null
+      setComposerAlert(null)
+    }
+    handleDraftTextChange(text)
+  }, [handleDraftTextChange])
+  const composerNotice = useMemo<ComposerNotice | null>(
+    () => (composerAlert ? { tone: 'alert', text: composerAlert } : null),
+    [composerAlert],
+  )
+  useEffect(() => {
+    alertDraftRef.current = null
+    setComposerAlert(null)
+  }, [activePersonaId])
 
   const side = useSideChats({
     activePersonaId,
@@ -1218,13 +1240,38 @@ export function App({
           if (activePersonaId != null && activePersonaId > 0) sendBody.persona_id = activePersonaId
           if (activeSessionIdRef.current) (sendBody as Record<string, unknown>).session_id = activeSessionIdRef.current
           if (attachments.length > 0) sendBody.attachments = attachments
-          const guestPersonaId = matchGuestPersona(messageText, personasRef.current, activePersonaId)
-          if (guestPersonaId != null) (sendBody as Record<string, unknown>).guest_persona_id = guestPersonaId
-          const sendResponse = await api<{ run_id?: string }>('/api/send_stream', {
-            method: 'POST',
-            body: JSON.stringify(sendBody),
-            signal: options.abortSignal,
-          })
+          const guestMentions = parseGuestMentions(messageText, personasRef.current, activePersonaId)
+          if (guestMentions.speakers.length > GUEST_MAX_PER_TURN) {
+            const threadKey = `${chatId ?? 0}:${activePersonaId ?? 0}`
+            setDraftByThreadKey((prev) => ({ ...prev, [threadKey]: messageText }))
+            showComposerAlert(GUEST_TURN_CAP_NOTICE, messageText)
+            setStatusText('Idle')
+            return
+          }
+          if (guestMentions.speakers.length > 0) {
+            (sendBody as Record<string, unknown>).guest_persona_ids = guestMentions.speakers.map(
+              (speaker) => speaker.id,
+            )
+          }
+          let sendResponse: { run_id?: string }
+          try {
+            sendResponse = await api<{ run_id?: string }>('/api/send_stream', {
+              method: 'POST',
+              body: JSON.stringify(sendBody),
+              signal: options.abortSignal,
+            })
+          } catch (e) {
+            if (options.abortSignal.aborted) {
+              setStatusText('Idle')
+              return
+            }
+            const msg = e instanceof Error ? e.message : String(e)
+            const threadKey = `${chatId ?? 0}:${activePersonaId ?? 0}`
+            setDraftByThreadKey((prev) => ({ ...prev, [threadKey]: messageText }))
+            showComposerAlert(msg, messageText)
+            setStatusText('Idle')
+            return
+          }
 
           const runId = sendResponse.run_id
           if (!runId) {
@@ -1451,13 +1498,29 @@ export function App({
               }
 
               if (evt.event === 'error') {
+                completedOrError = true
+                const obj = parseJsonObject(evt.data)
+                const errorText = typeof obj?.error === 'string' ? obj.error : 'unknown error'
+                if (obj?.kind === 'guest') {
+                  showComposerAlert(errorText, '')
+                  setPendingRuns((prev) => prev.filter((r) => r.runId !== runId))
+                  setStatusText('Error')
+                  if (chatIdForRun != null) {
+                    try {
+                      await loadHistory(chatIdForRun, personaIdForRun ?? undefined)
+                      if (personaIdForRun != null && personaIdForRun > 0) {
+                        await loadPersonaBulletin(personaIdForRun)
+                      }
+                    } catch {
+                      // History sync failed; the composer notice still names the failure.
+                    }
+                  }
+                  break
+                }
                 if (pendingDelta) {
                   yield { content: [{ type: 'text', text: pendingDelta }] }
                   pendingDelta = ''
                 }
-                completedOrError = true
-                const obj = parseJsonObject(evt.data)
-                const errorText = typeof obj?.error === 'string' ? obj.error : 'unknown error'
                 if (!seenAnyDelta) {
                   yield { content: [{ type: 'text', text: `Error: ${errorText}` }] }
                 }
@@ -1515,7 +1578,7 @@ export function App({
         }
       },
     }),
-    [chatId, selectedSessionReadOnly, activePersonaId, formatReplyForSend, historyMode, jumpToLatest, loadHistory, loadPersonaBulletin, invalidateOps],
+    [chatId, selectedSessionReadOnly, activePersonaId, formatReplyForSend, historyMode, jumpToLatest, loadHistory, loadPersonaBulletin, invalidateOps, setDraftByThreadKey, showComposerAlert],
   )
 
   const toggleAppearance = useCallback((): void => {
@@ -2601,7 +2664,8 @@ export function App({
                       onLoadNewer={loadNewer}
                       onJumpToLatest={jumpToLatest}
                       draftText={activeDraftText}
-                      onDraftTextChange={handleDraftTextChange}
+                      onDraftTextChange={onComposerDraftChange}
+                      composerNotice={composerNotice}
                       bookmarkedMessageIds={bookmarkedMessageIds}
                       onToggleBookmark={toggleMessageBookmark}
                       onReplyToMessage={handleReplyToMessage}

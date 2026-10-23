@@ -2,7 +2,15 @@ import React from 'react'
 import { flushSync } from 'react-dom'
 import { ThreadHistorySkeleton } from './skeleton'
 import { IconCopy, IconPencil, IconReply, IconSideChat, IconSplit, IconStar, IconTrash } from './icons'
-import { mentionQuery, type MentionPersona } from '../lib/guest-mention'
+import {
+  GUEST_TURN_CAP_NOTICE,
+  GUEST_MAX_PER_TURN,
+  guestTurnNotice,
+  mentionQuery,
+  parseGuestMentions,
+  type GuestMentionRange,
+  type MentionPersona,
+} from '../lib/guest-mention'
 import {
   AssistantRuntimeProvider,
   CompositeAttachmentAdapter,
@@ -143,6 +151,8 @@ function MessageTimestamp({ align }: { align: 'left' | 'right' }) {
   )
 }
 
+export type ComposerNotice = { tone: 'muted' | 'alert'; text: string }
+
 type ThreadPaneUiContextValue = {
   bookmarkedMessageIds?: Set<string>
   onToggleBookmark?: (messageId: string, role: 'user' | 'assistant') => void
@@ -166,6 +176,7 @@ type ThreadPaneUiContextValue = {
   onSplitTopic?: (messageId: string) => void
   mentionPersonas?: MentionPersona[]
   hostPersonaId?: number | null
+  composerNotice?: ComposerNotice | null
   rewrittenMessages?: Record<string, { original: string; rewritten: string }>
 }
 
@@ -192,6 +203,7 @@ const ThreadPaneUiContext = React.createContext<ThreadPaneUiContextValue>({
   onSplitTopic: undefined,
   mentionPersonas: undefined,
   hostPersonaId: null,
+  composerNotice: null,
   rewrittenMessages: undefined,
 })
 
@@ -985,6 +997,7 @@ export type ThreadPaneProps = {
   onSplitTopic?: (messageId: string) => void
   mentionPersonas?: MentionPersona[]
   hostPersonaId?: number | null
+  composerNotice?: ComposerNotice | null
   rewrittenMessages?: Record<string, { original: string; rewritten: string }>
   /** Replaces the transcript viewport. */
   focusSlot?: React.ReactNode
@@ -1048,9 +1061,89 @@ function PrependScrollLock({
   return null
 }
 
+function mentionMirrorNodes(text: string, ranges: GuestMentionRange[]): React.ReactNode[] {
+  const nodes: React.ReactNode[] = []
+  let cursor = 0
+  ranges.forEach((range, index) => {
+    if (range.start > cursor) nodes.push(text.slice(cursor, range.start))
+    nodes.push(
+      <mark key={index} className="mc-mention">
+        {text.slice(range.start, range.end)}
+      </mark>,
+    )
+    cursor = range.end
+  })
+  if (cursor < text.length) nodes.push(text.slice(cursor))
+  if (text.endsWith('\n')) nodes.push('\n')
+  return nodes
+}
+
+function syncMentionMirror(area: HTMLTextAreaElement, mirror: HTMLDivElement) {
+  const style = window.getComputedStyle(area)
+  mirror.style.font = style.font
+  mirror.style.lineHeight = style.lineHeight
+  mirror.style.letterSpacing = style.letterSpacing
+  mirror.style.paddingTop = style.paddingTop
+  mirror.style.paddingRight = style.paddingRight
+  mirror.style.paddingBottom = style.paddingBottom
+  mirror.style.paddingLeft = style.paddingLeft
+  mirror.style.borderTopWidth = style.borderTopWidth
+  mirror.style.borderRightWidth = style.borderRightWidth
+  mirror.style.borderBottomWidth = style.borderBottomWidth
+  mirror.style.borderLeftWidth = style.borderLeftWidth
+  mirror.style.borderStyle = 'solid'
+  mirror.style.borderColor = 'transparent'
+  mirror.style.boxSizing = style.boxSizing
+  mirror.style.width = `${area.offsetWidth}px`
+  mirror.style.whiteSpace = 'pre-wrap'
+  mirror.style.overflowWrap = style.overflowWrap || 'break-word'
+  mirror.style.wordBreak = style.wordBreak
+  mirror.scrollTop = area.scrollTop
+}
+
+function MentionComposerInput({ text, ranges }: { text: string; ranges: GuestMentionRange[] }) {
+  const mirrorRef = React.useRef<HTMLDivElement>(null)
+  const areaRef = React.useRef<HTMLTextAreaElement>(null)
+
+  React.useLayoutEffect(() => {
+    const area = areaRef.current
+    const mirror = mirrorRef.current
+    if (!area || !mirror) return
+    const sync = () => syncMentionMirror(area, mirror)
+    sync()
+    const observer = new ResizeObserver(sync)
+    observer.observe(area)
+    return () => observer.disconnect()
+  }, [text, ranges])
+
+  return (
+    <div className="mc-composer-input-wrap">
+      <div className="mc-mention-mirror" aria-hidden="true" ref={mirrorRef}>
+        {mentionMirrorNodes(text, ranges)}
+      </div>
+      <Composer.Input
+        ref={areaRef}
+        autoFocus
+        unstable_focusOnScrollToBottom={false}
+        onScroll={(event) => {
+          const mirror = mirrorRef.current
+          if (mirror) mirror.scrollTop = event.currentTarget.scrollTop
+        }}
+      />
+    </div>
+  )
+}
+
 function DraftAwareComposer() {
-  const { draftText, draftScopeKey, onDraftTextChange, uploadHint, mentionPersonas, hostPersonaId } =
-    React.useContext(ThreadPaneUiContext)
+  const {
+    draftText,
+    draftScopeKey,
+    onDraftTextChange,
+    uploadHint,
+    mentionPersonas,
+    hostPersonaId,
+    composerNotice,
+  } = React.useContext(ThreadPaneUiContext)
   const aui = useAui()
   const composerText = useAuiState(({ composer }) => composer.text)
   const syncRef = React.useRef(createDraftSyncState())
@@ -1088,10 +1181,21 @@ function DraftAwareComposer() {
   }, [applySync, composerText])
 
   const query = mentionQuery(composerText)
-  const suggestions = (mentionPersonas ?? [])
+  const personas = mentionPersonas ?? []
+  const suggestions = personas
     .filter((persona) => persona.id !== hostPersonaId)
     .filter((persona) => query != null && persona.name.toLowerCase().startsWith(query.toLowerCase()))
     .slice(0, 6)
+  const parsed = parseGuestMentions(composerText, personas, hostPersonaId ?? null)
+  const hostName = personas.find((persona) => persona.id === hostPersonaId)?.name ?? null
+  const overCap = parsed.speakers.length > GUEST_MAX_PER_TURN
+  const localNotice: ComposerNotice | null = overCap
+    ? { tone: 'alert', text: GUEST_TURN_CAP_NOTICE }
+    : (() => {
+        const text = guestTurnNotice(parsed.speakers, hostName)
+        return text ? { tone: 'muted', text } : null
+      })()
+  const notice = composerNotice ?? localNotice
 
   return (
     <ComposerPrimitive.AttachmentDropzone
@@ -1124,11 +1228,23 @@ function DraftAwareComposer() {
           ))}
         </div>
       ) : null}
+      {notice ? (
+        <div
+          className={
+            notice.tone === 'alert'
+              ? 'mc-composer-notice mc-composer-notice-alert'
+              : 'mc-composer-notice'
+          }
+          role={notice.tone === 'alert' ? 'alert' : 'status'}
+        >
+          {notice.text}
+        </div>
+      ) : null}
       {/* Custom composer so scroll-to-latest does not focus the textarea (opens mobile keyboard). */}
       <Composer.Root>
         <Composer.Attachments />
         <Composer.AddAttachment />
-        <Composer.Input autoFocus unstable_focusOnScrollToBottom={false} />
+        <MentionComposerInput text={composerText} ranges={parsed.ranges} />
         <Composer.Action />
       </Composer.Root>
       {uploadHint ? (
@@ -1185,6 +1301,7 @@ export const ThreadPane = React.memo(function ThreadPane({
   onSplitTopic,
   mentionPersonas,
   hostPersonaId = null,
+  composerNotice = null,
   rewrittenMessages,
   focusSlot = null,
   composerSlot = null,
@@ -1355,6 +1472,7 @@ export const ThreadPane = React.memo(function ThreadPane({
       onSplitTopic,
       mentionPersonas,
       hostPersonaId,
+      composerNotice,
       rewrittenMessages,
     }),
     [
@@ -1376,6 +1494,7 @@ export const ThreadPane = React.memo(function ThreadPane({
       onSplitTopic,
       mentionPersonas,
       hostPersonaId,
+      composerNotice,
       rewrittenMessages,
       onToggleBookmark,
       pendingReply,

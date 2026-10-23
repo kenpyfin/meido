@@ -221,6 +221,9 @@ pub(super) fn build_current_request_from_message(msg: Message) -> Message {
     }
 }
 
+/// Successful reply when the prepared history has no trailing user message.
+pub const EMPTY_USER_REQUEST: &str = "I didn't receive any message to process.";
+
 /// Split the trailing user turn (the triggering ask) from prior conversation history.
 pub(super) fn split_trailing_user_request(
     messages: Vec<Message>,
@@ -923,7 +926,7 @@ pub(crate) async fn process_classic_agent_with_events(
     let (history_messages, current_request) = split_trailing_user_request(messages);
     let Some(current_request) = current_request else {
         return Ok(AgentProcessResult {
-            response: "I didn't receive any message to process.".into(),
+            response: EMPTY_USER_REQUEST.into(),
         });
     };
 
