@@ -501,7 +501,7 @@ mod tests {
             "second",
         );
         assert_eq!(
-            packed.iter().map(|m| text_of(m)).collect::<Vec<_>>(),
+            packed.iter().map(text_of).collect::<Vec<_>>(),
             vec!["first", "reply", "second"]
         );
     }
