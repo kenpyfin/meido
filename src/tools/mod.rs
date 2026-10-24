@@ -390,19 +390,65 @@ fn has_persona_scope(auth: Option<&ToolAuthContext>) -> bool {
 
 /// Absolutize a path for prefix checks without requiring the path to exist.
 ///
-/// `canonicalize` fails for missing files and leaves relative paths relative, which
-/// falsely fails `starts_with` against a canonicalized (absolute) allowed root and
-/// surfaces as "Permission denied" instead of not-found.
+/// `canonicalize` fails for missing files. On macOS `/tmp` and `/var` are
+/// symlinks, and on Windows the canonical form adds a `\\?\` prefix, so a
+/// missing file and its existing parent would disagree and `starts_with` would
+/// fail closed. A leading `/` stays a root even where `Path::is_absolute` is
+/// false (Windows).
 pub fn absolutize_for_compare(path: &Path) -> PathBuf {
-    if let Ok(c) = std::fs::canonicalize(path) {
-        return c;
+    if let Some(canonical) = canonicalize_existing_ancestor(path) {
+        return strip_verbatim_path_prefix(canonical);
     }
-    if path.is_absolute() {
+    if path_text_is_rooted(path) {
         return path.to_path_buf();
     }
     std::env::current_dir()
         .map(|cwd| cwd.join(path))
         .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn path_text_is_rooted(path: &Path) -> bool {
+    path.is_absolute()
+        || path.starts_with("/")
+        || path.components().next().is_some_and(|component| {
+            matches!(
+                component,
+                std::path::Component::RootDir | std::path::Component::Prefix(_)
+            )
+        })
+}
+
+fn strip_verbatim_path_prefix(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    let Some(rest) = text.strip_prefix(r"\\?\") else {
+        return path;
+    };
+    if let Some(unc) = rest.strip_prefix(r"UNC\") {
+        return PathBuf::from(format!(r"\\{unc}"));
+    }
+    PathBuf::from(rest.to_string())
+}
+
+fn canonicalize_existing_ancestor(path: &Path) -> Option<PathBuf> {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return Some(canonical);
+    }
+    let mut tail = Vec::new();
+    let mut cursor = path.to_path_buf();
+    while let Some(name) = cursor.file_name().map(|name| name.to_os_string()) {
+        tail.push(name);
+        if !cursor.pop() || cursor.as_os_str().is_empty() {
+            break;
+        }
+        if let Ok(canonical) = std::fs::canonicalize(&cursor) {
+            let mut out = canonical;
+            for part in tail.iter().rev() {
+                out.push(part);
+            }
+            return Some(out);
+        }
+    }
+    None
 }
 
 /// True when `path` is under `root` (both sides absolutized; existence not required).
