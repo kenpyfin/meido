@@ -35,7 +35,7 @@ Follow these rules on **every** turn for `read_file`, `write_file`, `edit_file`,
 - `../` chains to reach skills or runtime (e.g. `../../../../skills/...`) — use `skills/<name>/...` in file tools or **`run_skill_script`** for execution.
 - Bash to run skill scripts when **`run_skill_script`** applies (e.g. `python3 ../../../../skills/foo/bar.py`).
 - Treating `shared/workspace/` as `WORKSPACE_DIR` or as a canonical skills location.
-- **Self-repo:** never use the Meido install/source git checkout as a project (no git branch deletes, force-push, reset, or source edits there). Persona Tier-1 **`Repo: /absolute/path`** target repos are **fully allowed** — `cd` there for commits and development. Absolute paths listed as **external path** in the declared file roots may be read and written. Every other path outside the workspace is denied. A write inside the Meido source checkout stays denied even when that checkout is listed.
+- **Self-repo:** never use the Meido install/source git checkout as a project (no git branch deletes, force-push, reset, or source edits there) unless that path is an external path or the automatic app directory. Persona Tier-1 **`Repo: /absolute/path`** target repos are **fully allowed** — `cd` there for commits and development. Absolute paths listed as **external path** in the declared file roots may be read and written. Every other path outside the workspace is denied. When the data workspace is outside the app directory, every persona may edit that workspace and the app directory.
 
 ### Shadow workspace
 

@@ -278,9 +278,11 @@ pub fn apply_persona_cursor_model_override(
     cursor_sdk_model: Option<&str>,
     cursor_sdk_model_params_json: Option<&str>,
 ) -> CursorEngineSettings {
-    if let Some(model) = cursor_sdk_model.map(str::trim).filter(|s| !s.is_empty()) {
-        settings.sdk_model = model.to_string();
-    }
+    settings.sdk_model = cursor_sdk_model
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default()
+        .to_string();
     if let Some(raw) = cursor_sdk_model_params_json
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -291,9 +293,6 @@ pub fn apply_persona_cursor_model_override(
                 .filter(|p| !p.id.trim().is_empty())
                 .collect();
         }
-    }
-    if settings.sdk_model.trim().is_empty() {
-        settings.sdk_model = crate::config::default_cursor_sdk_model();
     }
     settings
 }

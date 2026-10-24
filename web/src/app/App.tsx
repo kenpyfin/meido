@@ -11,10 +11,10 @@ import { CockpitBar } from '../components/cockpit-bar'
 import { CommandPalette, useCommandPaletteOpenState } from '../components/command-palette'
 import { SessionSidebar } from '../components/session-sidebar'
 import { readSidebarMode, SIDEBAR_MODE_TITLES, writeSidebarMode, type SidebarMode } from './sidebar-mode'
-import { matchGuestPersona } from '../lib/guest-mention'
+import { GUEST_MAX_PER_TURN, GUEST_TURN_CAP_NOTICE, parseGuestMentions } from '../lib/guest-mention'
 import { SubthreadSidePane } from '../components/subthread-side-pane'
 import { SideChatOverlay, useNarrowViewport } from '../components/side-chat-overlay'
-import { ThreadPane } from '../components/thread-pane'
+import { ThreadPane, type ComposerNotice } from '../components/thread-pane'
 import { TopicFocusView } from '../components/topic-focus-view'
 import { TopicSessionAction } from '../components/topic-session-action'
 import { TopicOutlineRail } from '../components/topic-outline-rail'
@@ -23,9 +23,9 @@ import { useConfirmDialog } from '../components/confirm-dialog'
 import { NewPersonaDialog } from '../components/new-persona-dialog'
 import { ErrorBanner } from '../components/error-banner'
 import { StatusRegion } from '../components/status-region'
-import { MobileTabBar } from '../components/mobile-tab-bar'
+import { SessionPicker } from '../components/session-picker'
+import { SideChatsPicker } from '../components/side-chats-picker'
 import { MobileOpsSheet, ShortcutsDialog } from '../components/ops-ui'
-import { IconChevronDown } from '../components/icons'
 import { Toaster } from '../components/ui/sonner'
 import { TooltipProvider } from '../components/ui/tooltip'
 import {
@@ -83,6 +83,7 @@ import {
   type ScheduleTask,
   type PersonaTodo,
 } from '../types'
+import type { PersonaLedgerPage, SettingsLedgerPage } from './dialogs/types'
 
 const GroupsWorkspace = lazy(() =>
   import('./workspaces/groups-workspace').then((mod) => ({ default: mod.GroupsWorkspace })),
@@ -95,6 +96,16 @@ type Appearance = 'dark' | 'light'
 
 type PendingRun = { runId: string; personaId: number }
 type UiTheme =
+  | 'meido'
+  | 'sakura'
+  | 'matcha'
+  | 'royal'
+  | 'lit'
+  | 'lit-sakura'
+  | 'lit-matcha'
+  | 'lit-salon'
+  | 'lit-amber'
+  | 'lit-wisteria'
   | 'linear'
   | 'green'
   | 'blue'
@@ -108,18 +119,28 @@ type UiTheme =
   | 'indigo'
 
 
-const UI_THEME_OPTIONS: { key: UiTheme; label: string; color: string }[] = [
-  { key: 'linear', label: 'Linear', color: '#5e6ad2' },
-  { key: 'green', label: 'Green', color: '#34d399' },
-  { key: 'blue', label: 'Blue', color: '#60a5fa' },
-  { key: 'slate', label: 'Slate', color: '#94a3b8' },
-  { key: 'amber', label: 'Amber', color: '#fbbf24' },
-  { key: 'violet', label: 'Violet', color: '#a78bfa' },
-  { key: 'rose', label: 'Rose', color: '#fb7185' },
-  { key: 'cyan', label: 'Cyan', color: '#22d3ee' },
-  { key: 'teal', label: 'Teal', color: '#2dd4bf' },
-  { key: 'orange', label: 'Orange', color: '#fb923c' },
-  { key: 'indigo', label: 'Indigo', color: '#818cf8' },
+const UI_THEME_OPTIONS: { key: UiTheme; label: string; color: string; canvas: string }[] = [
+  { key: 'meido', label: 'Kuro-Meido', color: '#d94f70', canvas: '#060508' },
+  { key: 'sakura', label: 'Sakura Cafe', color: '#f472b6', canvas: '#140b10' },
+  { key: 'matcha', label: 'Matcha Parlor', color: '#4ade80', canvas: '#07120c' },
+  { key: 'royal', label: 'Victorian Parlour', color: '#7aa2f7', canvas: '#070b14' },
+  { key: 'lit', label: 'Lit Parlor', color: '#e25b78', canvas: '#0c0a10' },
+  { key: 'lit-sakura', label: 'Sakura Gaslight', color: '#f472b6', canvas: '#120a0f' },
+  { key: 'lit-matcha', label: 'Matcha Tea Room', color: '#4ade80', canvas: '#08100c' },
+  { key: 'lit-salon', label: 'Velvet Salon', color: '#7aa2f7', canvas: '#080b12' },
+  { key: 'lit-amber', label: 'Amber Hearth', color: '#f59e42', canvas: '#110c08' },
+  { key: 'lit-wisteria', label: 'Wisteria Room', color: '#b48ef7', canvas: '#0d0914' },
+  { key: 'linear', label: 'Linear', color: '#5e6ad2', canvas: '#010102' },
+  { key: 'green', label: 'Green', color: '#34d399', canvas: '#02110d' },
+  { key: 'blue', label: 'Blue', color: '#60a5fa', canvas: '#030b14' },
+  { key: 'slate', label: 'Slate', color: '#94a3b8', canvas: '#0a0f16' },
+  { key: 'amber', label: 'Amber', color: '#fbbf24', canvas: '#140f04' },
+  { key: 'violet', label: 'Violet', color: '#a78bfa', canvas: '#0f0618' },
+  { key: 'rose', label: 'Rose', color: '#fb7185', canvas: '#16080f' },
+  { key: 'cyan', label: 'Cyan', color: '#22d3ee', canvas: '#051317' },
+  { key: 'teal', label: 'Teal', color: '#2dd4bf', canvas: '#041411' },
+  { key: 'orange', label: 'Orange', color: '#fb923c', canvas: '#171006' },
+  { key: 'indigo', label: 'Indigo', color: '#818cf8', canvas: '#080b19' },
 ]
 
 function readAppearance(): Appearance {
@@ -133,7 +154,7 @@ function saveAppearance(value: Appearance): void {
 
 function readUiTheme(): UiTheme {
   const saved = localStorage.getItem('meido_ui_theme') as UiTheme | null
-  return UI_THEME_OPTIONS.some((t) => t.key === saved) ? (saved as UiTheme) : 'linear'
+  return UI_THEME_OPTIONS.some((t) => t.key === saved) ? (saved as UiTheme) : 'meido'
 }
 
 function saveUiTheme(value: UiTheme): void {
@@ -260,10 +281,15 @@ async function extractAttachmentFromUnknown(
 async function extractLatestUserInput(
   messages: readonly ChatModelRunOptions['messages'][number][],
   opts: ExtractAttachmentOptions,
-): Promise<{ text: string; attachments: SendAttachmentRef[] }> {
+): Promise<{ text: string; attachments: SendAttachmentRef[]; messageId?: string }> {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i]
     if (message.role !== 'user') continue
+
+    const messageId =
+      typeof (message as { id?: unknown }).id === 'string'
+        ? (message as { id: string }).id
+        : undefined
 
     // Runtime may supply string or non-array shapes; library types are array-only for user messages.
     const content = message.content as unknown
@@ -312,7 +338,7 @@ async function extractLatestUserInput(
           `attachments=${attachments.length}`,
         )
       }
-      return { text, attachments }
+      return { text, attachments, messageId }
     }
   }
   return { text: '', attachments: [] }
@@ -335,43 +361,6 @@ type LoadHistoryFn = (
   },
 ) => Promise<void>
 
-
-const MOBILE_COCKPIT_OPEN_KEY = 'meido_mobile_cockpit_open'
-
-function MobileFocusDisclosure({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useState(() => {
-    try {
-      return localStorage.getItem(MOBILE_COCKPIT_OPEN_KEY) === '1'
-    } catch {
-      return false
-    }
-  })
-
-  return (
-    <>
-      <button
-        type="button"
-        className="flex h-9 w-full items-center gap-2 px-1 text-xs text-[color:var(--mc-text-muted)] md:hidden"
-        aria-expanded={open}
-        onClick={() => {
-          setOpen((current) => {
-            const next = !current
-            try {
-              localStorage.setItem(MOBILE_COCKPIT_OPEN_KEY, next ? '1' : '0')
-            } catch {
-              /* private mode */
-            }
-            return next
-          })
-        }}
-      >
-        <IconChevronDown className={`size-3 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
-        Focus and cockpit
-      </button>
-      <div className={open ? undefined : 'max-md:hidden'}>{children}</div>
-    </>
-  )
-}
 
 export function App({
   onAuthErrorRef,
@@ -521,6 +510,28 @@ export function App({
     setPendingReplyByThreadKey,
   } = chat
 
+  const [composerAlert, setComposerAlert] = useState<string | null>(null)
+  const alertDraftRef = useRef<string | null>(null)
+  const showComposerAlert = useCallback((text: string, draft: string) => {
+    alertDraftRef.current = draft
+    setComposerAlert(text)
+  }, [])
+  const onComposerDraftChange = useCallback((text: string) => {
+    if (alertDraftRef.current != null && text !== alertDraftRef.current) {
+      alertDraftRef.current = null
+      setComposerAlert(null)
+    }
+    handleDraftTextChange(text)
+  }, [handleDraftTextChange])
+  const composerNotice = useMemo<ComposerNotice | null>(
+    () => (composerAlert ? { tone: 'alert', text: composerAlert } : null),
+    [composerAlert],
+  )
+  useEffect(() => {
+    alertDraftRef.current = null
+    setComposerAlert(null)
+  }, [activePersonaId])
+
   const side = useSideChats({
     activePersonaId,
     activeSessionId,
@@ -546,6 +557,9 @@ export function App({
   } = side
 
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
+  const [rewrittenMessages, setRewrittenMessages] = useState<
+    Record<string, { original: string; rewritten: string }>
+  >({})
   const [threadSurface, setThreadSurface] = useState<ThreadSurface>(() =>
     readThreadSurface(typeof localStorage === 'undefined' ? null : localStorage),
   )
@@ -727,6 +741,7 @@ export function App({
   const [inboxTodos, setInboxTodos] = useState<PersonaTodo[]>([])
   const [inboxLoading, setInboxLoading] = useState(false)
   const [inboxBusyTodoId, setInboxBusyTodoId] = useState<number | null>(null)
+  const [boardFocusTodoId, setBoardFocusTodoId] = useState<number | null>(null)
   const [memoryDialogOpen, setMemoryDialogOpen] = useState<boolean>(false)
   const [artifactsDialogOpen, setArtifactsDialogOpen] = useState<boolean>(false)
   useEffect(() => {
@@ -758,6 +773,7 @@ export function App({
   const [newSchedulePrompt, setNewSchedulePrompt] = useState('')
   const [newScheduleType, setNewScheduleType] = useState<'cron' | 'once'>('cron')
   const [newScheduleValue, setNewScheduleValue] = useState('0 9 * * *')
+  const [newScheduleDelivery, setNewScheduleDelivery] = useState<'runs_only' | 'transcript'>('runs_only')
   const [bindings, setBindings] = useState<ChannelBinding[]>([])
   const [pendingRuns, setPendingRuns] = useState<PendingRun[]>([])
   const [stoppingRunIds, setStoppingRunIds] = useState<string[]>([])
@@ -777,8 +793,12 @@ export function App({
   const [agentsMdError, setAgentsMdError] = useState('')
   const [settingsDialogOpen, setSettingsDialogOpen] = useState(false)
   const [settingsError, setSettingsError] = useState('')
+  const [settingsPage, setSettingsPage] = useState<SettingsLedgerPage>('overview')
+  const [settingsReveal, setSettingsReveal] = useState(0)
   const [personaDialogOpen, setPersonaDialogOpen] = useState(false)
   const [personaError, setPersonaError] = useState('')
+  const [personaPage, setPersonaPage] = useState<PersonaLedgerPage>('profile')
+  const [personaReveal, setPersonaReveal] = useState(0)
   const [installationStatus, setInstallationStatus] = useState<InstallationStatus | null>(null)
   const [restartBusy, setRestartBusy] = useState(false)
   const [restartNotice, setRestartNotice] = useState<string | null>(null)
@@ -787,7 +807,6 @@ export function App({
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const { open: commandPaletteOpen, setOpen: setCommandPaletteOpen } = useCommandPaletteOpenState()
   const [newPersonaOpen, setNewPersonaOpen] = useState(false)
-  const [mobileChatHeaderCollapsed, setMobileChatHeaderCollapsed] = useState(false)
   const [cockpitExpanded, setCockpitExpanded] = useState(false)
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState<boolean>(readDesktopSidebarOpen)
   const [desktopSidebarWidth, setDesktopSidebarWidth] = useState<number>(readDesktopSidebarWidth)
@@ -985,7 +1004,7 @@ export function App({
   const handleOpenTopics = useCallback(() => {
     setTopicsSheetOpen(true)
   }, [])
-  const { queueLane, queueLanesAll, otherPersonasPending, backgroundActiveCount, backgroundJobs, queueSampledAt, blockedItems, invalidateOps } =
+  const { queueLane, queueLanesAll, otherPersonasPending, backgroundActiveCount, backgroundJobs, queueSampledAt, unreadRuns, blockedItems, invalidateOps, clearUnreadRuns } =
     useOpsPoll({
       chatId,
       activePersonaId,
@@ -1166,6 +1185,7 @@ export function App({
       run: async function* (options): AsyncGenerator<ChatModelRunResult, void> {
         let userText = ''
         let attachments: SendAttachmentRef[] = []
+        let localUserMessageId: string | undefined
         try {
           const extracted = await extractLatestUserInput(options.messages, {
             chatId,
@@ -1174,6 +1194,7 @@ export function App({
           })
           userText = extracted.text
           attachments = extracted.attachments
+          localUserMessageId = extracted.messageId
         } catch (e) {
           // Upload failed/stalled/aborted while extracting attachments. Reset the
           // composer state so the app does not stay stuck on "Uploading…".
@@ -1219,13 +1240,38 @@ export function App({
           if (activePersonaId != null && activePersonaId > 0) sendBody.persona_id = activePersonaId
           if (activeSessionIdRef.current) (sendBody as Record<string, unknown>).session_id = activeSessionIdRef.current
           if (attachments.length > 0) sendBody.attachments = attachments
-          const guestPersonaId = matchGuestPersona(messageText, personasRef.current, activePersonaId)
-          if (guestPersonaId != null) (sendBody as Record<string, unknown>).guest_persona_id = guestPersonaId
-          const sendResponse = await api<{ run_id?: string }>('/api/send_stream', {
-            method: 'POST',
-            body: JSON.stringify(sendBody),
-            signal: options.abortSignal,
-          })
+          const guestMentions = parseGuestMentions(messageText, personasRef.current, activePersonaId)
+          if (guestMentions.speakers.length > GUEST_MAX_PER_TURN) {
+            const threadKey = `${chatId ?? 0}:${activePersonaId ?? 0}`
+            setDraftByThreadKey((prev) => ({ ...prev, [threadKey]: messageText }))
+            showComposerAlert(GUEST_TURN_CAP_NOTICE, messageText)
+            setStatusText('Idle')
+            return
+          }
+          if (guestMentions.speakers.length > 0) {
+            (sendBody as Record<string, unknown>).guest_persona_ids = guestMentions.speakers.map(
+              (speaker) => speaker.id,
+            )
+          }
+          let sendResponse: { run_id?: string }
+          try {
+            sendResponse = await api<{ run_id?: string }>('/api/send_stream', {
+              method: 'POST',
+              body: JSON.stringify(sendBody),
+              signal: options.abortSignal,
+            })
+          } catch (e) {
+            if (options.abortSignal.aborted) {
+              setStatusText('Idle')
+              return
+            }
+            const msg = e instanceof Error ? e.message : String(e)
+            const threadKey = `${chatId ?? 0}:${activePersonaId ?? 0}`
+            setDraftByThreadKey((prev) => ({ ...prev, [threadKey]: messageText }))
+            showComposerAlert(msg, messageText)
+            setStatusText('Idle')
+            return
+          }
 
           const runId = sendResponse.run_id
           if (!runId) {
@@ -1340,12 +1386,48 @@ export function App({
             throw new Error(`stream subscribe failed (HTTP ${sseResp.status})`)
           }
 
+          let storedUserMessageId = ''
+
           try {
             for await (const evt of parseSseEvents(sseResp)) {
               if (options.abortSignal.aborted) break
 
               if (evt.event === 'message_stored') {
+                const obj = parseJsonObject(evt.data)
+                if (typeof obj?.message_id === 'string' && obj.message_id) {
+                  storedUserMessageId = obj.message_id
+                }
                 void invalidateOps(chatIdForRun)
+                continue
+              }
+
+              if (evt.event === 'message_rewritten') {
+                const obj = parseJsonObject(evt.data)
+                const msgId =
+                  typeof obj?.message_id === 'string' && obj.message_id
+                    ? obj.message_id
+                    : storedUserMessageId
+                const original = typeof obj?.original === 'string' ? obj.original : ''
+                const rewritten = typeof obj?.rewritten === 'string' ? obj.rewritten : ''
+                if (rewritten) {
+                  const entry = { original: original || messageText, rewritten }
+                  setRewrittenMessages((prev) => {
+                    const next = { ...prev }
+                    if (msgId) next[msgId] = entry
+                    if (localUserMessageId) next[localUserMessageId] = entry
+                    return next
+                  })
+                  if (msgId) {
+                    chat.setHistorySeed((prev) =>
+                      prev.map((m) =>
+                        m.id === msgId
+                          ? { ...m, content: [{ type: 'text' as const, text: rewritten }] }
+                          : m,
+                      ),
+                    )
+                  }
+                  setStatusText('Message rewritten')
+                }
                 continue
               }
 
@@ -1416,13 +1498,29 @@ export function App({
               }
 
               if (evt.event === 'error') {
+                completedOrError = true
+                const obj = parseJsonObject(evt.data)
+                const errorText = typeof obj?.error === 'string' ? obj.error : 'unknown error'
+                if (obj?.kind === 'guest') {
+                  showComposerAlert(errorText, '')
+                  setPendingRuns((prev) => prev.filter((r) => r.runId !== runId))
+                  setStatusText('Error')
+                  if (chatIdForRun != null) {
+                    try {
+                      await loadHistory(chatIdForRun, personaIdForRun ?? undefined)
+                      if (personaIdForRun != null && personaIdForRun > 0) {
+                        await loadPersonaBulletin(personaIdForRun)
+                      }
+                    } catch {
+                      // History sync failed; the composer notice still names the failure.
+                    }
+                  }
+                  break
+                }
                 if (pendingDelta) {
                   yield { content: [{ type: 'text', text: pendingDelta }] }
                   pendingDelta = ''
                 }
-                completedOrError = true
-                const obj = parseJsonObject(evt.data)
-                const errorText = typeof obj?.error === 'string' ? obj.error : 'unknown error'
                 if (!seenAnyDelta) {
                   yield { content: [{ type: 'text', text: `Error: ${errorText}` }] }
                 }
@@ -1480,7 +1578,7 @@ export function App({
         }
       },
     }),
-    [chatId, selectedSessionReadOnly, activePersonaId, formatReplyForSend, historyMode, jumpToLatest, loadHistory, loadPersonaBulletin, invalidateOps],
+    [chatId, selectedSessionReadOnly, activePersonaId, formatReplyForSend, historyMode, jumpToLatest, loadHistory, loadPersonaBulletin, invalidateOps, setDraftByThreadKey, showComposerAlert],
   )
 
   const toggleAppearance = useCallback((): void => {
@@ -1583,7 +1681,7 @@ export function App({
     try {
       await api(`/api/todos/${todoId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ status: 'done' }),
+        body: JSON.stringify({ completed: true }),
       })
       setInboxTodos((prev) => prev.filter((t) => t.id !== todoId))
     } catch (e) {
@@ -1776,6 +1874,7 @@ export function App({
     scheduleType: string,
     scheduleValue: string,
     personaId?: number | null,
+    outputDelivery: 'runs_only' | 'transcript' = 'runs_only',
   ): Promise<void> {
     await api('/api/schedules', {
       method: 'POST',
@@ -1785,6 +1884,7 @@ export function App({
         schedule_type: scheduleType,
         schedule_value: scheduleValue,
         persona_id: personaId && personaId > 0 ? personaId : undefined,
+        output_delivery: outputDelivery,
       }),
     })
     await loadSchedules(chatId)
@@ -1799,12 +1899,16 @@ export function App({
       schedule_type?: string
       schedule_value?: string
       timezone?: string
+      output_delivery?: 'runs_only' | 'transcript'
     },
   ): Promise<void> {
     await api(`/api/schedules/${taskId}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     })
+    setScheduleDetailTask((current) =>
+      current?.id === taskId ? { ...current, ...patch } : current,
+    )
     await loadSchedules(chatId)
   }
 
@@ -2010,34 +2114,35 @@ export function App({
 
   const runtimeKey = `${chatId ?? 0}-${activePersonaId ?? 0}`
 
-  const handleMobileThreadScroll = useCallback((opts: {
-    collapseHeader: boolean
-    source: 'scroll' | 'reset' | 'focus' | 'media-change'
-    scrollTop?: number
-  }) => {
-    if (opts.source !== 'scroll') {
-      setMobileChatHeaderCollapsed(false)
-      return
-    }
-    if ((opts.scrollTop ?? 0) < 24) {
-      setMobileChatHeaderCollapsed(false)
-      return
-    }
-    setMobileChatHeaderCollapsed((prev) => (prev === opts.collapseHeader ? prev : opts.collapseHeader))
-  }, [])
-
   const handleShowShortcuts = useCallback(() => {
     setShortcutsOpen(true)
   }, [])
 
   const handleOpenSettings = useCallback(() => {
     setPersonaDialogOpen(false)
+    setSettingsPage('overview')
+    setSettingsDialogOpen(true)
+  }, [])
+
+  const openSettingsPage = useCallback((page: SettingsLedgerPage) => {
+    setPersonaDialogOpen(false)
+    setSettingsPage(page)
+    setSettingsReveal((n) => n + 1)
     setSettingsDialogOpen(true)
   }, [])
 
   const handleOpenPersona = useCallback(() => {
     setSettingsDialogOpen(false)
     setPersonaError('')
+    setPersonaPage('profile')
+    setPersonaDialogOpen(true)
+  }, [])
+
+  const openPersonaPage = useCallback((page?: PersonaLedgerPage) => {
+    setSettingsDialogOpen(false)
+    setPersonaError('')
+    setPersonaPage(page ?? 'profile')
+    if (page) setPersonaReveal((n) => n + 1)
     setPersonaDialogOpen(true)
   }, [])
 
@@ -2128,24 +2233,6 @@ export function App({
     setOnboardingDismissed(true)
   }, [])
 
-  useEffect(() => {
-    setMobileChatHeaderCollapsed(false)
-  }, [runtimeKey])
-
-  useEffect(() => {
-    if (mobileNavOpen) setMobileChatHeaderCollapsed(false)
-  }, [mobileNavOpen])
-
-  useEffect(() => {
-    const mq = window.matchMedia('(min-width: 768px)')
-    const clearCollapsed = () => {
-      if (mq.matches) setMobileChatHeaderCollapsed(false)
-    }
-    mq.addEventListener('change', clearCollapsed)
-    clearCollapsed()
-    return () => mq.removeEventListener('change', clearCollapsed)
-  }, [])
-
   const bookmarkedMessageIds = useMemo(
     () => new Set(personaBookmarks.map((b) => b.message_id)),
     [personaBookmarks],
@@ -2228,6 +2315,7 @@ export function App({
       onOpenSettings: handleOpenSettings,
       onOpenInbox: handleOpenInbox,
       inboxBadgeCount,
+      schedulesBadgeCount: unreadRuns,
       onOpenSchedules: handleOpenSchedules,
       onOpenPrinciples: handleOpenPrinciples,
       onOpenArtifacts: handleOpenArtifacts,
@@ -2249,6 +2337,7 @@ export function App({
       handleOpenSettings,
       handleOpenInbox,
       inboxBadgeCount,
+      unreadRuns,
       handleOpenSchedules,
       handleOpenPrinciples,
       handleOpenArtifacts,
@@ -2300,7 +2389,7 @@ export function App({
         className={
           appearance === 'dark'
             ? 'mc-app-shell h-[100dvh] min-w-0 w-full overflow-hidden bg-[var(--mc-bg-main)] pb-[env(safe-area-inset-bottom,0px)] pt-[env(safe-area-inset-top,0px)]'
-            : 'mc-app-shell h-[100dvh] min-w-0 w-full overflow-hidden bg-[radial-gradient(1200px_560px_at_-8%_-10%,#d1fae5_0%,transparent_58%),radial-gradient(1200px_560px_at_108%_-12%,#e0f2fe_0%,transparent_58%),#f8fafc] pb-[env(safe-area-inset-bottom,0px)] pt-[env(safe-area-inset-top,0px)]'
+            : 'mc-app-shell h-[100dvh] min-w-0 w-full overflow-hidden bg-[var(--mc-bg-main)] pb-[env(safe-area-inset-bottom,0px)] pt-[env(safe-area-inset-top,0px)]'
         }
       >
         {mobileNavOpen ? (
@@ -2335,6 +2424,8 @@ export function App({
                 mode={sidebarMode}
                 onModeChange={setMode}
                 blockedItems={blockedItems}
+                onOpenPersonaConfig={handleOpenPersona}
+                onOpenSettings={handleOpenSettings}
               />
             </div>
           </div>
@@ -2390,19 +2481,19 @@ export function App({
           >
             <AppHeader
               appearance={appearance}
-              mobileChatHeaderCollapsed={mobileChatHeaderCollapsed}
+              mobileContextOpen={topicsSheetOpen}
+              onOpenMobileContext={handleOpenTopics}
               nav={appHeaderNav}
               session={appHeaderSession}
               toolbar={appHeaderToolbar}
-              onOpenMobileSettings={handleOpenSettings}
               onOpenMobileOps={handleOpenMobileOps}
               moduleTitle={sidebarMode === 'personas' ? null : SIDEBAR_MODE_TITLES[sidebarMode]}
             />
             <div
               className={
                 appearance === 'dark'
-                  ? 'relative flex min-h-0 min-w-0 flex-1 flex-col bg-[linear-gradient(to_bottom,var(--mc-bg-panel),var(--mc-bg-main)_28%)]'
-                  : 'relative flex min-h-0 min-w-0 flex-1 flex-col bg-[linear-gradient(to_bottom,#f8fafc,white_20%)]'
+                  ? 'mc-work-column relative flex min-h-0 min-w-0 flex-1 flex-col bg-[linear-gradient(to_bottom,var(--mc-bg-panel),var(--mc-bg-main)_28%)]'
+                  : 'mc-work-column relative flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--mc-bg-main)]'
               }
             >
               <div
@@ -2412,8 +2503,9 @@ export function App({
                     : 'hidden'
                 }
               >
-                <MobileFocusDisclosure>
-                <BulletinStrip bulletinFocus={bulletinFocus} hideCockpitLauncher />
+                <div className="hidden md:block">
+                  <BulletinStrip bulletinFocus={bulletinFocus} hideCockpitLauncher />
+                </div>
                 <CockpitBar
                   appearance={appearance}
                   statusText={statusText}
@@ -2422,6 +2514,7 @@ export function App({
                   backgroundActiveCount={backgroundActiveCount}
                   installationStatus={installationStatus}
                   onQueueClick={handleQueueClick}
+                  bulletinFocus={bulletinFocus}
                   bookmarks={personaBookmarks}
                   activePersonaId={activePersonaId}
                   onJumpToBookmark={revealMessageInThread}
@@ -2432,17 +2525,16 @@ export function App({
                   onExpandedChange={setCockpitExpanded}
                   expanded={cockpitExpanded}
                 />
-                </MobileFocusDisclosure>
               </div>
               <div className="mx-auto w-full max-w-5xl px-2 pt-2 md:px-3">
                 <StatusRegion message={statusText} />
                 {installationStatus != null &&
                 !onboardingDismissed &&
                 (!installationStatus.llm_ready || !installationStatus.channel_ready) ? (
-                  <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100 mb-2">
+                  <div role="status" className="mc-notice-owed mb-2">
                     <div className="flex flex-col gap-2">
                       <span>
-                        Finish setup: configure <code className="text-xs">.env</code> with at least one channel (Telegram or Discord) and LLM keys, then restart Meido if needed. See Settings for status.
+                        LLM or a channel is missing. Open Settings to finish setup.
                       </span>
                       <div className="flex gap-2 items-center flex-wrap">
                         <Button size="sm" variant="default" onClick={handleOpenSettings}>
@@ -2460,7 +2552,7 @@ export function App({
                   </div>
                 ) : null}
                 {replayNotice ? (
-                  <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100">{replayNotice}</div>
+                  <div role="status" className="mc-notice-owed">{replayNotice}</div>
                 ) : null}
                 {error ? (
                   <ErrorBanner
@@ -2512,7 +2604,7 @@ export function App({
                   />
                 ) : null}
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col px-0 pb-1 md:px-1">
-                <div className="flex items-center gap-1 px-2 pt-1" aria-label="Conversation surface">
+                <div className="hidden items-center gap-1 px-2 pt-1 md:flex" aria-label="Conversation surface">
                   <Button
                     type="button"
                     size="sm"
@@ -2572,7 +2664,8 @@ export function App({
                       onLoadNewer={loadNewer}
                       onJumpToLatest={jumpToLatest}
                       draftText={activeDraftText}
-                      onDraftTextChange={handleDraftTextChange}
+                      onDraftTextChange={onComposerDraftChange}
+                      composerNotice={composerNotice}
                       bookmarkedMessageIds={bookmarkedMessageIds}
                       onToggleBookmark={toggleMessageBookmark}
                       onReplyToMessage={handleReplyToMessage}
@@ -2584,7 +2677,6 @@ export function App({
                       activeSubthreadMessageId={activeSideChat?.anchorMessageId ?? null}
                       pendingReply={activePendingReply}
                       onDismissPendingReply={handleDismissPendingReply}
-                      onMobileThreadScroll={handleMobileThreadScroll}
                       targetScrollMessageId={targetScrollMessageId}
                       suppressAutoScroll={jumpSuppressAutoScroll}
                       onTargetScrollHandled={handleTargetScrollHandled}
@@ -2594,6 +2686,7 @@ export function App({
                       onSplitTopic={handleSplitTopic}
                       mentionPersonas={personas}
                       hostPersonaId={activePersonaId}
+                      rewrittenMessages={rewrittenMessages}
                       focusSlot={
                         threadSurface === 'focus' ? (
                           <TopicFocusView
@@ -2711,6 +2804,8 @@ export function App({
                     <CoordinatorWorkspace
                       chatId={chatId}
                       personas={personas}
+                      focusTodoId={boardFocusTodoId}
+                      onFocusTodoHandled={() => setBoardFocusTodoId(null)}
                       onOpenPersona={(personaId, sessionId) => {
                         const persona = personas.find((item) => item.id === personaId)
                         if (persona) {
@@ -2724,57 +2819,72 @@ export function App({
               ) : null}
             </div>
           </main>
-          <MobileTabBar
-            active={
-              personaDialogOpen
-                ? 'persona'
-                : settingsDialogOpen
-                  ? 'settings'
-                  : mobileOpsOpen
-                    ? 'ops'
-                    : topicsSheetOpen
-                      ? 'topics'
-                      : 'chat'
-            }
-            onChat={() => {
-              setTopicsSheetOpen(false)
-              setMobileOpsOpen(false)
-              setSettingsDialogOpen(false)
-              setPersonaDialogOpen(false)
-            }}
-            onPersona={() => {
-              setTopicsSheetOpen(false)
-              setMobileOpsOpen(false)
-              handleOpenPersona()
-            }}
-            onTopics={() => {
-              setMobileOpsOpen(false)
-              setSettingsDialogOpen(false)
-              setPersonaDialogOpen(false)
-              setTopicsSheetOpen(true)
-            }}
-            onOps={() => {
-              setTopicsSheetOpen(false)
-              setSettingsDialogOpen(false)
-              setPersonaDialogOpen(false)
-              setMobileOpsOpen(true)
-            }}
-            onSettings={() => {
-              setTopicsSheetOpen(false)
-              setMobileOpsOpen(false)
-              handleOpenSettings()
-            }}
-          />
         </div>
 
       </div>
       <MobileSheet
         open={topicsSheetOpen}
         onOpenChange={setTopicsSheetOpen}
-        title="Topics"
-        description="Jump to a topic in this conversation"
+        title="Session and topics"
+        description="Choose a session, change the thread view, or jump to a topic."
       >
         {activePersonaId != null ? (
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2">
+              <span className="text-xs font-medium text-[color:var(--mc-text-muted)]">Session</span>
+              <SessionPicker
+                compact
+                sessions={chatSessions}
+                activeSessionId={activeSessionId}
+                onSelectSession={(sessionId) => {
+                  setTopicsSheetOpen(false)
+                  void handleSelectSession(sessionId)
+                }}
+                onCreateSession={handleCreateSession}
+                onDeleteSession={handleDeleteSession}
+                loading={historyLoading}
+              />
+              <SideChatsPicker
+                sideChats={sideChats}
+                sessions={chatSessions}
+                activeSideChatId={activeSideChat?.id ?? null}
+                loading={sideChatsLoading}
+                onSelect={(id) => {
+                  setTopicsSheetOpen(false)
+                  void handleSelectSideChat(id)
+                }}
+                onDelete={deleteSideChat}
+              />
+            </div>
+            <div className="flex flex-wrap gap-1" aria-label="Conversation surface">
+              <Button
+                type="button"
+                size="sm"
+                variant={threadSurface === 'focus' ? 'secondary' : 'ghost'}
+                aria-pressed={threadSurface === 'focus'}
+                onClick={() => chooseThreadSurface('focus')}
+              >
+                Focus
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={threadSurface === 'transcript' ? 'secondary' : 'ghost'}
+                aria-pressed={threadSurface === 'transcript'}
+                onClick={() => chooseThreadSurface('transcript')}
+              >
+                Transcript
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={hideScheduled ? 'secondary' : 'ghost'}
+                aria-pressed={hideScheduled}
+                onClick={() => setHideScheduled((current) => !current)}
+              >
+                {hideScheduled ? 'Scheduled hidden' : 'Hide scheduled'}
+              </Button>
+            </div>
           <TopicOutlineRail
             variant="sheet"
             topics={topics.topics}
@@ -2815,7 +2925,10 @@ export function App({
               })
             }}
           />
-        ) : null}
+          </div>
+        ) : (
+          <p className="text-sm text-[color:var(--mc-text-muted)]">Choose a persona to open sessions and topics.</p>
+        )}
       </MobileSheet>
       <AppDialogs
         appearance={appearance}
@@ -2835,7 +2948,14 @@ export function App({
           bindings,
           updateChannelPersonaPolicy,
           reloadInstallationStatus: loadSettings,
+          page: settingsPage,
+          onPageChange: (page) => {
+            setSettingsPage(page)
+            setSettingsReveal((n) => n + 1)
+          },
+          revealPage: settingsReveal,
         }}
+        onConfigurePersona={openPersonaPage}
         persona={{
           open: personaDialogOpen,
           onOpenChange: (open) => {
@@ -2848,6 +2968,18 @@ export function App({
           onCreatePersona: handleCreatePersonaClick,
           onRenamePersona: handleRenamePersona,
           onDeletePersona: handleDeletePersonaClick,
+          page: personaPage,
+          onPageChange: (page) => {
+            setPersonaPage(page)
+            setPersonaReveal((n) => n + 1)
+          },
+          revealPage: personaReveal,
+          onOpenHousehold: handleOpenSettings,
+          onOpenSettingsPage: openSettingsPage,
+          engineMark:
+            installationStatus?.agent_engine === 'cursor' && installationStatus.cursor_engine_ready === false
+              ? 'Missing'
+              : undefined,
         }}
         queue={{
           open: queueDialogOpen,
@@ -2877,10 +3009,13 @@ export function App({
           setNewType: setNewScheduleType,
           newValue: newScheduleValue,
           setNewValue: setNewScheduleValue,
+          newDelivery: newScheduleDelivery,
+          setNewDelivery: setNewScheduleDelivery,
           newPersonaId: newSchedulePersonaId,
           setNewPersonaId: setNewSchedulePersonaId,
           createSchedule,
           updateSchedule,
+          onUnreadCleared: clearUnreadRuns,
           openDetail: (t) => {
             setScheduleDetailTask(t)
             setScheduleDetailPrompt(t.prompt)
@@ -2902,6 +3037,10 @@ export function App({
           onOpenTarget: (target) => {
             const p = personas.find((x) => x.id === target.personaId)
             if (p) void switchPersona(p.name, { sessionId: target.sessionId })
+          },
+          onOpenTodo: (todoId) => {
+            setBoardFocusTodoId(todoId)
+            setMode('coordinator')
           },
           onCompleteTodo: (todoId) => {
             void completeInboxTodo(todoId)
@@ -3026,6 +3165,7 @@ export function App({
         onOpenQueue={() => setQueueDialogOpen(true)}
         onOpenInbox={() => setInboxDialogOpen(true)}
         inboxBadgeCount={inboxBadgeCount}
+        schedulesBadgeCount={unreadRuns}
         onOpenSchedules={() => setSchedulesDialogOpen(true)}
         onOpenPrinciples={() => setAgentsMdOpen(true)}
         onOpenArtifacts={() => setArtifactsDialogOpen(true)}
@@ -3037,6 +3177,8 @@ export function App({
         onOpenMemory={() => setMemoryDialogOpen(true)}
         onOpenAgentHistory={() => setAgentHistoryDialogOpen(true)}
         agentHistoryDisabled={activePersonaId == null}
+        onOpenPersona={activePersonaId == null ? undefined : handleOpenPersona}
+        onOpenSettings={handleOpenSettings}
       />
       <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       </TooltipProvider>

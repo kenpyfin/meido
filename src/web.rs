@@ -357,8 +357,12 @@ struct SendRequest {
     #[serde(default)]
     session_id: Option<String>,
     /// When set, another persona answers this turn inside the host chat.
+    /// Kept for older clients. `guest_persona_ids` is the list the web UI sends.
     #[serde(default)]
     guest_persona_id: Option<i64>,
+    /// Tagged personas, in the order they should answer. The host does not answer.
+    #[serde(default)]
+    guest_persona_ids: Vec<i64>,
     #[serde(default)]
     attachments: Vec<SendAttachmentRequest>,
 }
@@ -523,8 +527,21 @@ struct PersonasSwitchRequest {
 struct PersonaCreateRequest {
     chat_id: Option<i64>,
     name: String,
-    /// Persona engine. Omitted values keep the create default (`classic`).
-    agent_engine: Option<String>,
+    agent_engine: String,
+    #[serde(default)]
+    llm_provider: Option<String>,
+    #[serde(default)]
+    llm_model: Option<String>,
+    #[serde(default)]
+    llm_base_url: Option<String>,
+    #[serde(default)]
+    local_base_url: Option<String>,
+    #[serde(default)]
+    local_model: Option<String>,
+    #[serde(default)]
+    cursor_sdk_model: Option<String>,
+    #[serde(default)]
+    gemini_default_model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -568,7 +585,7 @@ struct TodosQuery {
 
 #[derive(Debug, Deserialize)]
 struct TodoPatchRequest {
-    /// open | todo | doing | blocked | done
+    /// todo | plan | build | verify, plus legacy names normalized by the server
     #[serde(default)]
     status: Option<String>,
     #[serde(default)]
@@ -589,11 +606,33 @@ struct TodoPatchRequest {
     before_position: Option<f64>,
     #[serde(default)]
     after_position: Option<f64>,
+    #[serde(default)]
+    auto_advance: Option<bool>,
+    /// When true, sets completed_at without moving the column.
+    #[serde(default)]
+    completed: Option<bool>,
+    #[serde(default)]
+    deploy_prompt: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TodoRunRequest {
+    #[serde(default)]
+    deploy_prompt: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct TodoPathParams {
     id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct TodoCreateRequest {
+    chat_id: Option<i64>,
+    title: String,
+    persona_id: Option<i64>,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -604,6 +643,8 @@ struct ScheduleCreateRequest {
     schedule_value: String,
     timezone: Option<String>,
     persona_id: Option<i64>,
+    #[serde(default)]
+    output_delivery: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -622,6 +663,8 @@ struct ScheduleUpdateRequest {
     schedule_type: Option<String>,
     schedule_value: Option<String>,
     timezone: Option<String>,
+    #[serde(default)]
+    output_delivery: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1070,6 +1113,20 @@ async fn api_send(
     Json(body): Json<SendRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     require_auth(&headers, state.auth_token.as_deref())?;
+    enqueue_persona_turn(state, body, None).await.map(Json)
+}
+
+#[derive(Clone, Copy)]
+struct BoardStageFollowUp {
+    item_id: i64,
+    chain_remaining: u8,
+}
+
+async fn enqueue_persona_turn(
+    state: WebState,
+    body: SendRequest,
+    follow_up: Option<BoardStageFollowUp>,
+) -> Result<serde_json::Value, (StatusCode, String)> {
     let start = Instant::now();
     let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
     let key = format!("chat:{}", chat_id);
@@ -1139,9 +1196,20 @@ async fn api_send(
         workflow_id: None,
         on_hard_abort: Some(abort_hook),
     };
+    if let Some(follow) = follow_up {
+        let db = state.app_state.db.clone();
+        let run_for_mark = run_id.clone();
+        let item_id = follow.item_id;
+        call_blocking(db, move |db| {
+            db.mark_board_stage_running(item_id, &run_for_mark)
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    }
     let state_for_task = state.clone();
     let run_id_for_task = run_id.clone();
     let limits = state.limits.clone();
+    let stage_follow_up = follow_up;
     let (queue_position, _) = state
         .app_state
         .chat_queue
@@ -1155,7 +1223,7 @@ async fn api_send(
                     limits.run_history_limit,
                 )
                 .await;
-            match send_and_store_response_with_events(
+            let turn_error = match send_and_store_response_with_events(
                 state_for_task.clone(),
                 body,
                 None,
@@ -1203,6 +1271,7 @@ async fn api_send(
                             limits.run_history_limit,
                         )
                         .await;
+                    None
                 }
                 Err((_, err_msg)) => {
                     state_for_task
@@ -1214,7 +1283,11 @@ async fn api_send(
                             limits.run_history_limit,
                         )
                         .await;
+                    Some(err_msg)
                 }
+            };
+            if let Some(follow) = stage_follow_up {
+                settle_board_stage(state_for_task.clone(), follow, turn_error).await;
             }
             state_for_task
                 .run_hub
@@ -1222,6 +1295,18 @@ async fn api_send(
                 .await;
         })
         .await;
+    if queue_position == 0 {
+        if let Some(follow) = follow_up {
+            let db = state.app_state.db.clone();
+            let item_id = follow.item_id;
+            let _ = call_blocking(db, move |db| db.clear_board_stage_run(item_id)).await;
+        }
+        state.request_hub.end_with_limits(&key, &state.limits).await;
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "persona_id must be positive".into(),
+        ));
+    }
     state
         .run_hub
         .publish(
@@ -1248,13 +1333,149 @@ async fn api_send(
         latency_ms = start.elapsed().as_millis(),
         "Accepted queued request"
     );
-    Ok(Json(json!({
+    Ok(json!({
         "ok": true,
         "chat_id": chat_id,
         "run_id": run_id,
         "state": "queued",
         "queue_position": queue_position,
-    })))
+    }))
+}
+
+async fn settle_board_stage(
+    state: WebState,
+    follow: BoardStageFollowUp,
+    turn_error: Option<String>,
+) {
+    let item_id = follow.item_id;
+    if let Some(err) = turn_error {
+        let db = state.app_state.db.clone();
+        let _ = call_blocking(db, move |db| db.mark_board_stage_failed(item_id, &err)).await;
+        return;
+    }
+    let loaded = call_blocking(state.app_state.db.clone(), move |db| {
+        db.get_persona_todo(item_id)
+    })
+    .await;
+    let Ok(Some(todo)) = loaded else {
+        return;
+    };
+    let outcome = todo.stage_outcome.clone().unwrap_or_default();
+    if outcome.is_empty() || outcome == "running" {
+        let db = state.app_state.db.clone();
+        let _ = call_blocking(db, move |db| {
+            db.mark_board_stage_failed(item_id, "Stage ended without finish_pipeline_stage")
+        })
+        .await;
+        return;
+    }
+    if outcome == "passed" && todo.auto_advance != 0 && follow.chain_remaining > 0 {
+        if let Some(next) = crate::board_pipeline::next_stage(&todo.status) {
+            if next != todo.status {
+                let chat_id = todo.chat_id;
+                let mut advanced = todo.clone();
+                advanced.status = next.to_string();
+                advanced.blocked_reason = None;
+                advanced.stage_outcome = None;
+                advanced.stage_run_id = None;
+                let patch = crate::db_collab::BoardPatch {
+                    status: Some(next.to_string()),
+                    title: None,
+                    description: None,
+                    owner_persona_id: None,
+                    priority: None,
+                    due_at: None,
+                    blocked_reason: Some(String::new()),
+                    position: None,
+                    before_position: None,
+                    after_position: None,
+                    actor_kind: "pipeline",
+                    actor_persona_id: todo.owner_persona_id,
+                    auto_advance: None,
+                    completed: None,
+                    deploy_prompt: None,
+                };
+                let moved = call_blocking(state.app_state.db.clone(), move |db| {
+                    db.apply_board_patch(chat_id, item_id, &patch)
+                })
+                .await;
+                if moved.ok().flatten().is_none() {
+                    return;
+                }
+                let remaining = follow.chain_remaining.saturating_sub(1);
+                if let Err((_, message)) =
+                    start_board_stage(state.clone(), &advanced, remaining).await
+                {
+                    let db = state.app_state.db.clone();
+                    let _ =
+                        call_blocking(db, move |db| db.mark_board_stage_failed(item_id, &message))
+                            .await;
+                }
+                return;
+            }
+        }
+    }
+    let db = state.app_state.db.clone();
+    let _ = call_blocking(db, move |db| db.clear_board_stage_run(item_id)).await;
+}
+
+type BoardStageStart = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<serde_json::Value, (StatusCode, String)>> + Send>,
+>;
+
+fn start_board_stage(
+    state: WebState,
+    todo: &crate::db::PersonaTodo,
+    chain_remaining: u8,
+) -> BoardStageStart {
+    let todo = todo.clone();
+    Box::pin(async move { start_board_stage_inner(state, &todo, chain_remaining).await })
+}
+
+async fn start_board_stage_inner(
+    state: WebState,
+    todo: &crate::db::PersonaTodo,
+    chain_remaining: u8,
+) -> Result<serde_json::Value, (StatusCode, String)> {
+    if !crate::board_pipeline::is_runnable_stage(&todo.status) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "This column does not run a stage".into(),
+        ));
+    }
+    let owner = todo.owner_persona_id.filter(|id| *id > 0).ok_or((
+        StatusCode::BAD_REQUEST,
+        "Assign an owner before running this stage".into(),
+    ))?;
+    if todo.stage_outcome.as_deref() == Some("running") {
+        return Err((StatusCode::CONFLICT, "This stage is already running".into()));
+    }
+    let chat_id = todo.chat_id;
+    let sessions = call_blocking(state.app_state.db.clone(), move |db| {
+        db.list_chat_sessions(chat_id, owner)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let session_id = sessions.into_iter().next().map(|session| session.id);
+    let body = SendRequest {
+        chat_id: Some(chat_id),
+        persona_id: Some(owner),
+        sender_name: Some("Board".to_string()),
+        message: crate::board_pipeline::build_stage_prompt(todo),
+        session_id,
+        guest_persona_id: None,
+        guest_persona_ids: Vec::new(),
+        attachments: Vec::new(),
+    };
+    enqueue_persona_turn(
+        state,
+        body,
+        Some(BoardStageFollowUp {
+            item_id: todo.id,
+            chain_remaining,
+        }),
+    )
+    .await
 }
 
 async fn api_send_stream(
@@ -1296,6 +1517,33 @@ async fn api_send_stream(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     };
+    let guest_ids =
+        crate::collab::guest::ordered_guest_ids(body.guest_persona_id, &body.guest_persona_ids);
+    if !guest_ids.is_empty() {
+        let db = state.app_state.db.clone();
+        let host_id = persona_id_queue;
+        let chat_for_guests = chat_id;
+        let checked = call_blocking(db, move |db| {
+            Ok(crate::collab::guest::validate_guest_ids(
+                db,
+                chat_for_guests,
+                host_id,
+                &guest_ids,
+            ))
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if let Err(msg) = checked {
+            state.request_hub.end_with_limits(&key, &state.limits).await;
+            state.run_hub.remove_later(run_id, 0).await;
+            let status = if msg.starts_with("Database error") {
+                StatusCode::INTERNAL_SERVER_ERROR
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            return Err((status, msg));
+        }
+    }
     let queue_label = text.chars().take(120).collect::<String>();
     let abort_hook = {
         let db = state.app_state.db.clone();
@@ -1456,6 +1704,25 @@ async fn api_send_stream(
                                 )
                                 .await;
                         }
+                        AgentEvent::UserMessageRewritten {
+                            message_id,
+                            original,
+                            rewritten,
+                        } => {
+                            run_hub
+                                .publish(
+                                    &run_id_for_events,
+                                    "message_rewritten",
+                                    json!({
+                                        "message_id": message_id,
+                                        "original": original,
+                                        "rewritten": rewritten,
+                                    })
+                                    .to_string(),
+                                    run_history_limit,
+                                )
+                                .await;
+                        }
                         AgentEvent::FinalResponse { text } => {
                             if !text.is_empty() {
                                 run_hub
@@ -1483,6 +1750,32 @@ async fn api_send_stream(
             {
                 Ok(resp) => {
                     let v = resp.0;
+                    if let Some(err) = v.get("guest_error") {
+                        let name = err
+                            .get("persona_name")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("A tagged persona");
+                        let reason = err
+                            .get("error")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("the guest turn failed");
+                        let reason = reason.trim().trim_end_matches('.');
+                        state_for_task
+                            .run_hub
+                            .publish(
+                                &run_id_for_task,
+                                "error",
+                                json!({
+                                    "error": format!("{name} could not answer: {reason}. Nothing else ran."),
+                                    "kind": "guest",
+                                    "persona_id": err.get("persona_id").cloned().unwrap_or(serde_json::Value::Null),
+                                    "persona_name": name,
+                                })
+                                .to_string(),
+                                limits.run_history_limit,
+                            )
+                            .await;
+                    } else {
                     if let Some(jid) = v.get("background_job_id").and_then(|x| x.as_str()) {
                         if !jid.is_empty() {
                             state_for_task
@@ -1520,6 +1813,7 @@ async fn api_send_stream(
                             limits.run_history_limit,
                         )
                         .await;
+                    }
                 }
                 Err((_, err_msg)) => {
                     state_for_task
@@ -1949,6 +2243,25 @@ async fn api_subthread_stream(
                                 )
                                 .await;
                         }
+                        AgentEvent::UserMessageRewritten {
+                            message_id,
+                            original,
+                            rewritten,
+                        } => {
+                            run_hub
+                                .publish(
+                                    &run_id_for_events,
+                                    "message_rewritten",
+                                    json!({
+                                        "message_id": message_id,
+                                        "original": original,
+                                        "rewritten": rewritten,
+                                    })
+                                    .to_string(),
+                                    run_history_limit,
+                                )
+                                .await;
+                        }
                         AgentEvent::FinalResponse { text } => {
                             if !text.is_empty() {
                                 run_hub
@@ -1980,6 +2293,7 @@ async fn api_subthread_stream(
                     history_override: Some(history_override),
                     tool_iteration_cap: None,
                     skip_recall: false,
+                    inbound_user_message_id: None,
                 },
                 None,
                 InboundImages::new(),
@@ -2730,6 +3044,29 @@ async fn api_background_job_cancel(
     Ok(Json(json!({ "ok": true })))
 }
 
+fn guest_turn_failure(
+    chat_id: i64,
+    persona_id: i64,
+    prompt: &str,
+    guest_id: Option<i64>,
+    guest_name: &str,
+    error: String,
+) -> Json<serde_json::Value> {
+    Json(json!({
+        "ok": false,
+        "chat_id": chat_id,
+        "persona_id": persona_id,
+        "prompt": prompt,
+        "response": "",
+        "background_job_queued": false,
+        "guest_error": {
+            "persona_id": guest_id,
+            "persona_name": guest_name,
+            "error": error,
+        }
+    }))
+}
+
 async fn send_and_store_response_with_events(
     state: WebState,
     body: SendRequest,
@@ -2910,29 +3247,45 @@ async fn send_and_store_response_with_events(
         origin: crate::db::message_origin_interactive(),
         speaker_persona_id: None,
     };
+    let inbound_user_message_id = user_msg.id.clone();
     call_blocking(state.app_state.db.clone(), move |db| {
         db.store_message(&user_msg)
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    if let Some(guest_persona_id) = body.guest_persona_id {
-        // Guest replies are stored on the host transcript, then the host turn continues
-        // so the stream still belongs to the host run.
-        if let Err(e) = crate::collab::guest::run_guest_turn(
-            state.app_state.clone(),
-            chat_id,
-            persona_id,
-            guest_persona_id,
-            body.session_id.clone(),
-            &text,
-            cancel.clone(),
-        )
+    let guest_ids =
+        crate::collab::guest::ordered_guest_ids(body.guest_persona_id, &body.guest_persona_ids);
+    let guests = if guest_ids.is_empty() {
+        Vec::new()
+    } else {
+        let db = state.app_state.db.clone();
+        let host_id = persona_id;
+        let chat_for_guests = chat_id;
+        let checked = call_blocking(db, move |db| {
+            Ok(crate::collab::guest::validate_guest_ids(
+                db,
+                chat_for_guests,
+                host_id,
+                &guest_ids,
+            ))
+        })
         .await
-        {
-            warn!(target: "collab", chat_id, error = %e, "guest turn failed");
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        match checked {
+            Ok(list) => list,
+            Err(msg) => {
+                return Ok(guest_turn_failure(
+                    chat_id,
+                    persona_id,
+                    &raw_text,
+                    None,
+                    "A tagged persona",
+                    msg,
+                ));
+            }
         }
-    }
+    };
 
     if let Some(run_id) = run_key {
         state
@@ -2940,10 +3293,94 @@ async fn send_and_store_response_with_events(
             .publish(
                 run_id,
                 "message_stored",
-                json!({ "persona_id": persona_id }).to_string(),
+                json!({
+                    "persona_id": persona_id,
+                    "message_id": inbound_user_message_id,
+                })
+                .to_string(),
                 state.limits.run_history_limit,
             )
             .await;
+    }
+
+    if !guests.is_empty() {
+        // Tagged personas answer in order. The host turn does not run.
+        let total = guests.len();
+        let mut replies = Vec::with_capacity(total);
+        for (index, guest) in guests.iter().enumerate() {
+            if cancel
+                .as_ref()
+                .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
+            {
+                return Ok(guest_turn_failure(
+                    chat_id,
+                    persona_id,
+                    &raw_text,
+                    Some(guest.id),
+                    &guest.name,
+                    "Cancelled".into(),
+                ));
+            }
+            let position = index + 1;
+            if let Some(run_id) = run_key {
+                state
+                    .run_hub
+                    .publish(
+                        run_id,
+                        "status",
+                        json!({
+                            "message": format!(
+                                "{} is answering ({position} of {total})",
+                                guest.name
+                            )
+                        })
+                        .to_string(),
+                        state.limits.run_history_limit,
+                    )
+                    .await;
+            }
+            match crate::collab::guest::run_guest_turn(
+                state.app_state.clone(),
+                chat_id,
+                persona_id,
+                guest.id,
+                body.session_id.clone(),
+                &text,
+                position,
+                total,
+                cancel.clone(),
+            )
+            .await
+            {
+                Ok(reply) => replies.push(format!("[Guest: {}]\n{reply}", guest.name)),
+                Err(error) => {
+                    warn!(
+                        target: "collab",
+                        chat_id,
+                        guest_persona_id = guest.id,
+                        error = %error,
+                        "guest turn failed"
+                    );
+                    return Ok(guest_turn_failure(
+                        chat_id,
+                        persona_id,
+                        &raw_text,
+                        Some(guest.id),
+                        &guest.name,
+                        error,
+                    ));
+                }
+            }
+        }
+        return Ok(Json(json!({
+            "ok": true,
+            "chat_id": chat_id,
+            "persona_id": persona_id,
+            "prompt": raw_text,
+            "response": replies.join("\n\n"),
+            "background_job_queued": false,
+            "background_job_id": serde_json::Value::Null,
+        })));
     }
 
     let agent_result = process_with_agent_with_events(
@@ -2961,6 +3398,7 @@ async fn send_and_store_response_with_events(
             history_override: None,
             tool_iteration_cap: None,
             skip_recall: false,
+            inbound_user_message_id: Some(inbound_user_message_id),
         },
         None,
         images,
@@ -3872,6 +4310,8 @@ struct PersonaBulletinPatchBody {
     #[serde(default)]
     dense_delivery_enabled: Option<bool>,
     #[serde(default)]
+    user_message_rewrite_enabled: Option<bool>,
+    #[serde(default)]
     #[serde(deserialize_with = "deserialize_patch_field")]
     dense_delivery_messaging_max_chars: Option<Option<i64>>,
     #[serde(default)]
@@ -4222,6 +4662,7 @@ async fn bootstrap_chat_session_context(
             history_override: None,
             tool_iteration_cap: None,
             skip_recall: false,
+            inbound_user_message_id: None,
         },
         Some(&bootstrap_prompt),
         InboundImages::new(),
@@ -4968,6 +5409,7 @@ async fn api_persona_bulletin_get(
         "history_suffix": hs_json,
         "operator_memo": persona.as_ref().and_then(|p| p.operator_memo.clone()),
         "dense_delivery_enabled": persona.as_ref().map(|p| p.dense_delivery_enabled).unwrap_or(false),
+        "user_message_rewrite_enabled": persona.as_ref().map(|p| p.user_message_rewrite_enabled).unwrap_or(false),
         "dense_delivery": delivery_json,
         "agent_engine_override": persona.as_ref().and_then(|p| p.agent_engine_override.clone()),
         "agent_engine_global": global_engine.as_str(),
@@ -4994,6 +5436,7 @@ async fn api_persona_bulletin_patch(
         && body.recent_history_min_assistant.is_none()
         && body.operator_memo.is_none()
         && body.dense_delivery_enabled.is_none()
+        && body.user_message_rewrite_enabled.is_none()
         && body.dense_delivery_messaging_max_chars.is_none()
         && body.dense_delivery_web_max_chars.is_none()
         && body.dense_delivery_summary_chars.is_none()
@@ -5001,7 +5444,7 @@ async fn api_persona_bulletin_patch(
     {
         return Err((
             StatusCode::BAD_REQUEST,
-            "no fields to update (send recent_history_min_user, recent_history_min_assistant, operator_memo, dense_delivery_enabled, and/or agent_engine_override)"
+            "no fields to update (send recent_history_min_user, recent_history_min_assistant, operator_memo, dense_delivery_enabled, user_message_rewrite_enabled, and/or agent_engine_override)"
                 .into(),
         ));
     }
@@ -5086,10 +5529,16 @@ async fn api_persona_bulletin_patch(
     let mut engine_ov = current.agent_engine_override.clone();
     let mut patch_delivery = false;
     let mut patch_engine = false;
+    let mut patch_rewrite = false;
+    let mut rewrite_enabled = current.user_message_rewrite_enabled;
 
     if let Some(v) = body.dense_delivery_enabled {
         dense_enabled = v;
         patch_delivery = true;
+    }
+    if let Some(v) = body.user_message_rewrite_enabled {
+        rewrite_enabled = v;
+        patch_rewrite = true;
     }
     if let Some(v) = body.dense_delivery_messaging_max_chars {
         msg_max = v.filter(|n| *n > 0);
@@ -5140,6 +5589,9 @@ async fn api_persona_bulletin_patch(
                 web_max,
                 summary_chars,
             )?;
+        }
+        if patch_rewrite {
+            db.set_persona_user_message_rewrite(chat_id, pid, rewrite_enabled)?;
         }
         if patch_engine {
             db.set_persona_engine_override(chat_id, pid, engine_ov.as_deref())?;
@@ -6649,11 +7101,14 @@ async fn api_persona_agent_history_optimize(
         return Err((StatusCode::NOT_FOUND, "persona not found".into()));
     }
 
-    let mm = state.app_state.llm.local_delegate_config();
-    if mm.tier2_base_url.trim().is_empty() || mm.tier2_model.trim().is_empty() {
+    if crate::topics::system_llm_target(
+        crate::topics::load_job_choice(&state.app_state, crate::topics::SystemLlmJob::Learn).await,
+    )
+    .is_none()
+    {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            "Tier 2 (Knowledge) base URL and model must be configured in Settings → Multi-model."
+            "System LLM is not configured. Set a provider and model under Settings → System LLM."
                 .into(),
         ));
     }
@@ -6736,40 +7191,145 @@ async fn api_personas_create(
         ));
     }
     let name_owned = name.to_string();
-    let engine = match body
-        .agent_engine
+    let engine = crate::runtime_toggles::AgentEngine::parse_override(body.agent_engine.trim())
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "agent_engine must be classic, classic_cost_routing, cursor, or gemini_adk".to_string(),
+        ))?;
+    let provider = body
+        .llm_provider
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-    {
-        None => None,
-        Some(raw) => {
-            let parsed = crate::runtime_toggles::AgentEngine::parse_override(raw).ok_or((
-                StatusCode::BAD_REQUEST,
-                "agent_engine must be classic, classic_cost_routing, cursor, or gemini_adk"
-                    .to_string(),
-            ))?;
-            Some(parsed.as_str().to_string())
+        .map(str::to_string);
+    let model = body
+        .llm_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let base_url = body
+        .llm_base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let local_url = body
+        .local_base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let local_model = body
+        .local_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let cursor_model = body
+        .cursor_sdk_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let gemini_model = body
+        .gemini_default_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    match engine {
+        crate::runtime_toggles::AgentEngine::Classic
+        | crate::runtime_toggles::AgentEngine::ClassicCostRouting => {
+            if provider.is_none() || model.is_none() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "Provider and model are required.".into(),
+                ));
+            }
+            if provider
+                .as_deref()
+                .is_some_and(crate::llm_catalog::is_local_provider)
+                && base_url.is_none()
+            {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "A local provider needs a base URL.".into(),
+                ));
+            }
+            if engine == crate::runtime_toggles::AgentEngine::ClassicCostRouting
+                && (local_url.is_none() || local_model.is_none())
+            {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "Cost routing needs a local URL and model.".into(),
+                ));
+            }
         }
-    };
-    let persona_id = call_blocking(state.app_state.db.clone(), move |db| {
-        db.create_persona(chat_id, &name_owned, None)
+        crate::runtime_toggles::AgentEngine::Cursor => {
+            if cursor_model.is_none() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "A Cursor model is required.".into(),
+                ));
+            }
+        }
+        crate::runtime_toggles::AgentEngine::GeminiAdk => {
+            if gemini_model.is_none() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "A Gemini default model is required.".into(),
+                ));
+            }
+        }
+    }
+    let engine_str = engine.as_str().to_string();
+    let gemini_topology = gemini_model.map(|model| {
+        let mut profile = crate::gemini_adk::AdkTopologyProfile::default_profile();
+        profile.default_model = model;
+        serde_json::to_string(&profile).unwrap_or_else(|_| "{}".into())
+    });
+    let persona_id = call_blocking(state.app_state.db.clone(), {
+        let engine_str = engine_str.clone();
+        let provider = provider.clone();
+        let model = model.clone();
+        let base_url = base_url.clone();
+        let local_url = local_url.clone();
+        let local_model = local_model.clone();
+        let cursor_model = cursor_model.clone();
+        let gemini_topology = gemini_topology.clone();
+        move |db| {
+            let persona_id = db.create_persona(chat_id, &name_owned, model.as_deref())?;
+            db.set_persona_engine_override(chat_id, persona_id, Some(&engine_str))?;
+            if provider.is_some() || model.is_some() || base_url.is_some() {
+                db.set_persona_llm_selection(
+                    chat_id,
+                    persona_id,
+                    provider.as_deref(),
+                    model.as_deref(),
+                    base_url.as_deref(),
+                )?;
+            }
+            if local_url.is_some() || local_model.is_some() {
+                db.set_persona_local_delegate(
+                    chat_id,
+                    persona_id,
+                    local_url.as_deref(),
+                    local_model.as_deref(),
+                    Some(false),
+                )?;
+            }
+            if let Some(cursor_model) = cursor_model.as_deref() {
+                db.set_persona_cursor_sdk_model(chat_id, persona_id, Some(cursor_model), None)?;
+            }
+            if let Some(topology) = gemini_topology.as_deref() {
+                db.set_persona_gemini_adk_topology(chat_id, persona_id, Some(topology))?;
+            }
+            Ok(persona_id)
+        }
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if let Some(engine) = engine {
-        let saved = call_blocking(state.app_state.db.clone(), move |db| {
-            db.set_persona_engine_override(chat_id, persona_id, Some(engine.as_str()))
-        })
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        if !saved {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "persona engine was not saved".into(),
-            ));
-        }
-    }
     crate::tools::ensure_persona_shared_dir(
         std::path::Path::new(state.app_state.config.working_dir()),
         chat_id,
@@ -6785,15 +7345,104 @@ async fn api_personas_create(
 }
 
 #[derive(Deserialize)]
+struct PersonaLocalQuery {
+    persona_id: i64,
+}
+
+#[derive(Deserialize)]
+struct PersonaLocalPatch {
+    persona_id: i64,
+    base_url: String,
+    model: String,
+}
+
+async fn api_persona_local_get(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Query(query): Query<PersonaLocalQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_auth(&headers, state.auth_token.as_deref())?;
+    let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
+    let pid = query.persona_id;
+    let persona = call_blocking(state.app_state.db.clone(), move |db| db.get_persona(pid))
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .filter(|persona| persona.chat_id == chat_id)
+        .ok_or((StatusCode::NOT_FOUND, "persona not found".to_string()))?;
+    Ok(Json(json!({
+        "ok": true,
+        "base_url": persona.local_delegate_base_url.unwrap_or_default(),
+        "model": persona.local_delegate_model.unwrap_or_default(),
+        "tools_ok": persona.local_delegate_tools_ok.unwrap_or(false),
+    })))
+}
+
+async fn api_persona_local_patch(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Json(body): Json<PersonaLocalPatch>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_auth(&headers, state.auth_token.as_deref())?;
+    let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
+    let base_url = crate::local_delegate::normalize_base_url_for_provider(body.base_url.trim(), "");
+    let model = body.model.trim().to_string();
+    if base_url.is_empty() || model.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Local URL and model are required.".into(),
+        ));
+    }
+    let pid = body.persona_id;
+    let base_saved = base_url.clone();
+    let model_saved = model.clone();
+    let saved = call_blocking(state.app_state.db.clone(), move |db| {
+        db.set_persona_local_delegate(
+            chat_id,
+            pid,
+            Some(&base_saved),
+            Some(&model_saved),
+            Some(false),
+        )
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if !saved {
+        return Err((StatusCode::NOT_FOUND, "persona not found".into()));
+    }
+    Ok(Json(json!({
+        "ok": true,
+        "base_url": base_url,
+        "model": model,
+        "tools_ok": false,
+        "message": "Local URL and model saved. Run Test before the next cost-routing turn.",
+    })))
+}
+
+#[derive(Deserialize)]
 struct PersonaExternalPathsBody {
     paths: Vec<String>,
 }
 
-fn persona_external_paths_json(persona_id: i64, paths: &[std::path::PathBuf]) -> serde_json::Value {
+fn persona_external_paths_json(
+    persona_id: i64,
+    paths: &[std::path::PathBuf],
+    workspace_root: &std::path::Path,
+) -> serde_json::Value {
+    let mut automatic_paths = Vec::new();
+    if crate::self_repo::workspace_disjoint_from_app(workspace_root) {
+        automatic_paths.push(workspace_root.to_string_lossy().to_string());
+        if let Some(app) = crate::self_repo::auto_approved_app_directory(workspace_root) {
+            let app_text = app.to_string_lossy().to_string();
+            if !automatic_paths.iter().any(|p| p == &app_text) {
+                automatic_paths.push(app_text);
+            }
+        }
+    }
     json!({
         "persona_id": persona_id,
         "env_key": crate::persona_external_paths::env_key(persona_id),
         "paths": paths.iter().map(|p| p.to_string_lossy().to_string()).collect::<Vec<_>>(),
+        "automatic_paths": automatic_paths,
     })
 }
 
@@ -6815,7 +7464,8 @@ async fn api_persona_external_paths_get(
         return Err((StatusCode::NOT_FOUND, "persona not found".into()));
     }
     let paths = state.app_state.persona_external_paths.paths_for(pid);
-    Ok(Json(persona_external_paths_json(pid, &paths)))
+    let workspace = state.app_state.config.workspace_root_absolute();
+    Ok(Json(persona_external_paths_json(pid, &paths, &workspace)))
 }
 
 async fn api_persona_external_paths_put(
@@ -6847,7 +7497,8 @@ async fn api_persona_external_paths_put(
         .persona_external_paths
         .set(pid, &body.paths)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-    Ok(Json(persona_external_paths_json(pid, &saved)))
+    let workspace = state.app_state.config.workspace_root_absolute();
+    Ok(Json(persona_external_paths_json(pid, &saved, &workspace)))
 }
 
 async fn api_personas_delete(
@@ -6980,6 +7631,7 @@ async fn api_schedules_list(
                 "last_run": t.last_run,
                 "status": t.status,
                 "created_at": t.created_at,
+                "output_delivery": t.output_delivery,
             })
         })
         .collect();
@@ -7010,6 +7662,10 @@ fn persona_todo_to_json(t: &crate::db::PersonaTodo) -> serde_json::Value {
         "position": t.position,
         "source_kind": t.source_kind,
         "source_ref": t.source_ref,
+        "auto_advance": t.auto_advance != 0,
+        "stage_run_id": t.stage_run_id,
+        "stage_outcome": t.stage_outcome,
+        "deploy_prompt": t.deploy_prompt,
     })
 }
 
@@ -7030,13 +7686,11 @@ async fn api_todos_list(
         .to_ascii_lowercase();
     let status_filter: Option<String> = match status_raw.as_str() {
         "all" => None,
-        "open" | "done" | "todo" | "doing" | "blocked" => Some(status_raw.clone()),
-        other => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("Invalid status '{other}'; use open, todo, doing, blocked, done, or all"),
-            ));
-        }
+        "open" | "done" => Some(status_raw.clone()),
+        other => match crate::db::normalize_board_status(other) {
+            Ok(status) => Some(status.to_string()),
+            Err(err) => return Err((StatusCode::BAD_REQUEST, err.to_string())),
+        },
     };
 
     let filter = status_filter.clone();
@@ -7081,6 +7735,9 @@ async fn api_todos_patch(
         after_position: body.after_position,
         actor_kind: "operator",
         actor_persona_id: None,
+        auto_advance: body.auto_advance,
+        completed: body.completed,
+        deploy_prompt: body.deploy_prompt,
     };
     let updated = call_blocking(state.app_state.db.clone(), move |db| {
         db.apply_board_patch(chat_id, todo_id, &patch)
@@ -7096,6 +7753,158 @@ async fn api_todos_patch(
         "ok": true,
         "todo": persona_todo_to_json(&todo),
     })))
+}
+
+async fn api_todos_create(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Json(body): Json<TodoCreateRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_auth(&headers, state.auth_token.as_deref())?;
+    let title = body.title.trim().to_string();
+    if title.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "title is required".into()));
+    }
+    let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
+    ensure_web_binding_for_universal(&state, chat_id).await?;
+    let requested_persona = body.persona_id.filter(|id| *id > 0);
+    let description = body
+        .description
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty());
+    let created = call_blocking(state.app_state.db.clone(), move |db| {
+        let persona_id = if let Some(pid) = requested_persona {
+            if !db.persona_exists(chat_id, pid)? {
+                return Err(crate::error::FinallyAValueBotError::ToolExecution(format!(
+                    "Persona {pid} does not exist for this chat"
+                )));
+            }
+            pid
+        } else {
+            db.get_current_persona_id(chat_id)?
+        };
+        db.add_persona_todo(chat_id, persona_id, &title, Some("board"))
+    })
+    .await
+    .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let todo = if let Some(description) = description {
+        let todo_id = created.id;
+        let patch = crate::db_collab::BoardPatch {
+            status: None,
+            title: None,
+            description: Some(description),
+            owner_persona_id: None,
+            priority: None,
+            due_at: None,
+            blocked_reason: None,
+            position: None,
+            before_position: None,
+            after_position: None,
+            actor_kind: "operator",
+            actor_persona_id: None,
+            auto_advance: None,
+            completed: None,
+            deploy_prompt: None,
+        };
+        call_blocking(state.app_state.db.clone(), move |db| {
+            db.apply_board_patch(chat_id, todo_id, &patch)
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .unwrap_or(created)
+    } else {
+        created
+    };
+    Ok(Json(json!({
+        "ok": true,
+        "todo": persona_todo_to_json(&todo),
+    })))
+}
+
+async fn api_todos_events(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Path(path): Path<TodoPathParams>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_auth(&headers, state.auth_token.as_deref())?;
+    let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
+    ensure_web_binding_for_universal(&state, chat_id).await?;
+    let todo_id = path.id;
+    let events = call_blocking(state.app_state.db.clone(), move |db| {
+        db.list_board_item_events(chat_id, todo_id, 100)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let Some(events) = events else {
+        return Err((StatusCode::NOT_FOUND, "todo not found".into()));
+    };
+    let items: Vec<serde_json::Value> = events
+        .iter()
+        .map(|event| {
+            json!({
+                "id": event.id,
+                "from_status": event.from_status,
+                "to_status": event.to_status,
+                "actor_kind": event.actor_kind,
+                "actor_persona_id": event.actor_persona_id,
+                "at": event.at,
+            })
+        })
+        .collect();
+    Ok(Json(json!({
+        "ok": true,
+        "events": items,
+    })))
+}
+
+async fn api_todos_run(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Path(path): Path<TodoPathParams>,
+    Json(body): Json<TodoRunRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    require_auth(&headers, state.auth_token.as_deref())?;
+    let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
+    ensure_web_binding_for_universal(&state, chat_id).await?;
+    let todo_id = path.id;
+    let todo = call_blocking(state.app_state.db.clone(), move |db| {
+        db.get_persona_todo(todo_id)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let Some(mut todo) = todo.filter(|item| item.chat_id == chat_id) else {
+        return Err((StatusCode::NOT_FOUND, "todo not found".into()));
+    };
+    if let Some(prompt) = body.deploy_prompt {
+        let patch = crate::db_collab::BoardPatch {
+            status: None,
+            title: None,
+            description: None,
+            owner_persona_id: None,
+            priority: None,
+            due_at: None,
+            blocked_reason: None,
+            position: None,
+            before_position: None,
+            after_position: None,
+            actor_kind: "operator",
+            actor_persona_id: None,
+            auto_advance: None,
+            completed: None,
+            deploy_prompt: Some(prompt),
+        };
+        let updated = call_blocking(state.app_state.db.clone(), move |db| {
+            db.apply_board_patch(chat_id, todo_id, &patch)
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let Some(updated) = updated else {
+            return Err((StatusCode::NOT_FOUND, "todo not found".into()));
+        };
+        todo = updated;
+    }
+    let queued = start_board_stage(state, &todo, crate::board_pipeline::AUTO_CHAIN_BUDGET).await?;
+    Ok(Json(queued))
 }
 
 async fn api_schedules_create(
@@ -7121,6 +7930,9 @@ async fn api_schedules_create(
         effective_tz,
     )
     .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let output_delivery =
+        crate::tools::schedule::normalize_output_delivery(body.output_delivery.as_deref(), true)
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
     let prompt = body.prompt;
     let schedule_type = body.schedule_type;
@@ -7146,6 +7958,7 @@ async fn api_schedules_create(
             &schedule_type,
             &schedule_value,
             &next_run_for_db,
+            &output_delivery,
         )
     })
     .await
@@ -7199,10 +8012,22 @@ async fn api_schedules_update(
             "Provide both schedule_type and schedule_value to change the schedule".into(),
         ));
     }
-    if status.is_none() && persona_id.is_none() && prompt_update.is_none() && !has_schedule_pair {
+    let output_delivery = match body.output_delivery.as_deref() {
+        None => None,
+        Some(raw) => Some(
+            crate::tools::schedule::normalize_output_delivery(Some(raw), false)
+                .map_err(|e| (StatusCode::BAD_REQUEST, e))?,
+        ),
+    };
+    if status.is_none()
+        && persona_id.is_none()
+        && prompt_update.is_none()
+        && output_delivery.is_none()
+        && !has_schedule_pair
+    {
         return Err((
             StatusCode::BAD_REQUEST,
-            "Provide at least one field to update: status, persona_id, prompt, or schedule_type+schedule_value".into(),
+            "Provide at least one field to update: status, persona_id, prompt, output_delivery, or schedule_type+schedule_value".into(),
         ));
     }
     if let Some(pid) = persona_id {
@@ -7288,6 +8113,16 @@ async fn api_schedules_update(
     if let Some(p) = prompt_update {
         let ok = call_blocking(state.app_state.db.clone(), move |db| {
             db.update_task_prompt(task_id, &p)
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if !ok {
+            return Err((StatusCode::NOT_FOUND, "Task not found".into()));
+        }
+    }
+    if let Some(delivery) = output_delivery {
+        let ok = call_blocking(state.app_state.db.clone(), move |db| {
+            db.update_task_output_delivery(task_id, &delivery)
         })
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -7611,6 +8446,9 @@ struct RuntimePatchRequest {
     response_quality_evaluator_enabled: Option<bool>,
     #[serde(default)]
     agent_engine: Option<String>,
+    /// Process-wide Classic tool-loop cap. `None` leaves the current limit.
+    #[serde(default)]
+    max_tool_iterations: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -7687,17 +8525,18 @@ fn connection_secret_from_env(
 
 fn connections_json(state: &crate::agent::AppState) -> serde_json::Value {
     let data_dir = state.config.runtime_data_dir();
-    let mm = state.llm.local_delegate_config();
-    let local_url = if !mm.tier2_base_url.trim().is_empty() {
-        mm.tier2_base_url.clone()
-    } else {
-        mm.local_base_url.clone()
-    };
-    let local_model = if !mm.tier2_model.trim().is_empty() {
-        mm.tier2_model.clone()
-    } else {
-        mm.local_model.clone()
-    };
+    let local_url = state
+        .db
+        .get_app_setting("LOCAL_SERVER_URL")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let local_model = state
+        .db
+        .get_app_setting("LOCAL_SERVER_MODEL")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     let connections: Vec<serde_json::Value> = crate::engine_connections::CONNECTIONS
         .iter()
         .filter(|def| def.supported)
@@ -7786,42 +8625,22 @@ async fn api_connections_patch(
                     "Enter an http or https URL for the local model server.".into(),
                 ));
             }
-            let mut cfg = state.app_state.llm.local_delegate_config();
-            let mut changed =
-                cfg.local_base_url != url || cfg.tier1_base_url != url || cfg.tier2_base_url != url;
-            cfg.local_base_url = url.clone();
-            cfg.tier1_base_url = url.clone();
-            cfg.tier2_base_url = url;
-            if let Some(model) = body.model {
-                let model = model.trim().to_string();
-                if model.is_empty() {
-                    return Err((StatusCode::BAD_REQUEST, "Enter a local model name.".into()));
-                }
-                changed = changed
-                    || cfg.local_model != model
-                    || cfg.tier1_model != model
-                    || cfg.tier2_model != model;
-                cfg.local_model = model.clone();
-                cfg.tier1_model = model.clone();
-                cfg.tier2_model = model;
-            }
-            if changed {
-                cfg.local_tools_ok = false;
-                cfg.tier1_tools_ok = false;
-                cfg.tier2_tools_ok = false;
-            }
-            let cfg = cfg.normalize();
-            call_blocking(state.app_state.db.clone(), {
-                let cfg_db = cfg.clone();
-                move |db| crate::local_delegate::persist_to_db(db, &cfg_db)
+            let model = body
+                .model
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .ok_or((StatusCode::BAD_REQUEST, "Enter a local model name.".into()))?;
+            let url_saved = url.clone();
+            let model_saved = model.clone();
+            call_blocking(state.app_state.db.clone(), move |db| {
+                db.set_app_setting("LOCAL_SERVER_URL", &url_saved)?;
+                db.set_app_setting("LOCAL_SERVER_MODEL", &model_saved)?;
+                Ok(())
             })
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            state
-                .app_state
-                .llm
-                .apply_local_delegate_config(cfg)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
         }
         crate::engine_connections::ConnectionKind::Secret => {
             let name = def.secret_name.ok_or((
@@ -7875,6 +8694,15 @@ async fn api_connections_patch(
 }
 
 #[derive(Debug, Deserialize)]
+struct TopicsModelJobPatch {
+    id: String,
+    #[serde(default)]
+    provider: String,
+    #[serde(default)]
+    model: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct TopicsModelPatch {
     #[serde(default)]
     source: String,
@@ -7882,6 +8710,8 @@ struct TopicsModelPatch {
     provider: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    jobs: Vec<TopicsModelJobPatch>,
 }
 
 fn topics_model_json(
@@ -7890,6 +8720,7 @@ fn topics_model_json(
     strategy_provider: &str,
     strategy_model: &str,
     local_base_url: &str,
+    jobs: Vec<serde_json::Value>,
     message: Option<&str>,
 ) -> serde_json::Value {
     let (source, provider, model, base_url) = match choice {
@@ -7905,12 +8736,7 @@ fn topics_model_json(
             Some(model.as_str()),
             None,
         ),
-        crate::topics::SystemLlmChoice::Strategy => (
-            "strategy",
-            strategy_provider,
-            Some(strategy_model).filter(|model| !model.is_empty()),
-            None,
-        ),
+        crate::topics::SystemLlmChoice::Missing => ("missing", "", None, None),
     };
     json!({
         "ok": true,
@@ -7922,8 +8748,42 @@ fn topics_model_json(
         "strategy_provider": strategy_provider,
         "strategy_model": strategy_model,
         "local_base_url": local_base_url,
+        "jobs": jobs,
         "message": message,
     })
+}
+
+async fn system_llm_job_rows(
+    state: &crate::agent::AppState,
+) -> Result<Vec<serde_json::Value>, (StatusCode, String)> {
+    let hook_fallback = state.config.hook_prompt_model.clone();
+    call_blocking(state.db.clone(), move |db| {
+        let mut rows = Vec::new();
+        for job in crate::topics::SystemLlmJob::ALL {
+            let (provider, model) = crate::topics::read_system_llm_job(db, job)?;
+            let provider = provider.unwrap_or_default();
+            let model = model.unwrap_or_default();
+            let using_default = provider.trim().is_empty();
+            let legacy_model = if job == crate::topics::SystemLlmJob::PromptHooks && using_default {
+                let stored = db.get_app_setting(crate::topics::APP_SETTING_HOOK_PROMPT_MODEL)?;
+                crate::topics::effective_hook_prompt_model(stored.as_deref(), &hook_fallback)
+            } else {
+                None
+            };
+            rows.push(json!({
+                "id": job.id(),
+                "label": job.label(),
+                "detail": job.detail(),
+                "provider": provider,
+                "model": model,
+                "using_default": using_default && legacy_model.is_none(),
+                "legacy_model": legacy_model,
+            }));
+        }
+        Ok(rows)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 async fn read_topics_model(
@@ -7933,22 +8793,23 @@ async fn read_topics_model(
     let saved = call_blocking(db, crate::topics::read_system_llm_settings)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let mm = state.llm.local_delegate_config();
+    let db = state.db.clone();
+    let local_server = call_blocking(db, |db| {
+        Ok((
+            db.get_app_setting("LOCAL_SERVER_URL")?.unwrap_or_default(),
+            db.get_app_setting("LOCAL_SERVER_MODEL")?
+                .unwrap_or_default(),
+        ))
+    })
+    .await
+    .unwrap_or_default();
     let choice = crate::topics::resolve_system_llm_choice(crate::topics::SystemLlmInputs {
         saved_source: saved.0.as_deref(),
         saved_model: saved.1.as_deref(),
-        prefer_tier2: state.config.topics_prefer_tier2,
-        tier2_base_url: &mm.tier2_base_url,
-        tier2_model: &mm.tier2_model,
-        tier2_tools_ok: mm.tier2_tools_ok,
-        local_base_url: &mm.local_base_url,
-        local_model: &mm.local_model,
+        local_server_url: &local_server.0,
+        local_server_model: &local_server.1,
     });
-    let local_base_url = if !mm.tier2_base_url.trim().is_empty() {
-        mm.tier2_base_url.clone()
-    } else {
-        mm.local_base_url.clone()
-    };
+    let local_base_url = local_server.0;
     let saved_choice = saved.0.as_deref().is_some_and(|s| !s.trim().is_empty());
     Ok((
         choice,
@@ -7966,12 +8827,14 @@ async fn api_topics_model_get(
     require_auth(&headers, state.auth_token.as_deref())?;
     let (choice, saved, provider, model, local_base_url) =
         read_topics_model(&state.app_state).await?;
+    let jobs = system_llm_job_rows(&state.app_state).await?;
     Ok(Json(topics_model_json(
         &choice,
         saved,
         &provider,
         &model,
         &local_base_url,
+        jobs,
         None,
     )))
 }
@@ -8028,28 +8891,78 @@ async fn api_topics_model_patch(
             "Unknown system LLM provider.".into(),
         ));
     };
+    let mut job_writes = Vec::new();
+    let mut hook_model_env: Option<Option<String>> = None;
+    for job in &body.jobs {
+        let Some(parsed_job) = crate::topics::SystemLlmJob::from_id(&job.id) else {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("Unknown system LLM row {}.", job.id.trim()),
+            ));
+        };
+        let write =
+            crate::topics::parse_system_llm_job_write(parsed_job, &job.provider, &job.model)
+                .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+        if parsed_job == crate::topics::SystemLlmJob::PromptHooks {
+            hook_model_env = Some(match &write {
+                crate::topics::SystemLlmJobWrite::Clear => None,
+                crate::topics::SystemLlmJobWrite::ModelOnly(model) => Some(model.clone()),
+                crate::topics::SystemLlmJobWrite::Pair { model, .. } => Some(model.clone()),
+            });
+        }
+        if matches!(
+            &write,
+            crate::topics::SystemLlmJobWrite::Pair { provider, .. }
+                if crate::llm_catalog::is_local_provider(provider) || provider == "local"
+        ) {
+            let mm = state.app_state.llm.local_delegate_config();
+            if mm.tier2_base_url.trim().is_empty() && mm.local_base_url.trim().is_empty() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "Set a local server URL under Settings → Connections before using a local model for {}.",
+                        parsed_job.label()
+                    ),
+                ));
+            }
+        }
+        job_writes.push((parsed_job, write));
+    }
     let stored_source = source.clone();
     let provider_for_env = stored_source.clone();
     let model_for_env = stored_model.clone();
     call_blocking(state.app_state.db.clone(), move |db| {
-        crate::topics::save_system_llm_settings(db, &stored_source, &stored_model)
+        crate::topics::save_system_llm_settings(db, &stored_source, &stored_model)?;
+        for (job, write) in &job_writes {
+            crate::topics::apply_system_llm_job_write(db, *job, write)?;
+        }
+        Ok(())
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    env_config::persist_pairs(&[
+    let mut env_pairs = vec![
         ("SYSTEM_LLM_PROVIDER", Some(provider_for_env.as_str())),
         ("SYSTEM_LLM_MODEL", Some(model_for_env.as_str())),
-    ])
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    ];
+    let hook_env_owned = hook_model_env.clone();
+    if hook_model_env.is_some() {
+        env_pairs.push((
+            "HOOK_PROMPT_MODEL",
+            hook_env_owned.as_ref().and_then(|value| value.as_deref()),
+        ));
+    }
+    env_config::persist_pairs(&env_pairs).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let (choice, saved, provider, strategy_model, local_base_url) =
         read_topics_model(&state.app_state).await?;
+    let jobs = system_llm_job_rows(&state.app_state).await?;
     Ok(Json(topics_model_json(
         &choice,
         saved,
         &provider,
         &strategy_model,
         &local_base_url,
-        Some("System LLM saved. Topic split, bulletin, and learning use it on the next pass."),
+        jobs,
+        Some("System LLM saved. Blank rows use the shared default on the next pass. No restart."),
     )))
 }
 
@@ -8075,6 +8988,9 @@ async fn api_runtime_get(
     let mm_cfg = state.app_state.llm.local_delegate_config();
     let engine = toggles.agent_engine();
     let local_ready = mm_cfg.local_routable();
+    let max_turn_bounds = crate::config::max_tool_iteration_bounds(
+        &state.app_state.config.runtime_reliability_profile,
+    );
     Ok(Json(json!({
         "ok": true,
         "tool_output_debug": toggles.tool_output_debug(),
@@ -8092,6 +9008,9 @@ async fn api_runtime_get(
             "response_quality_evaluator_enabled": if sources.2 { "app_settings" } else { "env" },
             "agent_engine": if sources.3.is_some() { "app_settings" } else { "env" },
         },
+        "max_tool_iterations": toggles.max_tool_iterations(),
+        "max_tool_iterations_floor": max_turn_bounds.0,
+        "max_tool_iterations_ceiling": max_turn_bounds.1,
         "description": "When enabled, verbose shell output is shown in chat (including background-job completion). When off, full logs are agent-only.",
     })))
 }
@@ -8102,8 +9021,20 @@ async fn api_runtime_patch(
     Json(body): Json<RuntimePatchRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     require_auth(&headers, state.auth_token.as_deref())?;
+    if let Some(requested) = body.max_tool_iterations {
+        if !(1..=crate::config::MAX_TOOL_ITERATIONS_HARD_CAP).contains(&requested) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Max turns must be from 1 to {}.",
+                    crate::config::MAX_TOOL_ITERATIONS_HARD_CAP
+                ),
+            ));
+        }
+    }
     let toggles = &state.app_state.runtime_toggles;
     let mut messages: Vec<&str> = Vec::new();
+    let mut max_turns_message: Option<String> = None;
 
     if let Some(enabled) = body.tool_output_debug {
         toggles.set_tool_output_debug(enabled);
@@ -8188,6 +9119,23 @@ async fn api_runtime_patch(
             }
         });
     }
+    if let Some(requested) = body.max_tool_iterations {
+        let profile = state.app_state.config.runtime_reliability_profile.as_str();
+        let effective = crate::config::clamp_max_tool_iterations(profile, requested);
+        toggles.set_max_tool_iterations(effective);
+        let (floor, ceiling) = crate::config::max_tool_iteration_bounds(profile);
+        max_turns_message = Some(if effective == requested {
+            format!("Max turns set to {effective}. The next turn uses this limit.")
+        } else if requested < floor {
+            format!(
+                "Max turns set to {effective}. This process does not go below {floor}. The next turn uses this limit."
+            )
+        } else {
+            format!(
+                "Max turns set to {effective}. This process does not go above {ceiling}. The next turn uses this limit."
+            )
+        });
+    }
 
     let mm_cfg = state.app_state.llm.local_delegate_config();
     let engine = toggles.agent_engine();
@@ -8206,7 +9154,7 @@ async fn api_runtime_patch(
         }
     }
 
-    if messages.is_empty() {
+    if messages.is_empty() && max_turns_message.is_none() {
         return Err((
             StatusCode::BAD_REQUEST,
             "No runtime toggle fields provided".to_string(),
@@ -8228,13 +9176,25 @@ async fn api_runtime_patch(
     } else {
         "false"
     };
+    let max_turns_value = toggles.max_tool_iterations().to_string();
     if let Err(err) = env_config::persist_pairs(&[
         ("TOOL_OUTPUT_DEBUG", Some(debug_value)),
         ("POST_TOOL_EVALUATOR_ENABLED", Some(pte_value)),
         ("RESPONSE_QUALITY_EVALUATOR_ENABLED", Some(pdqe_value)),
         ("AGENT_ENGINE", Some(engine_name)),
+        ("MAX_TOOL_ITERATIONS", Some(max_turns_value.as_str())),
     ]) {
         warnings.push(format!("Saved in the app. Could not update .env: {err}"));
+    }
+    let max_turn_bounds = crate::config::max_tool_iteration_bounds(
+        &state.app_state.config.runtime_reliability_profile,
+    );
+    let mut message = messages.join(" ");
+    if let Some(extra) = max_turns_message.as_deref() {
+        if !message.is_empty() {
+            message.push(' ');
+        }
+        message.push_str(extra);
     }
 
     Ok(Json(json!({
@@ -8247,9 +9207,12 @@ async fn api_runtime_patch(
         "local_delegate_tools_ok": mm_cfg.local_tools_ok,
         "local_delegate_ready": local_ready,
         "cost_routing_effective": cost_routing_effective,
+        "max_tool_iterations": toggles.max_tool_iterations(),
+        "max_tool_iterations_floor": max_turn_bounds.0,
+        "max_tool_iterations_ceiling": max_turn_bounds.1,
         "warnings": warnings,
         "source": "app_settings",
-        "message": messages.join(" "),
+        "message": message,
     })))
 }
 
@@ -8612,74 +9575,85 @@ async fn api_llm_get(
         }
     };
 
-    let (strategy, provider_source, model_source, base_url_source) =
-        if let Some(pid) = query.persona_id {
-            let persona = call_blocking(state.app_state.db.clone(), move |db| db.get_persona(pid))
-                .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            let Some(persona) = persona.filter(|p| p.chat_id == chat_id) else {
-                return Err((StatusCode::NOT_FOUND, "persona not found".into()));
-            };
-            let strategy = state
-                .app_state
-                .llm
-                .resolve_strategy_selection(Some(&persona))
-                .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-            persona_id_out = Some(pid);
-            let (provider_source, model_source, base_url_source) = if strategy.from_persona {
-                model_scope = "persona";
-                let provider_source = if persona
-                    .llm_provider_override
-                    .as_deref()
-                    .map(str::trim)
-                    .is_some_and(|s| !s.is_empty())
-                {
-                    "persona"
-                } else {
-                    source_from_settings(settings_provider)
-                };
-                let model_source = if persona
-                    .model_override
-                    .as_deref()
-                    .map(str::trim)
-                    .is_some_and(|s| !s.is_empty())
-                {
-                    "persona"
-                } else {
-                    source_from_settings(settings_model)
-                };
-                let base_url_source = if persona
-                    .llm_base_url_override
-                    .as_deref()
-                    .map(str::trim)
-                    .is_some_and(|s| !s.is_empty())
-                {
-                    "persona"
-                } else {
-                    source_from_settings(settings_base_url)
-                };
-                (provider_source, model_source, base_url_source)
+    let (strategy, provider_source, model_source, base_url_source) = if let Some(pid) =
+        query.persona_id
+    {
+        let persona = call_blocking(state.app_state.db.clone(), move |db| db.get_persona(pid))
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let Some(persona) = persona.filter(|p| p.chat_id == chat_id) else {
+            return Err((StatusCode::NOT_FOUND, "persona not found".into()));
+        };
+        let strategy = state
+            .app_state
+            .llm
+            .resolve_strategy_selection(Some(&persona))
+            .unwrap_or_else(|_| crate::llm::StrategyLlmSelection {
+                provider_id: persona.llm_provider_override.clone().unwrap_or_default(),
+                model: persona.model_override.clone().unwrap_or_default(),
+                base_url: persona.llm_base_url_override.clone(),
+                endpoint: String::new(),
+                client: std::sync::Arc::from(crate::llm::create_provider(&state.app_state.config)),
+                from_persona: true,
+            });
+        persona_id_out = Some(pid);
+        let (provider_source, model_source, base_url_source) = if strategy.from_persona {
+            model_scope = "persona";
+            let provider_source = if persona
+                .llm_provider_override
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|s| !s.is_empty())
+            {
+                "persona"
             } else {
-                (
-                    source_from_settings(settings_provider),
-                    source_from_settings(settings_model),
-                    source_from_settings(settings_base_url),
-                )
+                source_from_settings(settings_provider)
             };
-            (strategy, provider_source, model_source, base_url_source)
+            let model_source = if persona
+                .model_override
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|s| !s.is_empty())
+            {
+                "persona"
+            } else {
+                source_from_settings(settings_model)
+            };
+            let base_url_source = if persona
+                .llm_base_url_override
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|s| !s.is_empty())
+            {
+                "persona"
+            } else {
+                source_from_settings(settings_base_url)
+            };
+            (provider_source, model_source, base_url_source)
         } else {
-            let strategy = state
-                .app_state
-                .llm
-                .resolve_strategy_selection(None)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
             (
-                strategy,
                 source_from_settings(settings_provider),
                 source_from_settings(settings_model),
                 source_from_settings(settings_base_url),
             )
         };
+        (strategy, provider_source, model_source, base_url_source)
+    } else {
+        let strategy = crate::llm::StrategyLlmSelection {
+            provider_id: String::new(),
+            model: String::new(),
+            base_url: None,
+            endpoint: String::new(),
+            client: std::sync::Arc::from(crate::llm::create_provider(&state.app_state.config)),
+            from_persona: false,
+        };
+        (
+            strategy,
+            source_from_settings(settings_provider),
+            source_from_settings(settings_model),
+            source_from_settings(settings_base_url),
+        )
+    };
 
     let provider_id = strategy.provider_id.clone();
     let current_model = strategy.model.clone();
@@ -8853,7 +9827,10 @@ async fn api_llm_patch(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     require_auth(&headers, state.auth_token.as_deref())?;
     let model = body.model.trim().to_string();
-    if model.is_empty() {
+    let thinking_only = body.persona_id.is_none()
+        && model.is_empty()
+        && (body.thinking_enabled.is_some() || body.show_thinking.is_some());
+    if model.is_empty() && !thinking_only {
         return Err((StatusCode::BAD_REQUEST, "model is required".into()));
     }
     if model.len() > 256 {
@@ -8969,62 +9946,18 @@ async fn api_llm_patch(
         })));
     }
 
-    let (provider_saved, model_saved) = state
-        .app_state
-        .llm
-        .apply_selection(provider_id.clone(), model.clone(), local_base_url)
-        .map_err(|e| {
-            if e.contains("No API key") || e.contains("base_url") {
-                (StatusCode::BAD_REQUEST, e)
-            } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, e)
-            }
-        })?;
-
-    let provider_db = provider_saved.clone();
-    let model_db = model_saved.clone();
-    let base_url_db = if crate::llm_catalog::is_local_provider(&provider_saved) {
-        state
-            .app_state
-            .llm
-            .current_base_url()
-            .map(|url| crate::llm_catalog::normalize_local_base_url(&url, &provider_saved))
-    } else {
-        None
-    };
-    let base_url_response = base_url_db.clone();
-    call_blocking(state.app_state.db.clone(), move |db| {
-        db.set_app_setting(crate::llm_catalog::APP_SETTING_LLM_PROVIDER, &provider_db)?;
-        db.set_app_setting(crate::llm_catalog::APP_SETTING_LLM_MODEL, &model_db)?;
-        if let Some(ref url) = base_url_db {
-            db.set_app_setting(crate::llm_catalog::APP_SETTING_LLM_BASE_URL, url)?;
-        } else {
-            db.set_app_setting(crate::llm_catalog::APP_SETTING_LLM_BASE_URL, "")?;
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(Json(json!({
-        "ok": true,
-        "provider": {
-            "id": provider_saved,
-        },
-        "model": model_saved,
-        "base_url": base_url_response,
-        "thinking_enabled": thinking_enabled,
-        "show_thinking": show_thinking,
-        "provider_source": "app_settings",
-        "model_source": "app_settings",
-        "model_scope": "global",
-        "base_url_source": if base_url_response.is_some() {
-            "app_settings"
-        } else {
-            "n/a"
-        },
-        "message": "Provider and model updated. New agent runs use this selection immediately.",
-    })))
+    if thinking_only {
+        return Ok(Json(json!({
+            "ok": true,
+            "thinking_enabled": thinking_enabled,
+            "show_thinking": show_thinking,
+            "message": "Thinking settings saved.",
+        })));
+    }
+    Err((
+        StatusCode::BAD_REQUEST,
+        "Set the chat model on the Persona page.".into(),
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -9032,6 +9965,8 @@ struct MultimodelTestRequest {
     tier: String,
     base_url: String,
     model: String,
+    #[serde(default)]
+    persona_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -9216,17 +10151,30 @@ async fn api_multimodel_test_post(
     }
     match crate::llm::test_local_delegate_tools(&test_cfg, model, tier).await {
         Ok(()) => {
-            call_blocking(state.app_state.db.clone(), move |db| {
-                crate::local_delegate::persist_tier_tools_ok(db, tier, true)
-            })
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            if let Ok(cfg) = call_blocking(state.app_state.db.clone(), |db| {
-                crate::local_delegate::load_from_db(db)
-            })
-            .await
-            {
-                let _ = state.app_state.llm.apply_local_delegate_config(cfg);
+            if let Some(pid) = body.persona_id {
+                let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
+                let base_for_db = base_url.clone();
+                let model_for_db = model.to_string();
+                let saved = call_blocking(state.app_state.db.clone(), move |db| {
+                    db.set_persona_local_delegate(
+                        chat_id,
+                        pid,
+                        Some(&base_for_db),
+                        Some(&model_for_db),
+                        Some(true),
+                    )
+                })
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                if !saved {
+                    return Err((StatusCode::NOT_FOUND, "persona not found".into()));
+                }
+            } else {
+                call_blocking(state.app_state.db.clone(), move |db| {
+                    crate::local_delegate::persist_tier_tools_ok(db, tier, true)
+                })
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
             }
             Ok(Json(json!({
                 "ok": true,
@@ -9753,6 +10701,7 @@ async fn api_settings_get(
     let mm_cfg = state.app_state.llm.local_delegate_config();
     let agent_engine = state.app_state.runtime_toggles.agent_engine();
     let local_delegate_ready = mm_cfg.local_routable();
+    let installation = env_config::installation_flags(&state).await;
     Ok(Json(json!({
         "ok": true,
         "settings": items,
@@ -9771,7 +10720,8 @@ async fn api_settings_get(
             "agent_engine": agent_engine.as_str(),
             "cost_routing_effective": crate::local_delegate::cost_routing_effective(agent_engine, &mm_cfg),
             "web_enabled": cfg.web_enabled,
-            "needs_initialization": env_config::installation_needs_initialization(&state).await,
+            "needs_initialization": installation.needs_initialization,
+            "workspace_configured": installation.workspace_configured,
             "requires_restart_for_env_changes": env_config::note_disk_changes(&state).await,
             "runtime_env_merge_from_app_settings": true,
             "llm_model_from_app_settings": true,
@@ -10350,7 +11300,11 @@ pub async fn bind_web_listener(
     host: &str,
     port: u16,
 ) -> Result<(tokio::net::TcpListener, u16), std::io::Error> {
-    let walk = port == crate::config::default_web_port();
+    let exact = std::env::var(crate::daemon::RESTART_EXACT_PORT_ENV)
+        .ok()
+        .as_deref()
+        == Some("1");
+    let walk = !exact && port == crate::config::default_web_port();
     let mut candidate = port;
     let bind_host = crate::config::web_bind_host(host);
     if bind_host != host.trim() {
@@ -10519,6 +11473,21 @@ async fn favicon_file() -> impl IntoResponse {
         return ([("content-type", "image/png")], file.contents().to_vec()).into_response();
     }
     (StatusCode::NOT_FOUND, "Not Found").into_response()
+}
+
+fn embedded_public_file(name: &str, content_type: &'static str) -> axum::response::Response {
+    match WEB_ASSETS.get_file(name) {
+        Some(file) => ([("content-type", content_type)], file.contents().to_vec()).into_response(),
+        None => (StatusCode::NOT_FOUND, "Not Found").into_response(),
+    }
+}
+
+async fn meido_crest_file() -> axum::response::Response {
+    embedded_public_file("meido-crest.svg", "image/svg+xml")
+}
+
+async fn meido_bow_file() -> axum::response::Response {
+    embedded_public_file("meido-bow.svg", "image/svg+xml")
 }
 
 #[derive(Debug, Deserialize)]
@@ -10721,6 +11690,8 @@ fn build_router(web_state: WebState) -> Router {
         .route("/api/uploads/*path", get(upload_file))
         .route("/icon.png", get(icon_file))
         .route("/favicon.ico", get(favicon_file))
+        .route("/meido-crest.svg", get(meido_crest_file))
+        .route("/meido-bow.svg", get(meido_bow_file))
         .route("/api/health", get(api_health))
         .route("/api/chat", get(api_chat))
         .route("/api/contacts/bind", post(api_contacts_bind))
@@ -10811,7 +11782,9 @@ fn build_router(web_state: WebState) -> Router {
             get(api_schedules_list).post(api_schedules_create),
         )
         .route("/api/schedules/:id", patch(api_schedules_update))
-        .route("/api/todos", get(api_todos_list))
+        .route("/api/todos", get(api_todos_list).post(api_todos_create))
+        .route("/api/todos/:id/run", post(api_todos_run))
+        .route("/api/todos/:id/events", get(api_todos_events))
         .route("/api/todos/:id", patch(api_todos_patch))
         .route("/api/background_jobs", get(api_background_jobs_list))
         .route("/api/background_jobs/:job_id", get(api_background_job_get))
@@ -10862,6 +11835,10 @@ fn build_router(web_state: WebState) -> Router {
         .route("/api/personas/read", post(api_personas_read))
         .route("/api/personas/switch", post(api_personas_switch))
         .route("/api/personas/create", post(api_personas_create))
+        .route(
+            "/api/personas/local-delegate",
+            get(api_persona_local_get).patch(api_persona_local_patch),
+        )
         .route("/api/personas/delete", post(api_personas_delete))
         .route("/api/personas/rename", post(api_personas_rename))
         .route(
@@ -10991,6 +11968,14 @@ mod tests {
         assert!(
             WEB_ASSETS.get_file("icon.png").is_some(),
             "embedded web asset missing: icon.png"
+        );
+        assert!(
+            WEB_ASSETS.get_file("meido-crest.svg").is_some(),
+            "embedded web asset missing: meido-crest.svg"
+        );
+        assert!(
+            WEB_ASSETS.get_file("meido-bow.svg").is_some(),
+            "embedded web asset missing: meido-bow.svg"
         );
         let assets_dir = WEB_ASSETS.get_dir("assets");
         assert!(

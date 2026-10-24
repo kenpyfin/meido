@@ -11,7 +11,9 @@ use std::time::Duration;
 const DETACHED_ENV: &str = "MEIDO_DETACHED";
 const RESTART_PID_ENV: &str = "MEIDO_RESTART_PID";
 const RESTART_EXE_ENV: &str = "MEIDO_RESTART_EXE";
-/// 150 × 200 ms. The helper gives up and starts anyway if the old pid is still visible.
+/// Set on the replacement process so it binds `WEB_PORT` only, instead of sliding to the next port.
+pub const RESTART_EXACT_PORT_ENV: &str = "MEIDO_RESTART_EXACT_PORT";
+/// 150 × 200 ms, then SIGKILL. The next `meido start` runs only after this pid is gone.
 const RESTART_WAIT_POLLS: u32 = 150;
 const PID_FILE: &str = "meido.pid";
 const LISTEN_FILE: &str = "meido.listen";
@@ -199,22 +201,50 @@ fn supervised_by_login_service() -> bool {
 }
 
 fn spawn_restart_helper() -> Result<()> {
-    let exe = std::env::current_exe().context("Failed to resolve the meido executable")?;
+    let exe = live_executable().context("Failed to resolve the meido executable")?;
     let cwd = std::env::current_dir().context("Failed to read the working directory")?;
     let pid = std::process::id();
     let mut cmd = restart_helper_command();
     cmd.current_dir(cwd)
         .env(RESTART_PID_ENV, pid.to_string())
         .env(RESTART_EXE_ENV, &exe)
+        .env(RESTART_EXACT_PORT_ENV, "1")
         .env_remove(DETACHED_ENV)
         .env_remove(crate::meido_env::GATEWAY.preferred)
         .env_remove(crate::meido_env::GATEWAY.legacy)
+        .env_remove("MEIDO_WORKSPACE_DIR")
+        .env_remove("FINALLY_A_VALUE_BOT_WORKSPACE_DIR")
         .stdin(Stdio::null())
         .stdout(Stdio::null());
     detach_session(&mut cmd);
     cmd.spawn()
         .context("Failed to spawn the Meido restart helper")?;
     Ok(())
+}
+
+/// Path of the binary to start next. A replaced install leaves `/proc/self/exe` as
+/// `meido (deleted)`; the helper must exec the path that is on disk now.
+fn live_executable() -> Result<PathBuf> {
+    let current = std::env::current_exe().context("Failed to resolve the meido executable")?;
+    let resolved = executable_path_without_deleted_marker(&current);
+    if resolved.is_file() {
+        return Ok(resolved);
+    }
+    if current.is_file() {
+        return Ok(current);
+    }
+    Err(anyhow::anyhow!(
+        "Meido executable is gone ({}); reinstall meido, then start it again",
+        current.display()
+    ))
+}
+
+fn executable_path_without_deleted_marker(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_suffix(" (deleted)") {
+        Some(stripped) => PathBuf::from(stripped),
+        None => path.to_path_buf(),
+    }
 }
 
 #[cfg(unix)]
@@ -227,7 +257,7 @@ fn restart_helper_command() -> Command {
 #[cfg(unix)]
 fn restart_helper_sh() -> String {
     format!(
-        "i=0; while kill -0 \"${pid}\" 2>/dev/null && [ \"$i\" -lt {polls} ]; do i=$($(i+1)); sleep 0.2; done; exec \"${exe}\" start",
+        "i=0; while kill -0 \"${pid}\" 2>/dev/null && [ \"$i\" -lt {polls} ]; do i=$((i + 1)); sleep 0.2; done; if kill -0 \"${pid}\" 2>/dev/null; then kill -KILL \"${pid}\" 2>/dev/null || true; i=0; while kill -0 \"${pid}\" 2>/dev/null && [ \"$i\" -lt 25 ]; do i=$((i + 1)); sleep 0.2; done; fi; exec \"${exe}\" start",
         pid = RESTART_PID_ENV,
         polls = RESTART_WAIT_POLLS,
         exe = RESTART_EXE_ENV,
@@ -245,7 +275,7 @@ fn restart_helper_command() -> Command {
 #[cfg(windows)]
 fn restart_helper_ps() -> String {
     format!(
-        "$i = 0; while ($i -lt {RESTART_WAIT_POLLS}) {{ $p = Get-Process -Id $env:{RESTART_PID_ENV} -ErrorAction SilentlyContinue; if (-not $p) {{ break }}; Start-Sleep -Milliseconds 200; $i++ }}; & $env:{RESTART_EXE_ENV} start"
+        "$i = 0; while ($i -lt {RESTART_WAIT_POLLS}) {{ $p = Get-Process -Id $env:{RESTART_PID_ENV} -ErrorAction SilentlyContinue; if (-not $p) {{ break }}; Start-Sleep -Milliseconds 200; $i++ }}; $p = Get-Process -Id $env:{RESTART_PID_ENV} -ErrorAction SilentlyContinue; if ($p) {{ Stop-Process -Id $env:{RESTART_PID_ENV} -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500 }}; & $env:{RESTART_EXE_ENV} start"
     )
 }
 
@@ -302,7 +332,7 @@ fn spawn_detached(runtime_dir: &Path) -> Result<Spawned> {
         .with_context(|| format!("Failed to open {}", log_path.display()))?;
     let stderr = stdout.try_clone().context("Failed to share daemon log")?;
 
-    let exe = std::env::current_exe().context("Failed to resolve the meido executable")?;
+    let exe = live_executable().context("Failed to resolve the meido executable")?;
     let cwd = std::env::current_dir().context("Failed to read the working directory")?;
     let mut cmd = Command::new(exe);
     cmd.args(std::env::args().skip(1))
@@ -784,6 +814,25 @@ mod tests {
         assert!(script.contains(super::RESTART_PID_ENV));
         assert!(script.contains(&super::RESTART_WAIT_POLLS.to_string()));
         assert!(script.contains("start"));
+        #[cfg(unix)]
+        {
+            assert!(script.contains("i=$((i + 1))"));
+            assert!(script.contains("kill -KILL"));
+            assert!(!script.contains("$(i+1)"));
+        }
+        #[cfg(windows)]
+        assert!(script.contains("Stop-Process"));
+    }
+
+    #[test]
+    fn deleted_executable_marker_points_at_the_replacement() {
+        let marked = std::path::PathBuf::from("/home/ken/.local/bin/meido (deleted)");
+        assert_eq!(
+            super::executable_path_without_deleted_marker(&marked),
+            std::path::PathBuf::from("/home/ken/.local/bin/meido")
+        );
+        let live = std::path::PathBuf::from("/home/ken/.local/bin/meido");
+        assert_eq!(super::executable_path_without_deleted_marker(&live), live);
     }
 
     #[test]

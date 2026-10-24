@@ -104,7 +104,7 @@ const MAIN_CHAT_MESSAGE_VISIBILITY: &str = "(
     )
 )";
 
-const PERSONA_SELECT_COLS: &str = "id, chat_id, name, model_override, recent_history_min_user, recent_history_min_assistant, operator_memo, dense_delivery_enabled, dense_delivery_messaging_max_chars, dense_delivery_web_max_chars, dense_delivery_summary_chars, agent_engine_override, gemini_adk_topology, cursor_sdk_model, cursor_sdk_model_params, llm_provider_override, llm_base_url_override";
+const PERSONA_SELECT_COLS: &str = "id, chat_id, name, model_override, recent_history_min_user, recent_history_min_assistant, operator_memo, dense_delivery_enabled, dense_delivery_messaging_max_chars, dense_delivery_web_max_chars, dense_delivery_summary_chars, agent_engine_override, gemini_adk_topology, cursor_sdk_model, cursor_sdk_model_params, llm_provider_override, llm_base_url_override, local_delegate_base_url, local_delegate_model, local_delegate_tools_ok, user_message_rewrite_enabled";
 
 fn persona_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Persona> {
     Ok(Persona {
@@ -125,6 +125,10 @@ fn persona_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Persona> {
         cursor_sdk_model_params: row.get(14)?,
         llm_provider_override: row.get(15)?,
         llm_base_url_override: row.get(16)?,
+        local_delegate_base_url: row.get(17)?,
+        local_delegate_model: row.get(18)?,
+        local_delegate_tools_ok: row.get::<_, Option<i64>>(19)?.map(|value| value != 0),
+        user_message_rewrite_enabled: row.get::<_, i64>(20)? != 0,
     })
 }
 
@@ -193,16 +197,24 @@ pub struct Persona {
     /// Per-persona agent engine (`classic` / `classic_cost_routing` / `cursor` / `gemini_adk`).
     /// New personas default to `classic`. NULL/empty falls back to Classic (no inherit UI).
     pub agent_engine_override: Option<String>,
-    /// Optional per-persona Gemini ADK topology JSON. NULL inherits global `GEMINI_ADK_TOPOLOGY_CONFIG`.
+    /// Gemini ADK topology JSON for this persona. Empty stops a Gemini turn.
     pub gemini_adk_topology: Option<String>,
-    /// Per-persona Cursor SDK model id. NULL falls back to global `CURSOR_SDK_MODEL`.
+    /// Cursor SDK model id for this persona. Empty stops a Cursor turn.
     pub cursor_sdk_model: Option<String>,
     /// Per-persona Cursor SDK model params JSON array. NULL falls back to global params.
     pub cursor_sdk_model_params: Option<String>,
-    /// Per-persona classic strategy LLM provider id. NULL falls back to global `LLM_PROVIDER`.
+    /// Classic or cost-routing chat provider. Empty stops the turn.
     pub llm_provider_override: Option<String>,
-    /// Per-persona local OpenAI-compatible base URL. NULL falls back to global `LLM_BASE_URL`.
+    /// Local OpenAI-compatible base URL for this persona's chat provider.
     pub llm_base_url_override: Option<String>,
+    /// Cost-routing local server URL. Empty stops a cost-routing turn.
+    pub local_delegate_base_url: Option<String>,
+    /// Cost-routing local model. Empty stops a cost-routing turn.
+    pub local_delegate_model: Option<String>,
+    /// Cost-routing tool-call check. `None` or false stops a cost-routing turn.
+    pub local_delegate_tools_ok: Option<bool>,
+    /// When true, the system LLM rewrites the inbound user message before the persona sees it.
+    pub user_message_rewrite_enabled: bool,
 }
 
 /// Maximum `operator_memo` length (characters) for storage and prompt injection.
@@ -252,6 +264,8 @@ pub struct ScheduledTask {
     pub last_run: Option<String>,
     pub status: String, // "active", "running", "paused", "completed", "cancelled"
     pub created_at: String,
+    /// `runs_only` stores output in `scheduled_runs`. `transcript` also copies it into chat history.
+    pub output_delivery: String,
 }
 
 /// Read a column as text, tolerating rows whose value was stored with BLOB affinity
@@ -283,8 +297,9 @@ fn row_text_opt(row: &rusqlite::Row<'_>, idx: usize) -> rusqlite::Result<Option<
 
 /// Shared, blob-tolerant row mapping for `scheduled_tasks` queries. All list/lookup queries
 /// must select columns in this order: id, chat_id, persona_id, prompt, schedule_type,
-/// schedule_value, next_run, last_run, status, created_at.
+/// schedule_value, next_run, last_run, status, created_at, output_delivery.
 fn map_scheduled_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ScheduledTask> {
+    let output_delivery = row_text(row, 10)?;
     Ok(ScheduledTask {
         id: row.get(0)?,
         chat_id: row.get(1)?,
@@ -296,6 +311,11 @@ fn map_scheduled_task_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Scheduled
         last_run: row_text_opt(row, 7)?,
         status: row_text(row, 8)?,
         created_at: row_text(row, 9)?,
+        output_delivery: if output_delivery == "transcript" {
+            "transcript".to_string()
+        } else {
+            "runs_only".to_string()
+        },
     })
 }
 
@@ -778,9 +798,14 @@ pub struct PersonaTodo {
     pub position: f64,
     pub source_kind: String,
     pub source_ref: Option<String>,
+    pub auto_advance: i64,
+    pub stage_run_id: Option<String>,
+    pub stage_outcome: Option<String>,
+    /// Operator instruction sent on Deploy. Stage output stays in `description`.
+    pub deploy_prompt: Option<String>,
 }
 
-pub(crate) const PERSONA_TODO_COLS: &str = "id, chat_id, persona_id, title, status, source_hint, created_at, updated_at, completed_at, description, owner_persona_id, priority, due_at, blocked_reason, position, source_kind, source_ref";
+pub(crate) const PERSONA_TODO_COLS: &str = "id, chat_id, persona_id, title, status, source_hint, created_at, updated_at, completed_at, description, owner_persona_id, priority, due_at, blocked_reason, position, source_kind, source_ref, auto_advance, stage_run_id, stage_outcome, deploy_prompt";
 
 pub(crate) fn map_persona_todo(row: &rusqlite::Row<'_>) -> rusqlite::Result<PersonaTodo> {
     Ok(PersonaTodo {
@@ -804,18 +829,45 @@ pub(crate) fn map_persona_todo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Pers
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "manual".into()),
         source_ref: row.get(16)?,
+        auto_advance: row.get(17).unwrap_or(0),
+        stage_run_id: row.get(18)?,
+        stage_outcome: row.get(19)?,
+        deploy_prompt: row.get(20)?,
     })
 }
 
-pub(crate) fn normalize_board_status(status: &str) -> Result<&str, FinallyAValueBotError> {
-    match status.trim() {
+pub(crate) fn normalize_board_status(status: &str) -> Result<&'static str, FinallyAValueBotError> {
+    let normalized = status.trim().to_ascii_lowercase();
+    match normalized.as_str() {
         "open" | "todo" => Ok("todo"),
-        "doing" => Ok("doing"),
-        "blocked" => Ok("blocked"),
-        "done" => Ok("done"),
-        other => Err(FinallyAValueBotError::ToolExecution(format!(
-            "Todo status must be open, todo, doing, blocked, or done (got '{other}')"
+        "plan" | "design" => Ok("plan"),
+        "doing" | "implement" | "blocked" | "build" => Ok("build"),
+        "test" | "deploy" | "done" | "verify" => Ok("verify"),
+        _ => Err(FinallyAValueBotError::ToolExecution(format!(
+            "Todo status must be todo, plan, build, or verify (got '{normalized}')"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod board_status_tests {
+    use super::normalize_board_status;
+
+    #[test]
+    fn maps_legacy_columns_onto_four_stages() {
+        assert_eq!(normalize_board_status("open").unwrap(), "todo");
+        assert_eq!(normalize_board_status("todo").unwrap(), "todo");
+        assert_eq!(normalize_board_status("design").unwrap(), "plan");
+        assert_eq!(normalize_board_status("plan").unwrap(), "plan");
+        assert_eq!(normalize_board_status("doing").unwrap(), "build");
+        assert_eq!(normalize_board_status("implement").unwrap(), "build");
+        assert_eq!(normalize_board_status("blocked").unwrap(), "build");
+        assert_eq!(normalize_board_status("build").unwrap(), "build");
+        assert_eq!(normalize_board_status("test").unwrap(), "verify");
+        assert_eq!(normalize_board_status("deploy").unwrap(), "verify");
+        assert_eq!(normalize_board_status("done").unwrap(), "verify");
+        assert_eq!(normalize_board_status("verify").unwrap(), "verify");
+        assert!(normalize_board_status("shipped").is_err());
     }
 }
 
@@ -946,7 +998,8 @@ impl Database {
                 next_run TEXT NOT NULL,
                 last_run TEXT,
                 status TEXT NOT NULL DEFAULT 'active',
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                output_delivery TEXT NOT NULL DEFAULT 'runs_only'
             );
 
             CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_status_next
@@ -1170,6 +1223,7 @@ impl Database {
 
         Self::migrate_persona_schema(&conn)?;
         Self::migrate_scheduled_tasks_persona_schema(&conn)?;
+        Self::migrate_scheduled_tasks_output_delivery(&conn)?;
         Self::migrate_channel_bindings(&conn)?;
         Self::migrate_channel_bot_instances_and_policy(&conn)?;
         Self::migrate_fts(&conn)?;
@@ -1185,9 +1239,11 @@ impl Database {
         Self::migrate_background_jobs_session_schema(&conn)?;
         Self::migrate_personas_prompt_context(&conn)?;
         Self::migrate_personas_dense_delivery_and_engine(&conn)?;
+        Self::migrate_persona_user_message_rewrite(&conn)?;
         Self::migrate_gemini_adk_and_retire_deterministic(&conn)?;
         Self::migrate_persona_explicit_engine_and_cursor_model(&conn)?;
         Self::migrate_persona_llm_selection(&conn)?;
+        Self::migrate_persona_owned_chat_llm(&conn)?;
         Self::migrate_hook_policy_schema(&conn)?;
         Self::ensure_builtin_hook_definitions(&conn)?;
         Self::migrate_chat_sessions_schema(&conn)?;
@@ -1808,6 +1864,19 @@ impl Database {
         Ok(())
     }
 
+    fn migrate_scheduled_tasks_output_delivery(
+        conn: &Connection,
+    ) -> Result<(), FinallyAValueBotError> {
+        if Self::column_exists(conn, "scheduled_tasks", "output_delivery")? {
+            return Ok(());
+        }
+        conn.execute(
+            "ALTER TABLE scheduled_tasks ADD COLUMN output_delivery TEXT NOT NULL DEFAULT 'runs_only'",
+            [],
+        )?;
+        Ok(())
+    }
+
     fn migrate_fts(conn: &Connection) -> Result<(), FinallyAValueBotError> {
         // Create FTS5 virtual table and triggers (after all table migrations)
         conn.execute_batch(
@@ -1963,6 +2032,18 @@ impl Database {
         Ok(())
     }
 
+    fn migrate_persona_user_message_rewrite(
+        conn: &Connection,
+    ) -> Result<(), FinallyAValueBotError> {
+        if !Self::column_exists(conn, "personas", "user_message_rewrite_enabled")? {
+            conn.execute(
+                "ALTER TABLE personas ADD COLUMN user_message_rewrite_enabled INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
+        Ok(())
+    }
+
     /// Retire Deterministic pipeline storage; add Gemini ADK per-persona topology column.
     fn migrate_gemini_adk_and_retire_deterministic(
         conn: &Connection,
@@ -2029,6 +2110,263 @@ impl Database {
                 [],
             )?;
         }
+        Ok(())
+    }
+
+    /// Copy the process chat pair onto personas and System LLM, then delete it.
+    ///
+    /// A row that is still incomplete stays incomplete. This does not invent a model.
+    fn migrate_persona_owned_chat_llm(conn: &Connection) -> Result<(), FinallyAValueBotError> {
+        if !Self::column_exists(conn, "personas", "local_delegate_base_url")? {
+            conn.execute(
+                "ALTER TABLE personas ADD COLUMN local_delegate_base_url TEXT",
+                [],
+            )?;
+        }
+        if !Self::column_exists(conn, "personas", "local_delegate_model")? {
+            conn.execute(
+                "ALTER TABLE personas ADD COLUMN local_delegate_model TEXT",
+                [],
+            )?;
+        }
+        if !Self::column_exists(conn, "personas", "local_delegate_tools_ok")? {
+            conn.execute(
+                "ALTER TABLE personas ADD COLUMN local_delegate_tools_ok INTEGER",
+                [],
+            )?;
+        }
+        use rusqlite::OptionalExtension;
+        let already: Option<String> = conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE lower(trim(key)) = 'persona_owned_chat_llm_v1' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if already
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Ok(());
+        }
+
+        let setting = |key: &str| -> Result<Option<String>, FinallyAValueBotError> {
+            let value: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM app_settings WHERE lower(trim(key)) = lower(?1) LIMIT 1",
+                    params![key],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(value
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty()))
+        };
+        let agent_engine = setting("AGENT_ENGINE")?.unwrap_or_else(|| "classic".to_string());
+        let llm_provider = setting("LLM_PROVIDER")?;
+        let llm_model = setting("LLM_MODEL")?;
+        let llm_base_url = setting("LLM_BASE_URL")?;
+        let shared_local_url = setting("MULTIMODEL_LOCAL_BASE_URL")?;
+        let shared_local_model = setting("MULTIMODEL_LOCAL_MODEL")?;
+        let shared_local_tools_ok = setting("MULTIMODEL_LOCAL_TOOLS_OK")?
+            .map(|value| {
+                matches!(
+                    value.to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false);
+        let cursor_model = setting("CURSOR_SDK_MODEL")?
+            .or_else(|| Some(crate::config::default_cursor_sdk_model()));
+        let gemini_default = setting("GEMINI_ADK_DEFAULT_MODEL")?;
+        let gemini_topology = setting("GEMINI_ADK_TOPOLOGY_CONFIG")?;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, agent_engine_override, llm_provider_override, model_override, llm_base_url_override, local_delegate_base_url, local_delegate_model, local_delegate_tools_ok, cursor_sdk_model, gemini_adk_topology FROM personas",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<i64>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+            ))
+        })?;
+        let personas: Vec<_> = rows.collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        let nonempty = |value: &Option<String>| {
+            value
+                .as_deref()
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(str::to_string)
+        };
+
+        for (
+            id,
+            engine,
+            provider,
+            model,
+            base_url,
+            local_url,
+            local_model,
+            local_tools,
+            cursor,
+            topology,
+        ) in personas
+        {
+            let engine = nonempty(&engine).unwrap_or_else(|| agent_engine.clone());
+            let classic = engine == "classic" || engine == "classic_cost_routing";
+            let mut provider = nonempty(&provider);
+            let mut model = nonempty(&model);
+            let mut base_url = nonempty(&base_url);
+            if classic {
+                if provider.is_none() {
+                    provider = llm_provider.clone();
+                }
+                if model.is_none() {
+                    model = llm_model.clone();
+                }
+                let provider_is_local = provider
+                    .as_deref()
+                    .is_some_and(crate::llm_catalog::is_local_provider);
+                if provider_is_local && base_url.is_none() {
+                    base_url = llm_base_url.clone();
+                }
+            }
+            let mut local_url = nonempty(&local_url);
+            let mut local_model = nonempty(&local_model);
+            let mut local_tools = local_tools;
+            if engine == "classic_cost_routing" {
+                if local_url.is_none() {
+                    local_url = shared_local_url.clone();
+                }
+                if local_model.is_none() {
+                    local_model = shared_local_model.clone();
+                }
+                if local_tools.is_none() {
+                    local_tools = Some(if shared_local_tools_ok { 1 } else { 0 });
+                }
+            }
+            let mut cursor = nonempty(&cursor);
+            if engine == "cursor" && cursor.is_none() {
+                cursor = cursor_model.clone();
+            }
+            let mut topology = nonempty(&topology);
+            if engine == "gemini_adk" {
+                if topology.is_none() {
+                    topology = gemini_topology.clone().or_else(|| {
+                        serde_json::to_string(
+                            &crate::gemini_adk::AdkTopologyProfile::default_profile(),
+                        )
+                        .ok()
+                    });
+                }
+                if let Some(raw) = topology.clone() {
+                    if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&raw) {
+                        let current = value
+                            .get("default_model")
+                            .and_then(|item| item.as_str())
+                            .map(str::trim)
+                            .unwrap_or("");
+                        if current.is_empty() {
+                            if let Some(model) = gemini_default.clone().or_else(|| {
+                                Some(
+                                    crate::gemini_adk::config::DEFAULT_GEMINI_ADK_MODEL.to_string(),
+                                )
+                            }) {
+                                if let Some(object) = value.as_object_mut() {
+                                    object.insert(
+                                        "default_model".into(),
+                                        serde_json::Value::String(model),
+                                    );
+                                    topology = serde_json::to_string(&value).ok();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            conn.execute(
+                "UPDATE personas SET agent_engine_override = ?1, llm_provider_override = ?2, model_override = ?3, llm_base_url_override = ?4, local_delegate_base_url = ?5, local_delegate_model = ?6, local_delegate_tools_ok = ?7, cursor_sdk_model = ?8, gemini_adk_topology = ?9 WHERE id = ?10",
+                params![
+                    engine,
+                    provider,
+                    model,
+                    base_url,
+                    local_url,
+                    local_model,
+                    local_tools,
+                    cursor,
+                    topology,
+                    id
+                ],
+            )?;
+        }
+
+        let (system_provider, system_model) = (
+            setting("SYSTEM_LLM_PROVIDER")?,
+            setting("SYSTEM_LLM_MODEL")?,
+        );
+        if system_provider.is_none() || system_model.is_none() {
+            if let (Some(provider), Some(model)) = (llm_provider.clone(), llm_model.clone()) {
+                let now = Utc::now().to_rfc3339();
+                for (key, value) in [
+                    ("SYSTEM_LLM_PROVIDER", provider.as_str()),
+                    ("SYSTEM_LLM_MODEL", model.as_str()),
+                ] {
+                    conn.execute(
+                        "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+                         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                        params![key, value, now],
+                    )?;
+                }
+            }
+        }
+        if setting("LOCAL_SERVER_URL")?.is_none() {
+            if let Some(url) = shared_local_url.clone() {
+                let now = Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO app_settings (key, value, updated_at) VALUES ('LOCAL_SERVER_URL', ?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    params![url, now],
+                )?;
+            }
+        }
+        if setting("LOCAL_SERVER_MODEL")?.is_none() {
+            if let Some(model) = shared_local_model.clone() {
+                let now = Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO app_settings (key, value, updated_at) VALUES ('LOCAL_SERVER_MODEL', ?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    params![model, now],
+                )?;
+            }
+        }
+
+        conn.execute(
+            "DELETE FROM app_settings WHERE lower(trim(key)) IN (
+                'llm_provider', 'llm_model', 'llm_base_url',
+                'multimodel_enabled', 'multimodel_local_base_url', 'multimodel_local_model',
+                'multimodel_local_tools_ok', 'multimodel_tier1_base_url', 'multimodel_tier1_model',
+                'multimodel_tier1_tools_ok', 'multimodel_tier2_base_url', 'multimodel_tier2_model',
+                'multimodel_tier2_tools_ok', 'topics_prefer_tier2'
+            )",
+            [],
+        )?;
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES ('persona_owned_chat_llm_v1', '1', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            params![now],
+        )?;
         Ok(())
     }
 
@@ -4144,6 +4482,7 @@ impl Database {
             schedule_type,
             schedule_value,
             next_run,
+            "runs_only",
         )
     }
 
@@ -4155,12 +4494,22 @@ impl Database {
         schedule_type: &str,
         schedule_value: &str,
         next_run: &str,
+        output_delivery: &str,
     ) -> Result<i64, FinallyAValueBotError> {
+        let output_delivery = match output_delivery {
+            "transcript" => "transcript",
+            "runs_only" | "" => "runs_only",
+            other => {
+                return Err(FinallyAValueBotError::Config(format!(
+                    "output_delivery must be 'runs_only' or 'transcript'; got {other}"
+                )));
+            }
+        };
         let conn = self.conn.lock().unwrap();
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO scheduled_tasks (chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, status, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7)",
+            "INSERT INTO scheduled_tasks (chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, status, created_at, output_delivery)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'active', ?7, ?8)",
             params![
                 chat_id,
                 persona_id,
@@ -4168,7 +4517,8 @@ impl Database {
                 schedule_type,
                 schedule_value,
                 next_run,
-                now
+                now,
+                output_delivery
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -4749,7 +5099,7 @@ impl Database {
     pub fn get_due_tasks(&self, now: &str) -> Result<Vec<ScheduledTask>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at, output_delivery
              FROM scheduled_tasks
              WHERE status = 'active' AND next_run <= ?1
              ORDER BY next_run ASC, id ASC",
@@ -4763,7 +5113,7 @@ impl Database {
     pub fn get_all_active_tasks(&self) -> Result<Vec<ScheduledTask>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at, output_delivery
              FROM scheduled_tasks
              WHERE status IN ('active', 'running', 'paused')
              ORDER BY id",
@@ -4781,7 +5131,7 @@ impl Database {
     ) -> Result<Vec<ScheduledTask>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at, output_delivery
              FROM scheduled_tasks
              WHERE status IN ('active', 'running', 'paused', 'completed')
              ORDER BY id",
@@ -4800,7 +5150,7 @@ impl Database {
     ) -> Result<Vec<ScheduledTask>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at, output_delivery
              FROM scheduled_tasks
              WHERE chat_id = ?1 AND status IN ('active', 'running', 'paused', 'completed')
              ORDER BY id",
@@ -4819,7 +5169,7 @@ impl Database {
     ) -> Result<Vec<ScheduledTask>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at, output_delivery
              FROM scheduled_tasks
              WHERE chat_id = ?1 AND persona_id = ?2 AND status IN ('active', 'running', 'paused', 'completed')
              ORDER BY id",
@@ -4836,7 +5186,7 @@ impl Database {
     ) -> Result<Vec<ScheduledTask>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at, output_delivery
              FROM scheduled_tasks
              WHERE chat_id = ?1 AND status IN ('active', 'running', 'paused')
              ORDER BY id",
@@ -4855,7 +5205,7 @@ impl Database {
     ) -> Result<Vec<ScheduledTask>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at, output_delivery
              FROM scheduled_tasks
              WHERE chat_id = ?1 AND persona_id = ?2 AND status IN ('active', 'running', 'paused')
              ORDER BY id",
@@ -4872,7 +5222,7 @@ impl Database {
     ) -> Result<Option<ScheduledTask>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let result = conn.query_row(
-            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at
+            "SELECT id, chat_id, persona_id, prompt, schedule_type, schedule_value, next_run, last_run, status, created_at, output_delivery
              FROM scheduled_tasks
              WHERE id = ?1",
             params![task_id],
@@ -4920,6 +5270,28 @@ impl Database {
         let rows = conn.execute(
             "UPDATE scheduled_tasks SET prompt = ?1 WHERE id = ?2",
             params![prompt, task_id],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn update_task_output_delivery(
+        &self,
+        task_id: i64,
+        output_delivery: &str,
+    ) -> Result<bool, FinallyAValueBotError> {
+        let output_delivery = match output_delivery {
+            "transcript" => "transcript",
+            "runs_only" => "runs_only",
+            other => {
+                return Err(FinallyAValueBotError::Config(format!(
+                    "output_delivery must be 'runs_only' or 'transcript'; got {other}"
+                )));
+            }
+        };
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute(
+            "UPDATE scheduled_tasks SET output_delivery = ?1 WHERE id = ?2",
+            params![output_delivery, task_id],
         )?;
         Ok(rows > 0)
     }
@@ -6358,8 +6730,9 @@ impl Database {
                 "SELECT {PERSONA_TODO_COLS}
                  FROM persona_todos
                  WHERE chat_id = ?1 AND persona_id = ?2 AND (
-                   (?3 = 'open' AND status IN ('open','todo','doing','blocked'))
-                   OR (?3 <> 'open' AND status = ?3)
+                   (?3 = 'open' AND completed_at IS NULL)
+                   OR (?3 = 'done' AND completed_at IS NOT NULL)
+                   OR (?3 NOT IN ('open', 'done') AND status = ?3)
                  )
                  ORDER BY updated_at DESC
                  LIMIT ?4"
@@ -6377,7 +6750,7 @@ impl Database {
                  FROM persona_todos
                  WHERE chat_id = ?1 AND persona_id = ?2
                  ORDER BY
-                   CASE WHEN status IN ('open','todo','doing','blocked') THEN 0 ELSE 1 END,
+                   CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END,
                    position ASC,
                    updated_at DESC
                  LIMIT ?3"
@@ -6404,8 +6777,9 @@ impl Database {
                 "SELECT {PERSONA_TODO_COLS}
                  FROM persona_todos
                  WHERE chat_id = ?1 AND (
-                   (?2 = 'open' AND status IN ('open','todo','doing','blocked'))
-                   OR (?2 <> 'open' AND status = ?2)
+                   (?2 = 'open' AND completed_at IS NULL)
+                   OR (?2 = 'done' AND completed_at IS NOT NULL)
+                   OR (?2 NOT IN ('open', 'done') AND status = ?2)
                  )
                  ORDER BY position ASC, updated_at DESC
                  LIMIT ?3"
@@ -6420,7 +6794,7 @@ impl Database {
                  FROM persona_todos
                  WHERE chat_id = ?1
                  ORDER BY
-                   CASE WHEN status IN ('open','todo','doing','blocked') THEN 0 ELSE 1 END,
+                   CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END,
                    position ASC,
                    updated_at DESC
                  LIMIT ?2"
@@ -6455,37 +6829,43 @@ impl Database {
         todo_id: i64,
         status: &str,
     ) -> Result<Option<PersonaTodo>, FinallyAValueBotError> {
+        let mark_complete = status.trim().eq_ignore_ascii_case("done");
         let status = normalize_board_status(status)?;
         let conn = self.conn.lock().unwrap();
-        let previous: Option<String> = conn
+        let current: Option<(String, Option<String>)> = conn
             .query_row(
-                "SELECT status FROM persona_todos WHERE id = ?1",
+                "SELECT status, stage_outcome FROM persona_todos WHERE id = ?1",
                 params![todo_id],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .ok();
+        let Some((previous, stage_outcome)) = current else {
+            return Ok(None);
+        };
+        if stage_outcome.as_deref() == Some("running") && !mark_complete {
+            return Err(FinallyAValueBotError::ToolExecution(
+                "status change ignored while a stage is running".into(),
+            ));
+        }
         let now = chrono::Utc::now().to_rfc3339();
-        let completed_at: Option<String> = if status == "done" {
+        let completed_at: Option<String> = if mark_complete {
             Some(now.clone())
         } else {
             None
         };
         let rows = conn.execute(
             "UPDATE persona_todos
-             SET status = ?1, updated_at = ?2, completed_at = ?3
+             SET status = ?1, updated_at = ?2, completed_at = ?3,
+                 stage_run_id = NULL, stage_outcome = NULL
              WHERE id = ?4",
             params![status, now, completed_at, todo_id],
         )?;
-        if rows > 0 {
-            if let Some(from) = previous.as_deref() {
-                if from != status {
-                    conn.execute(
-                        "INSERT INTO board_item_events (chat_id, item_id, from_status, to_status, actor_kind, actor_persona_id, at)
-                         SELECT chat_id, id, ?1, ?2, 'persona', persona_id, ?3 FROM persona_todos WHERE id = ?4",
-                        params![from, status, now, todo_id],
-                    )?;
-                }
-            }
+        if rows > 0 && previous != status {
+            conn.execute(
+                "INSERT INTO board_item_events (chat_id, item_id, from_status, to_status, actor_kind, actor_persona_id, at)
+                 SELECT chat_id, id, ?1, ?2, 'persona', persona_id, ?3 FROM persona_todos WHERE id = ?4",
+                params![previous, status, now, todo_id],
+            )?;
         }
         if rows == 0 {
             return Ok(None);
@@ -7893,6 +8273,17 @@ impl Database {
         Ok(personas)
     }
 
+    pub fn list_personas_for_doctor(&self) -> Result<Vec<Persona>, FinallyAValueBotError> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {PERSONA_SELECT_COLS} FROM personas ORDER BY id"
+        ))?;
+        let personas = stmt
+            .query_map([], persona_from_row)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(personas)
+    }
+
     /// Latest persisted user or assistant message, including sessions and side chats.
     pub fn list_persona_last_message_at(
         &self,
@@ -8241,6 +8632,26 @@ impl Database {
         Ok(rows > 0)
     }
 
+    pub fn set_persona_local_delegate(
+        &self,
+        chat_id: i64,
+        persona_id: i64,
+        base_url: Option<&str>,
+        model: Option<&str>,
+        tools_ok: Option<bool>,
+    ) -> Result<bool, FinallyAValueBotError> {
+        let conn = self.conn.lock().unwrap();
+        let base_v = base_url.map(str::trim).filter(|s| !s.is_empty());
+        let model_v = model.map(str::trim).filter(|s| !s.is_empty());
+        let tools_v = tools_ok.map(|ok| if ok { 1 } else { 0 });
+        let rows = conn.execute(
+            "UPDATE personas SET local_delegate_base_url = ?1, local_delegate_model = ?2, local_delegate_tools_ok = ?3
+             WHERE id = ?4 AND chat_id = ?5",
+            params![base_v, model_v, tools_v, persona_id, chat_id],
+        )?;
+        Ok(rows > 0)
+    }
+
     /// Sets per-persona prompt controls. `None` for min fields writes SQL NULL (use server defaults).
     /// `operator_memo` `None` clears memo to NULL; `Some("")` also clears.
     pub fn set_persona_prompt_overrides(
@@ -8290,6 +8701,20 @@ impl Database {
                 persona_id,
                 chat_id
             ],
+        )?;
+        Ok(rows > 0)
+    }
+
+    pub fn set_persona_user_message_rewrite(
+        &self,
+        chat_id: i64,
+        persona_id: i64,
+        enabled: bool,
+    ) -> Result<bool, FinallyAValueBotError> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute(
+            "UPDATE personas SET user_message_rewrite_enabled = ?1 WHERE id = ?2 AND chat_id = ?3",
+            params![if enabled { 1 } else { 0 }, persona_id, chat_id],
         )?;
         Ok(rows > 0)
     }
@@ -10415,6 +10840,7 @@ mod tests {
         assert_eq!(tasks[0].prompt, "say hello");
         assert_eq!(tasks[0].schedule_type, "cron");
         assert_eq!(tasks[0].status, "active");
+        assert_eq!(tasks[0].output_delivery, "runs_only");
         cleanup(&dir);
     }
 
@@ -10433,6 +10859,7 @@ mod tests {
                 "once",
                 "2099-12-31T00:00:00Z",
                 "2099-12-31T00:00:00Z",
+                "runs_only",
             )
             .unwrap();
 
@@ -10495,6 +10922,7 @@ mod tests {
             "cron",
             "0 0 */6 * * *",
             "2026-01-01T00:00:00Z",
+            "runs_only",
         )
         .unwrap();
         db.create_scheduled_task_for_persona(
@@ -10504,6 +10932,7 @@ mod tests {
             "cron",
             "0 0 */6 * * *",
             "2026-01-01T00:00:00Z",
+            "runs_only",
         )
         .unwrap();
         db.ensure_indexing_task(

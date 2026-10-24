@@ -101,6 +101,79 @@ pub fn is_under_workspace_data(workspace_root: &Path, path: &Path) -> bool {
     path_is_under(path, workspace_root)
 }
 
+/// Checkout this process was built from, when that directory is still on disk.
+///
+/// Prefers the compile-time crate root over the process cwd so a data workspace
+/// that sits inside an older checkout is not mistaken for the running app.
+pub fn current_app_directory() -> Option<PathBuf> {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if manifest.is_dir() && looks_like_self_repo(&manifest) {
+        return Some(canonicalize_best_effort(&manifest));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(root) = self_repo_ancestor(&exe) {
+            return Some(root);
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Some(root) = self_repo_ancestor(&cwd) {
+            return Some(root);
+        }
+    }
+    None
+}
+
+fn self_repo_ancestor(start: &Path) -> Option<PathBuf> {
+    let mut current = if start.is_file() {
+        start.parent().map(Path::to_path_buf)
+    } else {
+        Some(start.to_path_buf())
+    };
+    for _ in 0..8 {
+        let Some(dir) = current else {
+            break;
+        };
+        if looks_like_self_repo(&dir) {
+            return Some(canonicalize_best_effort(&dir));
+        }
+        current = dir.parent().map(Path::to_path_buf);
+    }
+    None
+}
+
+fn paths_overlap(a: &Path, b: &Path) -> bool {
+    path_is_under(a, b) || path_is_under(b, a)
+}
+
+/// True when `WORKSPACE_DIR` is neither inside the app checkout nor an ancestor of it.
+pub fn workspace_disjoint_from_app(workspace_root: &Path) -> bool {
+    match current_app_directory() {
+        Some(app) => !paths_overlap(workspace_root, &app),
+        None => false,
+    }
+}
+
+/// App checkout every persona may edit when the data workspace does not overlap it.
+pub fn auto_approved_app_directory(workspace_root: &Path) -> Option<PathBuf> {
+    if !workspace_disjoint_from_app(workspace_root) {
+        return None;
+    }
+    current_app_directory()
+}
+
+/// Append the app checkout when the workspace sits outside it.
+///
+/// Already-covered paths are left as the operator saved them.
+pub fn append_auto_approved_app_directory(workspace_root: &Path, roots: &mut Vec<PathBuf>) {
+    let Some(app) = auto_approved_app_directory(workspace_root) else {
+        return;
+    };
+    if path_covered_by_roots(&app, roots) {
+        return;
+    }
+    roots.push(app);
+}
+
 /// True when `path` is inside the bot checkout but outside the workspace data root.
 pub fn is_self_repo_source_path(workspace_root: &Path, path: &Path) -> bool {
     let Some(self_repo) = resolve_self_repo_root(workspace_root) else {
@@ -110,6 +183,37 @@ pub fn is_self_repo_source_path(workspace_root: &Path, path: &Path) -> bool {
         return false;
     }
     path_is_under(path, &self_repo)
+}
+
+/// True when `path` is the same as `root` or a descendant of it.
+pub fn path_covered_by_roots(path: &Path, roots: &[PathBuf]) -> bool {
+    roots.iter().any(|root| path_is_under(path, root))
+}
+
+/// External paths that overlap the bot checkout: the checkout itself, a parent, or a subdirectory.
+pub fn external_roots_overlapping_self_repo(
+    workspace_root: &Path,
+    external_roots: &[PathBuf],
+) -> Vec<PathBuf> {
+    let Some(self_repo) = resolve_self_repo_root(workspace_root) else {
+        return Vec::new();
+    };
+    external_roots
+        .iter()
+        .filter(|root| path_is_under(root, &self_repo) || path_is_under(&self_repo, root))
+        .cloned()
+        .collect()
+}
+
+/// Git against the checkout is allowed only when an external path covers the checkout root.
+pub fn self_repo_git_allowed_by_external_roots(
+    workspace_root: &Path,
+    external_roots: &[PathBuf],
+) -> bool {
+    let Some(self_repo) = resolve_self_repo_root(workspace_root) else {
+        return false;
+    };
+    path_covered_by_roots(&self_repo, external_roots)
 }
 
 /// Refuse Cursor/agent cwd when it is the self-repo root or other source paths outside workspace.
@@ -167,6 +271,63 @@ pub fn apply_git_ceiling_env(cmd: &mut tokio::process::Command, workspace_root: 
 /// Absolute path display for prompts (empty when unknown).
 pub fn self_repo_display(workspace_root: &Path) -> Option<String> {
     resolve_self_repo_root(workspace_root).map(|p| p.display().to_string())
+}
+
+/// When this persona's external paths overlap the checkout, replace the hard ban
+/// so the model is allowed to work on the listed paths.
+pub fn rewrite_self_repo_ban_for_external_paths(
+    prompt: String,
+    workspace_root: &Path,
+    external_roots: &[PathBuf],
+) -> String {
+    let listed = external_roots_overlapping_self_repo(workspace_root, external_roots);
+    if listed.is_empty() {
+        return prompt;
+    }
+    let Some(self_repo) = resolve_self_repo_root(workspace_root) else {
+        return prompt;
+    };
+    const HEADING: &str = "## Self-repo ban (mandatory)\n";
+    let Some(start) = prompt.find(HEADING) else {
+        return prompt;
+    };
+    let after = start + HEADING.len();
+    let end = prompt[after..]
+        .find("\n\n")
+        .map(|i| after + i)
+        .unwrap_or(prompt.len());
+    let listed_fmt = listed
+        .iter()
+        .map(|p| format!("`{}`", p.display()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let git_line = if self_repo_git_allowed_by_external_roots(workspace_root, external_roots) {
+        format!(
+            "- Git against `{self}` is allowed because that checkout is covered by the external-path list.\n",
+            self = self_repo.display()
+        )
+    } else {
+        format!(
+            "- Git that names the checkout root `{self}` stays blocked until that root (or a parent) is on the external-path list. File reads and writes under the listed paths are still allowed.\n",
+            self = self_repo.display()
+        )
+    };
+    let replacement = format!(
+        "## Self-repo ban (mandatory)\n\
+         - Banned root: `{self}` (and its `.git`), except paths covered by this persona's external paths.\n\
+         - **Allowed:** {listed_fmt}. Reads, writes, and shell under those listed paths are allowed, including inside the Meido checkout.\n\
+         {git_line}\
+         - Every path in that checkout that is not under a listed path stays banned.\n\
+         - Persona **Tier-1 target repos** (`Repo: /absolute/path/...`) outside this checkout stay fully allowed.\n\
+         - Persona cwd under WORKSPACE_DIR is not a git project root; do not rely on git discovering a parent checkout.\n",
+        self = self_repo.display(),
+        git_line = git_line,
+    );
+    let mut out = String::with_capacity(prompt.len() + replacement.len());
+    out.push_str(&prompt[..start]);
+    out.push_str(&replacement);
+    out.push_str(&prompt[end..]);
+    out
 }
 
 /// Prompt fragment: ban self-repo; allow Tier-1 target repos.
@@ -246,8 +407,8 @@ pub fn self_repo_git_block_message(workspace_root: &Path) -> String {
     let self_path = self_repo_display(workspace_root).unwrap_or_else(|| PACKAGE_NAME.to_string());
     format!(
         "Blocked: git against the bot's own checkout ({self_path}) is not allowed. \
-         Persona Tier-1 target repos (`Repo: …` paths) are fully allowed — cd there first. \
-         Do not use the Meido source repo as a project."
+         Add that checkout to this persona's external paths to allow it. \
+         Persona Tier-1 target repos (`Repo: …` paths) are fully allowed — cd there first."
     )
 }
 
@@ -364,5 +525,64 @@ mod tests {
         assert!(check_agent_cwd_allowed(&ws, &persona).is_ok());
         assert!(check_agent_cwd_allowed(&ws, &root).is_err());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn external_path_covers_checkout_and_subdir() {
+        let root = temp_tree("allow");
+        let ws = root.join("workspace");
+        let src = root.join("src");
+        fs::create_dir_all(&ws).unwrap();
+        fs::create_dir_all(&src).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"meido\"\n").unwrap();
+        fs::write(src.join("lib.rs"), "").unwrap();
+        let file = src.join("lib.rs");
+        assert!(path_covered_by_roots(&file, std::slice::from_ref(&root)));
+        assert!(!path_covered_by_roots(
+            &file,
+            &[ws.join("shared").join("notes")]
+        ));
+        assert!(self_repo_git_allowed_by_external_roots(
+            &ws,
+            std::slice::from_ref(&root)
+        ));
+        assert!(!self_repo_git_allowed_by_external_roots(
+            &ws,
+            std::slice::from_ref(&src)
+        ));
+        let overlapping = external_roots_overlapping_self_repo(&ws, std::slice::from_ref(&src));
+        assert_eq!(overlapping.len(), 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn prompt_names_allowlisted_checkout() {
+        let root = temp_tree("prompt");
+        let ws = root.join("workspace");
+        fs::create_dir_all(&ws).unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"meido\"\n").unwrap();
+        let prompt = self_repo_ban_prompt_section(&ws);
+        let rewritten =
+            rewrite_self_repo_ban_for_external_paths(prompt, &ws, std::slice::from_ref(&root));
+        assert!(rewritten.contains("**Allowed:**"));
+        assert!(rewritten.contains(&root.display().to_string()));
+        assert!(rewritten.contains("Git against"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn workspace_outside_the_app_auto_approves_the_app_directory() {
+        let outside =
+            std::env::temp_dir().join(format!("meido_outside_app_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&outside).unwrap();
+        let app = current_app_directory().expect("this checkout is the app directory");
+        assert!(workspace_disjoint_from_app(&outside));
+        assert!(!workspace_disjoint_from_app(&app.join("workspace")));
+        let mut roots = Vec::new();
+        append_auto_approved_app_directory(&outside, &mut roots);
+        assert!(path_covered_by_roots(&app, &roots));
+        append_auto_approved_app_directory(&outside, &mut roots);
+        assert_eq!(roots.len(), 1);
+        let _ = fs::remove_dir_all(&outside);
     }
 }

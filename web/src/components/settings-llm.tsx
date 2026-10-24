@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import { listedModelIds, ModelSelect } from './model-select'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { SettingsPanelSkeleton } from './skeleton'
 import type { LlmCatalogModel, LlmConfigResponse, LlmLiveCatalogResponse, LlmProviderOption } from '../types'
@@ -27,8 +28,6 @@ export function SettingsLlmPanel({
   const [loading, setLoading] = useState(true)
   const [selectedProvider, setSelectedProvider] = useState('')
   const [selectedModel, setSelectedModel] = useState('')
-  const [customModel, setCustomModel] = useState('')
-  const [useCustom, setUseCustom] = useState(false)
   const [serverUrl, setServerUrl] = useState('')
   const [thinkingEnabled, setThinkingEnabled] = useState(false)
   const [showThinking, setShowThinking] = useState(false)
@@ -60,19 +59,7 @@ export function SettingsLlmPanel({
         ? activeId
         : (available[0]?.id ?? '')
       setSelectedProvider(providerId)
-      const providerEntry = data.providers?.find((p) => p.id === providerId)
-      const catalog = providerEntry?.models ?? data.catalog ?? []
-      const current = data.model ?? ''
-      const inCatalog = catalog.some((m) => m.id === current)
-      if (inCatalog || !current) {
-        setUseCustom(false)
-        setSelectedModel(current || catalog[0]?.id || '')
-        setCustomModel('')
-      } else {
-        setUseCustom(true)
-        setCustomModel(current)
-        setSelectedModel(catalog[0]?.id || '')
-      }
+      setSelectedModel(data.model ?? '')
       const activeIsLocal =
         providerId === 'ollama' || providerId === 'llama' || providerId === 'llamacpp'
       if (activeIsLocal) {
@@ -109,8 +96,10 @@ export function SettingsLlmPanel({
     [llm?.providers, selectedProvider],
   )
 
-  const staticCatalog = activeProviderEntry?.models ?? llm?.catalog ?? []
-  const catalogForProvider = liveModels ?? staticCatalog
+  const staticCatalog = (activeProviderEntry?.models ?? llm?.catalog ?? []).filter(
+    (model) => !model.from_active_config,
+  )
+  const catalogForProvider = (liveModels ?? staticCatalog).filter((model) => !model.from_active_config)
 
   const isLocalProvider =
     selectedProvider === 'ollama' ||
@@ -122,27 +111,15 @@ export function SettingsLlmPanel({
     selectedProvider === 'gemini' ||
     llm?.thinking_supported === true
 
-  const applyCatalogSelection = useCallback(
-    (models: LlmCatalogModel[]) => {
-      const current = (useCustom ? customModel : selectedModel).trim() || (llm?.model ?? '').trim()
-      if (current && models.some((m) => m.id === current)) {
-        setUseCustom(false)
-        setSelectedModel(current)
-        setCustomModel('')
-        return
-      }
-      if (current) {
-        setUseCustom(true)
-        setCustomModel(current)
-        return
-      }
-      if (models[0]) {
-        setUseCustom(false)
-        setSelectedModel(models[0].id)
-      }
-    },
-    [customModel, llm?.model, selectedModel, useCustom],
-  )
+  const applyCatalogSelection = useCallback((models: LlmCatalogModel[]) => {
+    const listed = listedModelIds(models)
+    const current = selectedModel.trim() || (llm?.model ?? '').trim()
+    if (current && listed.includes(current)) {
+      setSelectedModel(current)
+      return
+    }
+    if (!current && listed[0]) setSelectedModel(listed[0])
+  }, [llm?.model, selectedModel])
 
   const loadLiveModels = useCallback(
     async (opts?: { silent?: boolean; provider?: string; baseUrl?: string }) => {
@@ -172,7 +149,7 @@ export function SettingsLlmPanel({
         applyCatalogSelection(models)
         if (res.source === 'live') {
           const n = res.live_count ?? models.filter((m) => m.from_live).length
-          const truncated = res.truncated ? ' (truncated; use custom id for others)' : ''
+          const truncated = res.truncated ? ' (list truncated)' : ''
           setModelsNotice(`${n} model${n === 1 ? '' : 's'} loaded from provider API${truncated}.`)
         } else {
           const msg = res.message?.trim() || 'Provider API unavailable; showing curated list.'
@@ -220,10 +197,7 @@ export function SettingsLlmPanel({
     setModelsNotice(null)
     lastLoadedKeyRef.current = ''
     const entry = llm?.providers?.find((p) => p.id === nextProvider)
-    const firstModel = entry?.models?.[0]?.id ?? ''
-    if (!useCustom) {
-      setSelectedModel(firstModel)
-    }
+    setSelectedModel(listedModelIds(entry?.models)[0] ?? '')
     const local =
       nextProvider === 'ollama' || nextProvider === 'llama' || nextProvider === 'llamacpp'
     if (local) {
@@ -234,14 +208,14 @@ export function SettingsLlmPanel({
   }
 
   async function saveSelection() {
-    const model = (useCustom ? customModel : selectedModel).trim()
+    const model = selectedModel.trim()
     const provider = selectedProvider.trim()
     if (!provider) {
       onError('Pick a provider.')
       return
     }
-    if (!model) {
-      onError('Pick a model or enter a custom model id.')
+    if (!catalogForProvider.some((entry) => entry.id === model)) {
+      onError('Pick a model from the list.')
       return
     }
     if (isLocalProvider && !serverUrl.trim()) {
@@ -257,7 +231,7 @@ export function SettingsLlmPanel({
         body: JSON.stringify({
           provider,
           model,
-          custom: useCustom,
+          custom: false,
           ...(includeThinking
             ? { thinking_enabled: thinkingEnabled, show_thinking: showThinking }
             : {}),
@@ -298,18 +272,12 @@ export function SettingsLlmPanel({
   return (
     <div className="flex flex-col gap-3">
       <span>
-        Add provider keys under Settings → Connections. Provider and model are saved for{' '}
-        {activePersonaId != null && activePersonaId > 0 ? (
-          <>
-            this persona
-            {llm.model_scope === 'persona' ? ' (persona override active)' : ' (inherits global until saved)'}
-          </>
-        ) : (
-          <>all personas that have not set an override</>
-        )}
-        . Model lists load live from the provider API; curated cost hints are shown when the id
-        matches.
-        {includeThinking ? ' Thinking toggles stay shared across personas.' : ' Thinking toggles are in Settings → Engine.'}
+        Add provider keys under Settings → Connections. Provider and model are saved on this
+        persona. A missing model stops the turn. Model lists load live from the provider API;
+        curated cost hints are shown when the id matches.
+        {includeThinking
+          ? ' Thinking toggles stay shared across personas.'
+          : ' Thinking toggles are on Settings → System LLM.'}
       </span>
 
       <div className="flex flex-col gap-2">
@@ -317,7 +285,7 @@ export function SettingsLlmPanel({
           Provider
         </span>
         {(llm.providers ?? []).length === 0 ? (
-          <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100">
+          <div role="status" className="mc-notice-owed">
               No provider API keys yet. Add one under Settings → Connections, then reload this page.
             </div>
         ) : (
@@ -383,24 +351,16 @@ export function SettingsLlmPanel({
             {loadingModels ? 'Loading…' : 'Refresh models'}
           </Button>
         </div>
-        {!useCustom && selectedModel && catalogForProvider.some((m) => m.id === selectedModel) ? (
-          <Select value={selectedModel} onValueChange={setSelectedModel}>
-            <SelectTrigger placeholder="Select model" ><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {catalogForProvider.filter((m) => m.id).map((m) => (
-                <SelectItem key={m.id} value={m.id}>
-                  {catalogLabel(m)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : (
-          <Input
-            placeholder="Custom model id"
-            value={customModel}
-            onChange={(e) => setCustomModel(e.target.value)}
-          />
-        )}
+        <ModelSelect
+          ariaLabel="Model"
+          value={selectedModel}
+          options={catalogForProvider.filter((entry) => entry.id).map((entry) => ({
+            id: entry.id,
+            label: catalogLabel(entry),
+          }))}
+          onChange={setSelectedModel}
+          disabled={loadingModels || (llm.providers ?? []).length === 0}
+        />
         {modelsNotice ? (
           <span>
             {modelsNotice}
@@ -412,22 +372,9 @@ export function SettingsLlmPanel({
               : 'Showing curated fallback until the provider API responds.'}
           </span>
         )}
-        {llm.custom_model_allowed ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            type="button"
-            onClick={() => {
-              setUseCustom((v) => !v)
-              setSaveNotice(null)
-            }}
-          >
-            {useCustom ? 'Use catalog list' : 'Use custom model id'}
-          </Button>
-        ) : null}
       </div>
 
-      {(useCustom ? customModel : selectedCatalog) ? (
+      {selectedCatalog ? (
         <div
           className="rounded-md border p-3 text-sm"
           style={{ borderColor: 'var(--gray-6)' }}
@@ -435,20 +382,14 @@ export function SettingsLlmPanel({
           <span className="font-semibold mb-1 block">
             Cost reference
           </span>
-          {useCustom ? (
+          <div className="flex flex-col gap-1">
             <span>
-              Custom model - check your provider&apos;s pricing page.
+              Tier: <span className="capitalize">{selectedCatalog.cost_tier}</span>
             </span>
-          ) : selectedCatalog ? (
-            <div className="flex flex-col gap-1">
-              <span>
-                Tier: <span className="capitalize">{selectedCatalog.cost_tier}</span>
-              </span>
-              <span>
-                {selectedCatalog.cost_summary}
-              </span>
-            </div>
-          ) : null}
+            <span>
+              {selectedCatalog.cost_summary}
+            </span>
+          </div>
           {llm.cost_reference_note ? (
             <span className="mt-2 block">
               {llm.cost_reference_note}
@@ -514,16 +455,14 @@ export function SettingsLlmPanel({
             {llm.provider?.label ?? llm.provider?.id} / {llm.model}
             {llm.is_local_provider && llm.base_url ? ` @ ${llm.base_url}` : ''}
           </span>
-          {llm.model_scope === 'persona' || llm.provider_source === 'persona'
-            ? ' (saved for this persona)'
-            : llm.provider_source === 'app_settings' && llm.model_source === 'app_settings'
-              ? ' (saved in app)'
-              : ' (auto-selected - save to confirm)'}
+          {llm.model?.trim()
+            ? ' (saved on this persona)'
+            : ' (set a model before the next turn)'}
         </span>
       </div>
 
       {saveNotice ? (
-        <div role="status" className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-900 dark:text-green-100">{saveNotice}</div>
+        <span className="text-xs text-muted-foreground" role="status">{saveNotice}</span>
       ) : null}
     </div>
   )

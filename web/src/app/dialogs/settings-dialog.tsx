@@ -1,11 +1,13 @@
 import { Button } from '@/components/ui/button'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
-import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose } from '@/components/ui/dialog'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { Dialog, DialogContent, DialogClose } from '@/components/ui/dialog'
 import React from 'react'
+import { useIsMobile } from '@/lib/use-is-mobile'
 
+import { LedgerBook, LedgerDialogHeader, LedgerJump, LedgerSection, LedgerStatusRow, ServiceNote, type LedgerIndexEntry } from '../../components/ledger-chrome'
 import { SettingsPanelSkeleton, OverviewStatusSkeleton } from '../../components/skeleton'
-import type { SettingsDialogProps } from './types'
+import type { InstallationStatus } from '../../types'
+import type { SettingsDialogProps, SettingsLedgerPage } from './types'
 
 const SettingsRuntimePanel = React.lazy(() =>
   import('../../components/settings-runtime').then((m) => ({ default: m.SettingsRuntimePanel })),
@@ -19,23 +21,37 @@ const SettingsConnectionsPanel = React.lazy(() =>
 const SettingsTopicsModelPanel = React.lazy(() =>
   import('../../components/settings-topics-model').then((m) => ({ default: m.SettingsTopicsModelPanel })),
 )
-const SettingsLlmPanel = React.lazy(() =>
-  import('../../components/settings-llm').then((m) => ({ default: m.SettingsLlmPanel })),
-)
-const SettingsLocalDelegatePanel = React.lazy(() =>
-  import('../../components/settings-local-delegate').then((m) => ({ default: m.SettingsLocalDelegatePanel })),
-)
-const SettingsCursorPanel = React.lazy(() =>
-  import('../../components/settings-cursor').then((m) => ({ default: m.SettingsCursorPanel })),
-)
-const SettingsGeminiAdkPanel = React.lazy(() =>
-  import('../../components/settings-gemini-adk').then((m) => ({ default: m.SettingsGeminiAdkPanel })),
-)
 const SettingsEnvironmentPanel = React.lazy(() =>
   import('../../components/settings-environment').then((m) => ({ default: m.SettingsEnvironmentPanel })),
 )
 
-export function SettingsDialog({ appearance, api, activePersonaId, personas, settings, onRunSetupWizard }: SettingsDialogProps) {
+const PAGE_LABELS: Record<SettingsLedgerPage, string> = {
+  overview: 'Overview',
+  environment: 'Environment',
+  'system-llm': 'System LLM',
+  connections: 'Connections',
+  integrations: 'Integrations',
+  channels: 'Channels',
+}
+
+function restartOwed(status: InstallationStatus | null): boolean {
+  if (!status) return false
+  return (
+    (status.requires_restart_for_env_changes ?? status.requires_restart_to_apply_runtime_settings) === true
+  )
+}
+
+function indexEntries(status: InstallationStatus | null): LedgerIndexEntry[] {
+  return (Object.keys(PAGE_LABELS) as SettingsLedgerPage[]).map((id) => {
+    if (id === 'overview' && restartOwed(status)) return { id, label: PAGE_LABELS[id], state: 'Restart needed' }
+    if (id === 'overview' && status?.needs_initialization) return { id, label: PAGE_LABELS[id], state: 'Missing' }
+    if (id === 'connections' && status != null && !status.llm_ready) return { id, label: PAGE_LABELS[id], state: 'Missing' }
+    if (id === 'integrations' && status != null && !status.channel_ready) return { id, label: PAGE_LABELS[id], state: 'Missing' }
+    return { id, label: PAGE_LABELS[id] }
+  })
+}
+
+export function SettingsDialog({ appearance, api, activePersonaId, personas, settings, onRunSetupWizard, onConfigurePersona }: SettingsDialogProps) {
   const settingsDialogOpen = settings.open
   const setSettingsDialogOpen = settings.onOpenChange
   const settingsError = settings.error
@@ -47,75 +63,94 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
   const bindings = settings.bindings
   const updateChannelPersonaPolicy = settings.updateChannelPersonaPolicy
   const reloadInstallationStatus = settings.reloadInstallationStatus
+  const mobile = useIsMobile()
+  const personaName = personas.find((item) => item.id === activePersonaId)?.name ?? null
+  const page = settings.page
 
   return (
     <Dialog open={settingsDialogOpen} onOpenChange={setSettingsDialogOpen}>
-      <DialogContent className="max-w-[920px]">
-        <DialogTitle>Web UI configuration</DialogTitle>
-        <DialogDescription className="mb-3">
-          Shared setup for every persona. Provider API keys are under Connections. A persona’s
-          engine, hooks, skills, and secrets are on the Persona page. Configure Telegram, Discord,
-          and WhatsApp under Integrations. Restart Meido after changing channel tokens.
-        </DialogDescription>
+      <DialogContent className="mc-ledger-dialog max-w-[1040px]">
+        <LedgerDialogHeader
+          eyebrow="Household ledger"
+          title="Web UI configuration"
+          description="Shared setup for every persona. Provider API keys are under Connections. A persona’s engine, hooks, skills, and secrets are on the Persona page. Configure Telegram, Discord, and WhatsApp under Integrations. Restart Meido after changing channel tokens."
+        />
+        <div className="mc-ledger-body">
         {settingsError ? (
-          <div role="status" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive mb-2">{settingsError}</div>
+          <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive mb-2">{settingsError}</div>
         ) : null}
         {restartNotice ? (
-          <div role="status" className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-900 dark:text-green-100 mb-2">{restartNotice}</div>
+          <div role="status" className="mc-notice-owed mb-2">{restartNotice}</div>
         ) : null}
-        <Tabs defaultValue="overview">
-          <TabsList className="mc-settings-tabs-sticky mb-3 h-auto flex-wrap">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="environment">Environment</TabsTrigger>
-            <TabsTrigger value="engine">Engine</TabsTrigger>
-            <TabsTrigger value="system-llm">System LLM</TabsTrigger>
-            <TabsTrigger value="connections">Connections</TabsTrigger>
-            <TabsTrigger value="integrations">Integrations</TabsTrigger>
-            <TabsTrigger value="channels">Channels</TabsTrigger>
-          </TabsList>
+        <LedgerBook
+          label="Household index"
+          entries={indexEntries(installationStatus)}
+          page={page}
+          onPageChange={(id) => settings.onPageChange(id as SettingsLedgerPage)}
+          revealPage={settings.revealPage}
+          open={settingsDialogOpen}
+          mobile={mobile}
+        >
           <React.Suspense fallback={<SettingsPanelSkeleton />}>
-          <TabsContent value="environment">
+          {page === 'environment' ? (
             <SettingsEnvironmentPanel
               api={api}
               onRunWizard={() => onRunSetupWizard?.()}
               onChanged={() => void reloadInstallationStatus()}
             />
-          </TabsContent>
-          <TabsContent value="overview">
+          ) : null}
+          {page === 'overview' ? (
+            <>
             {installationStatus ? (
-              <div className="flex flex-col gap-2 mb-2">
-                <div className="flex gap-2 flex-wrap items-center">
-                  <span>
-                    LLM: {installationStatus.llm_ready ? 'ready' : 'missing'}
-                  </span>
-                  <span>
-                    Channels: {installationStatus.channel_ready ? 'ready' : 'missing'}
-                  </span>
-                  <span>
-                    Cursor engine:{' '}
-                    {installationStatus.cursor_engine_ready ? 'ready' : 'not ready'}
-                  </span>
-                  {installationStatus.agent_engine === 'classic_cost_routing' ? (
-                    <span>
-                      Local delegate:{' '}
-                      {installationStatus.local_delegate_ready ? 'verified' : 'not verified'}
-                    </span>
-                  ) : null}
+              <LedgerSection
+                title="Readiness"
+                owed={
+                  !installationStatus.llm_ready ||
+                  !installationStatus.channel_ready ||
+                  !installationStatus.cursor_engine_ready ||
+                  installationStatus.needs_initialization === true ||
+                  restartOwed(installationStatus)
+                }
+                className="mb-2"
+              >
+                <div className="mc-ledger-rows">
+                  <LedgerStatusRow
+                    label="LLM"
+                    state={installationStatus.llm_ready ? 'Ready' : 'Missing'}
+                    detail={installationStatus.llm_ready ? undefined : (
+                      <LedgerJump onClick={() => settings.onPageChange('connections')}>Open Connections</LedgerJump>
+                    )}
+                  />
+                  <LedgerStatusRow
+                    label="Channels"
+                    state={installationStatus.channel_ready ? 'Ready' : 'Missing'}
+                    detail={installationStatus.channel_ready ? undefined : (
+                      <LedgerJump onClick={() => settings.onPageChange('integrations')}>Open Integrations</LedgerJump>
+                    )}
+                  />
+                  <LedgerStatusRow
+                    label="Cursor"
+                    state={installationStatus.cursor_engine_ready ? 'Ready' : 'Missing'}
+                    detail={installationStatus.cursor_engine_ready ? undefined : (
+                      <LedgerJump onClick={() => onConfigurePersona?.('engine')}>Open persona engine</LedgerJump>
+                    )}
+                  />
                   {installationStatus.needs_initialization ? (
-                    <span>Setup wizard: open</span>
+                    <LedgerStatusRow
+                      label="Setup"
+                      state="Missing"
+                      detail={<LedgerJump onClick={() => onRunSetupWizard?.()}>Run Setup Wizard</LedgerJump>}
+                    />
                   ) : null}
-                  <span>
-                    Env restart needed:{' '}
-                    {(installationStatus.requires_restart_for_env_changes ??
-                      installationStatus.requires_restart_to_apply_runtime_settings) === true
-                      ? 'yes'
-                      : 'no'}
-                  </span>
+                  <LedgerStatusRow
+                    label="Restart"
+                    state={restartOwed(installationStatus) ? 'Restart needed' : 'No restart owed'}
+                  />
                 </div>
-                <span>
+                <p className="mc-notice-settled mt-2">
                   Stop requests between LLM/tool iterations (cooperative cancel). Use Queue for FIFO visibility.
-                </span>
-                <div className="flex gap-2 flex-wrap">
+                </p>
+                <div className="mt-3 flex gap-2 flex-wrap">
                   <Button
                     size="sm"
                     variant="outline"
@@ -126,52 +161,32 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
                   <Button
                     size="sm"
                     variant="default"
-                    disabled={restartBusy}
+                    disabled={restartBusy || !restartOwed(installationStatus)}
                     onClick={() => void requestRestart()}
                   >
-                    {restartBusy ? 'Restarting…' : 'Restart Meido'}
+                    {restartBusy
+                      ? 'Restarting…'
+                      : restartOwed(installationStatus)
+                        ? 'Restart Meido'
+                        : 'No restart owed'}
                   </Button>
                 </div>
-              </div>
+              </LedgerSection>
             ) : (
               <OverviewStatusSkeleton />
             )}
-            <div
-              className="rounded-md border p-3 mt-3"
-              style={appearance === 'dark'
-                ? { borderColor: 'var(--mc-border-soft)', background: 'var(--mc-bg-panel)' }
-                : { borderColor: 'var(--gray-6)', background: 'var(--gray-2)' }}
-            >
-              <span className="font-semibold mb-2 block">
-                Runtime toggles
-              </span>
+            <LedgerSection title="Runtime toggles" className="mt-3">
               <SettingsRuntimePanel api={api} onError={setSettingsError} />
-            </div>
-          </TabsContent>
-          <TabsContent value="engine">
-            <div className="flex flex-col gap-4">
-              <span>
-                Defaults shared by every persona. Choose a persona’s engine, model override, Cursor
-                model, and Gemini topology on the Persona page.
-              </span>
-              <SettingsLlmPanel api={api} onError={setSettingsError} />
-              <SettingsLocalDelegatePanel api={api} onError={setSettingsError} />
-              <SettingsCursorPanel api={api} onError={setSettingsError} scope="shared" />
-              <SettingsGeminiAdkPanel
-                api={api}
-                onError={setSettingsError}
-                activePersonaId={null}
-                scope="engine"
-              />
-            </div>
-          </TabsContent>
-          <TabsContent value="system-llm">
+            </LedgerSection>
+            </>
+          ) : null}
+          {page === 'system-llm' ? (
             <SettingsTopicsModelPanel api={api} onError={setSettingsError} />
-          </TabsContent>
-          <TabsContent value="connections">
+          ) : null}
+          {page === 'connections' ? (
             <SettingsConnectionsPanel api={api} onError={setSettingsError} />
-          </TabsContent>
-          <TabsContent value="integrations">
+          ) : null}
+          {page === 'integrations' ? (
             <SettingsIntegrationsPanel
               api={api}
               appearance={appearance}
@@ -180,21 +195,15 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
               requestRestart={requestRestart}
               restartBusy={restartBusy}
             />
-          </TabsContent>
-          <TabsContent value="channels">
-        <div
-          className="rounded-md border p-3"
-          style={appearance === 'dark'
-            ? { borderColor: 'var(--mc-border-soft)', background: 'var(--mc-bg-panel)' }
-            : { borderColor: 'var(--gray-6)', background: 'var(--gray-2)' }}
-        >
-          <span className="font-semibold">External channel persona mode</span>
-          <span className="mb-2 block">
-            Bot integrations appear here for this contact’s main chat. Replies are directional: each channel only receives responses to messages it sent. All traffic still appears in the web UI. Telegram, Discord, and WeCom can use all personas or a single persona. WhatsApp is single-persona by design. Focused sessions stay in the web UI.
-          </span>
+          ) : null}
+          {page === 'channels' ? (
+        <LedgerSection title="External channel persona mode" scope="live">
+          <ServiceNote summary="Choose which personas answer this contact. The next message from that bot uses the choice.">
+            Replies are directional: a channel only receives responses to messages it sent. The web UI still shows every message. Telegram, Discord, and WeCom can answer as all personas or one persona. WhatsApp stays on one persona. Focused sessions stay in the web UI.
+          </ServiceNote>
           <div className="space-y-2">
             {bindings.length === 0 ? (
-              <span>No bot integrations configured. Add bots under the Integrations tab.</span>
+              <span>No bot integrations configured. Add bots under Integrations.</span>
             ) : bindings.map((b) => {
               const platform = b.platform ?? b.channel_type
               const currentMode = platform === 'whatsapp'
@@ -277,14 +286,18 @@ export function SettingsDialog({ appearance, api, activePersonaId, personas, set
               )
             })}
           </div>
-        </div>
-          </TabsContent>
+        </LedgerSection>
+          ) : null}
           </React.Suspense>
-        </Tabs>
-        <div className="flex justify-end mt-4">
+        </LedgerBook>
+        <div className="mc-ledger-footer">
+          {personaName && onConfigurePersona ? (
+            <LedgerJump onClick={() => onConfigurePersona()}>Configure {personaName}</LedgerJump>
+          ) : <span />}
           <DialogClose>
             <Button variant="secondary">Close</Button>
           </DialogClose>
+        </div>
         </div>
       </DialogContent>
     </Dialog>

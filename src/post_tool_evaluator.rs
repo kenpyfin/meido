@@ -264,12 +264,13 @@ fn build_pte_user_prompt(
 pub async fn evaluate_completion(
     enabled: bool,
     config: &Config,
-    multimodel: Option<&crate::local_delegate::LocalDelegateConfig>,
+    system_llm: Option<&crate::llm::DirectLlmTarget>,
     env_redactor: &EnvSecretRedactor,
     principles_content: &str,
     memory_context: &str,
     messages: &[Message],
     iteration: usize,
+    max_tool_iterations: usize,
 ) -> Result<PteResult, FinallyAValueBotError> {
     if !enabled {
         return Ok(PteResult {
@@ -304,19 +305,14 @@ pub async fn evaluate_completion(
     }
 
     let system_prompt = build_pte_system_prompt(principles_content, memory_context);
-    let user_prompt = build_pte_user_prompt(
-        env_redactor,
-        messages,
-        iteration,
-        config.max_tool_iterations,
-    );
+    let user_prompt = build_pte_user_prompt(env_redactor, messages, iteration, max_tool_iterations);
 
     let pte_messages = vec![Message {
         role: "user".into(),
         content: MessageContent::Text(user_prompt),
     }];
 
-    let provider_bundle = match llm::create_evaluator_provider(config, multimodel) {
+    let provider_bundle = match llm::create_evaluator_provider(config, system_llm) {
         Ok(p) => p,
         Err(e) => {
             tracing::warn!("PTE skipped: {e}");

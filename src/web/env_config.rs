@@ -53,8 +53,31 @@ pub(super) async fn load_env(state: &WebState) -> Result<LoadedEnv, ApiError> {
                 .get("SYSTEM_LLM_MODEL")
                 .cloned()
                 .unwrap_or_default();
+            let chat_id = state.app_state.config.operator_inbox_chat_id();
             let _ = call_blocking(state.app_state.db.clone(), move |db| {
-                crate::topics::save_system_llm_settings(db, &provider, &model)
+                crate::topics::save_system_llm_settings(db, &provider, &model)?;
+                if !provider.trim().is_empty() && !model.trim().is_empty() {
+                    let personas = db.list_personas(chat_id)?;
+                    if let Some(persona) = personas.iter().find(|item| item.name == "default") {
+                        let missing = persona
+                            .model_override
+                            .as_deref()
+                            .map(str::trim)
+                            .unwrap_or("")
+                            .is_empty();
+                        if missing {
+                            db.set_persona_engine_override(chat_id, persona.id, Some("classic"))?;
+                            db.set_persona_llm_selection(
+                                chat_id,
+                                persona.id,
+                                Some(provider.as_str()),
+                                Some(model.as_str()),
+                                None,
+                            )?;
+                        }
+                    }
+                }
+                Ok(())
             })
             .await;
         }
@@ -83,6 +106,17 @@ fn apply_runtime_keys(state: &WebState, values: &HashMap<String, String>) {
     }
     if let Some(value) = values.get("AGENT_ENGINE") {
         toggles.set_agent_engine(crate::runtime_toggles::AgentEngine::parse(value));
+    }
+    if let Some(value) = values.get("MAX_TOOL_ITERATIONS") {
+        if let Ok(requested) = value.trim().parse::<usize>() {
+            if requested >= 1 {
+                let effective = crate::config::clamp_max_tool_iterations(
+                    &state.app_state.config.runtime_reliability_profile,
+                    requested,
+                );
+                toggles.set_max_tool_iterations(effective);
+            }
+        }
     }
 }
 
@@ -481,11 +515,23 @@ pub(super) async fn api_setup_action_post(
     Ok(Json(json!({ "ok": true, "message": message })))
 }
 
-pub(super) async fn installation_needs_initialization(state: &WebState) -> bool {
+pub(super) struct InstallationFlags {
+    pub needs_initialization: bool,
+    pub workspace_configured: bool,
+}
+
+pub(super) async fn installation_flags(state: &WebState) -> InstallationFlags {
     let Ok(loaded) = load_env(state).await else {
-        return true;
+        return InstallationFlags {
+            needs_initialization: true,
+            workspace_configured: false,
+        };
     };
     let sync_values = loaded.values;
     let extras = readiness(state, &sync_values).await;
-    dotenv_sync::initializer_status(&sync_values, &extras).needs_initialization
+    let status = dotenv_sync::initializer_status(&sync_values, &extras);
+    InstallationFlags {
+        needs_initialization: status.needs_initialization,
+        workspace_configured: status.workspace_configured,
+    }
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { LlmModelFields } from './llm-model-fields'
 import type { EnvConfigResponse } from '@/types'
 
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>
@@ -27,6 +28,7 @@ export function SetupWizardDialog({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [systemModels, setSystemModels] = useState<string[]>([])
 
   useEffect(() => {
     if (!open) return
@@ -110,6 +112,14 @@ export function SetupWizardDialog({
       ['TAVILY_API_KEY', 'SEARXNG_URL'],
       [],
     ]
+    if (step === 3 && !(drafts.SYSTEM_LLM_PROVIDER ?? '').trim()) {
+      setError('Pick a provider from the list.')
+      return
+    }
+    if (step === 3 && !systemModels.includes((drafts.SYSTEM_LLM_MODEL ?? '').trim())) {
+      setError('Pick a model from the list.')
+      return
+    }
     if (keysByStep[step].length > 0) {
       const ok = await save(keysByStep[step])
       if (!ok) return
@@ -184,8 +194,15 @@ export function SetupWizardDialog({
         ) : null}
         {step === 3 ? (
           <div className="space-y-2">
-            <Field label="Provider (anthropic, openai, gemini, xai, openrouter, deepseek)" value={drafts.SYSTEM_LLM_PROVIDER ?? ''} onChange={(value) => setField('SYSTEM_LLM_PROVIDER', value)} />
-            <Field label="Model" value={drafts.SYSTEM_LLM_MODEL ?? ''} onChange={(value) => setField('SYSTEM_LLM_MODEL', value)} />
+            <LlmModelFields
+              api={api}
+              provider={drafts.SYSTEM_LLM_PROVIDER ?? ''}
+              model={drafts.SYSTEM_LLM_MODEL ?? ''}
+              onProvider={(value) => setField('SYSTEM_LLM_PROVIDER', value)}
+              onModel={(value) => setField('SYSTEM_LLM_MODEL', value)}
+              onListed={setSystemModels}
+              disabled={busy}
+            />
             <p className="text-xs text-muted-foreground">Provider keys are saved under Settings → Connections.</p>
             <Field label="Anthropic key" secret value={drafts.ANTHROPIC_API_KEY ?? ''} onChange={(value) => setField('ANTHROPIC_API_KEY', value)} />
             <Field label="OpenAI key" secret value={drafts.OPENAI_API_KEY ?? ''} onChange={(value) => setField('OPENAI_API_KEY', value)} />

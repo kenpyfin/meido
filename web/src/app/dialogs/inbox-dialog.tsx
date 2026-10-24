@@ -15,6 +15,7 @@ export function InboxDialog({ appearance, personas, inbox }: InboxDialogProps) {
       busyTodoId={inbox.busyTodoId}
       onRefresh={inbox.onRefresh}
       onOpenTarget={inbox.onOpenTarget}
+      onOpenTodo={inbox.onOpenTodo}
       onCompleteTodo={inbox.onCompleteTodo}
     />
   )

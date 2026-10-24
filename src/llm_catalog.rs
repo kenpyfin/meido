@@ -4,7 +4,8 @@
 //! `PROVIDER_CATALOG` is a **curated static list** used for cost hints and as a fallback when a
 //! live `/models` fetch fails. Settings loads live ids via `GET /api/llm/models` (OpenAI-compatible
 //! `/models`, Anthropic `/v1/models`, Gemini model list). When the active model is not in either
-//! list, the API still prepends it so you can keep using a custom id.
+//! list, the API still marks it `from_active_config`. The web UI omits that row;
+//! a model can be chosen only from the curated or live list.
 //!
 //! Pricing values are approximate list-price hints (USD per 1M tokens), not live quotes.
 

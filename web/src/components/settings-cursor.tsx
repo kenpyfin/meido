@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import { ModelSelect } from './model-select'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { SettingsPanelSkeleton } from './skeleton'
 import type {
@@ -17,6 +18,7 @@ type Props = {
   activePersonaId?: number | null
   /** model: this persona's SDK model. shared: MCP, CLI, and timeouts. */
   scope?: 'all' | 'model' | 'shared'
+  onSaved?: () => void
 }
 
 function statusColor(ok: boolean | undefined): 'green' | 'orange' | 'gray' {
@@ -82,7 +84,7 @@ function parseModelCatalog(
     .filter((model) => Boolean(model.id))
 }
 
-export function SettingsCursorPanel({ api, onError, activePersonaId = null, scope = 'all' }: Props) {
+export function SettingsCursorPanel({ api, onError, activePersonaId = null, scope = 'all', onSaved }: Props) {
   const [config, setConfig] = useState<CursorEngineConfigResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -90,7 +92,6 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
   const [modelCatalog, setModelCatalog] = useState<CursorModelCatalogEntry[]>([])
   const [modelsNotice, setModelsNotice] = useState<string | null>(null)
-  const [useCustomSdkModel, setUseCustomSdkModel] = useState(false)
   const autoLoadedModelsRef = useRef(false)
 
   const [sdkModel, setSdkModel] = useState('')
@@ -190,14 +191,10 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
         const current = sdkModel.trim()
         const currentEntry = catalog.find((model) => model.id === current)
         if (currentEntry) {
-          setUseCustomSdkModel(false)
           setSdkModelParams((prev) => normalizeModelParams(currentEntry, prev))
-        } else if (current) {
-          setUseCustomSdkModel(true)
-        } else if (catalog[0]) {
+        } else if (!current && catalog[0]) {
           setSdkModel(catalog[0].id)
           setSdkModelParams(defaultParamsForModel(catalog[0]))
-          setUseCustomSdkModel(false)
         }
         setModelsNotice(`${catalog.length} model${catalog.length === 1 ? '' : 's'} loaded from Cursor.`)
       } catch (e) {
@@ -253,6 +250,16 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
         setSaving(false)
         return
       }
+      if (personaModel && !modelCatalog.some((model) => model.id === sdkModel.trim())) {
+        onError('Pick a Cursor model from the list.')
+        setSaving(false)
+        return
+      }
+      if (sharedFields && cliModel.trim() && !modelCatalog.some((model) => model.id === cliModel.trim())) {
+        onError('Pick a CLI model from the list, or leave the override unset.')
+        setSaving(false)
+        return
+      }
       const res = await api<CursorEngineConfigResponse>('/api/cursor-engine', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -279,6 +286,7 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
       setSaveNotice(res.message ?? 'Saved.')
       setConfig(res)
       setSdkModelParams(res.sdk_model_params ?? sdkModelParams)
+      onSaved?.()
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -333,30 +341,21 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
         </span>
         <div className="flex flex-col gap-2">
           <div className="flex gap-2 flex-wrap items-center">
-            {!useCustomSdkModel &&
-            modelCatalog.length > 0 &&
-            sdkModel &&
-            modelCatalog.some((model) => model.id === sdkModel) ? (
-              <Select value={sdkModel} onValueChange={onSdkModelChange}>
-                <SelectTrigger placeholder="Select model" style={{ flex: 1, minWidth: 160 }} ><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {modelCatalog
-                    .filter((model) => Boolean(model.id))
-                    .map((model) => (
-                    <SelectItem key={model.id} value={model.id}>
-                      {model.display_name?.trim() ? `${model.display_name} (${model.id})` : model.id}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <Input
-                placeholder="composer-2.5"
-                value={sdkModel}
-                onChange={(e) => setSdkModel(e.target.value)}
-                style={{ flex: 1, minWidth: 160 }}
-              />
-            )}
+            <ModelSelect
+              ariaLabel="Cursor model"
+              value={sdkModel}
+              disabled={loadingModels || !canLoadModels}
+              options={modelCatalog.filter((model) => Boolean(model.id)).map((model) => ({
+                id: model.id,
+                label: model.display_name?.trim() ? `${model.display_name} (${model.id})` : model.id,
+              }))}
+              onChange={onSdkModelChange}
+              emptyHint={
+                canLoadModels
+                  ? 'Refresh models, then pick one.'
+                  : 'Model list requires a reachable sidecar and the Cursor key under Settings → Connections.'
+              }
+            />
             <Button
               size="sm"
               variant="outline"
@@ -366,16 +365,6 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
               {loadingModels ? 'Loading…' : 'Refresh models'}
             </Button>
           </div>
-          {modelCatalog.length > 0 ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              type="button"
-              onClick={() => setUseCustomSdkModel((value) => !value)}
-            >
-              {useCustomSdkModel ? 'Use model list' : 'Type custom model id'}
-            </Button>
-          ) : null}
           {selectedModelEntry?.parameters && selectedModelEntry.parameters.length > 0 ? (
             <div className="flex flex-col gap-2">
               {selectedModelEntry.parameters.map((param) => {
@@ -498,11 +487,28 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
             value={cliPath}
             onChange={(e) => setCliPath(e.target.value)}
           />
-          <Input
-            placeholder="Model override (optional)"
-            value={cliModel}
-            onChange={(e) => setCliModel(e.target.value)}
-          />
+          <div className="flex flex-wrap items-start gap-2">
+            <ModelSelect
+              ariaLabel="CLI model override"
+              value={cliModel}
+              blankLabel="No model override"
+              options={modelCatalog.filter((model) => Boolean(model.id)).map((model) => ({
+                id: model.id,
+                label: model.display_name?.trim() ? `${model.display_name} (${model.id})` : model.id,
+              }))}
+              onChange={setCliModel}
+              emptyHint="Refresh models, then pick an override or leave it unset."
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              type="button"
+              disabled={loadingModels || !canLoadModels}
+              onClick={() => void loadModels()}
+            >
+              {loadingModels ? 'Loading…' : 'Refresh models'}
+            </Button>
+          </div>
           <Input
             placeholder="CLI runner URL (Docker host, optional)"
             value={cliRunnerUrl}
@@ -529,7 +535,7 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
       </div>
 
       {saveNotice ? (
-        <div role="status" className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-900 dark:text-green-100">{saveNotice}</div>
+        <div role="status" className="mc-notice-settled">{saveNotice}</div>
       ) : null}
     </div>
   )

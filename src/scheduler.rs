@@ -13,6 +13,9 @@ use crate::background_jobs::{
     await_handoff_startup_ack, is_background_handoff_response, try_enqueue_background_handoff,
     HandoffEnqueueOutcome,
 };
+use crate::channel::{
+    deliver_agent_final_to_contact_with_origin, DeliveryScope, MessageStoreOrigin,
+};
 use crate::chat_queue::{QueueEnqueueMeta, QueueSource};
 use crate::db::{call_blocking, ScheduledTask};
 use crate::error::FinallyAValueBotError;
@@ -39,6 +42,7 @@ struct PreparedScheduledRun {
     prompt: String,
     next_run: Option<String>,
     started_at_str: String,
+    output_delivery: String,
 }
 
 pub fn spawn_scheduler(state: Arc<AppState>) {
@@ -363,6 +367,11 @@ async fn claim_and_prepare_scheduled_task(
     let chat_id = task.chat_id;
     let scheduled_persona_id = task.persona_id;
     let prompt = task.prompt.clone();
+    let output_delivery = if task.output_delivery == "transcript" {
+        "transcript".to_string()
+    } else {
+        "runs_only".to_string()
+    };
 
     info!(
         "Scheduler: executing task #{} for chat {}",
@@ -471,6 +480,7 @@ async fn claim_and_prepare_scheduled_task(
             prompt,
             next_run,
             started_at_str,
+            output_delivery,
         }),
         true,
     ))
@@ -485,14 +495,14 @@ async fn record_scheduled_output(
     status: &str,
     body: &str,
     error_text: Option<&str>,
-) {
+) -> Option<i64> {
     let finished = Utc::now().to_rfc3339();
     let runtime = state.config.runtime_data_dir();
     let started = started_at.to_string();
     let status = status.to_string();
     let body = body.to_string();
     let error_text = error_text.map(str::to_string);
-    if let Err(e) = call_blocking(state.db.clone(), move |db| {
+    match call_blocking(state.db.clone(), move |db| {
         db.insert_scheduled_run(
             task_id,
             chat_id,
@@ -507,7 +517,48 @@ async fn record_scheduled_output(
     })
     .await
     {
-        error!("Scheduler: failed to store run for task #{task_id}: {e}");
+        Ok(id) => Some(id),
+        Err(e) => {
+            error!("Scheduler: failed to store run for task #{task_id}: {e}");
+            None
+        }
+    }
+}
+
+async fn maybe_store_scheduled_transcript(
+    state: &AppState,
+    output_delivery: &str,
+    task_id: i64,
+    run_id: Option<i64>,
+    chat_id: i64,
+    persona_id: i64,
+    body: &str,
+) {
+    if output_delivery != "transcript" {
+        return;
+    }
+    let prefix = match run_id {
+        Some(id) => format!("[Scheduled task #{task_id} run #{id}]"),
+        None => format!("[Scheduled task #{task_id}]"),
+    };
+    let text = format!("{prefix}\n{body}");
+    if let Err(e) = deliver_agent_final_to_contact_with_origin(
+        state.db.clone(),
+        state.telegram_bots.as_ref(),
+        state.discord_http.as_ref(),
+        state.wecom.as_deref(),
+        &state.config.bot_username,
+        chat_id,
+        persona_id,
+        &text,
+        Some(state.config.workspace_root_absolute()),
+        DeliveryScope::StoreOnly,
+        None,
+        MessageStoreOrigin::Scheduled,
+    )
+    .await
+    {
+        error!("Scheduler: failed to store transcript for task #{task_id}: {e}");
     }
 }
 
@@ -523,6 +574,7 @@ async fn run_scheduled_agent_and_finalize(
     let chat_id = p.chat_id;
     let persona_id = p.persona_id;
     let channel = p.channel;
+    let output_delivery = p.output_delivery;
     let mut prompt = p.prompt;
     if crate::collab::coordinator::prompt_is_brief(&prompt) {
         match crate::collab::coordinator::build_digest(&state, chat_id).await {
@@ -574,6 +626,36 @@ async fn run_scheduled_agent_and_finalize(
         {
             error!("Scheduler: failed to finalize recall reconcile #{task_id}: {e}");
         }
+        let body = result_summary.unwrap_or_else(|| {
+            if success {
+                "recall reconcile finished".to_string()
+            } else {
+                "recall reconcile failed".to_string()
+            }
+        });
+        let run_status = if success { "ok" } else { "error" };
+        let error_text = if success { None } else { Some(body.clone()) };
+        let run_id = record_scheduled_output(
+            &state,
+            task_id,
+            chat_id,
+            persona_id,
+            &started_at_str,
+            run_status,
+            &body,
+            error_text.as_deref(),
+        )
+        .await;
+        maybe_store_scheduled_transcript(
+            &state,
+            &output_delivery,
+            task_id,
+            run_id,
+            chat_id,
+            persona_id,
+            &body,
+        )
+        .await;
         return;
     }
 
@@ -631,6 +713,7 @@ async fn run_scheduled_agent_and_finalize(
                 history_override: None,
                 tool_iteration_cap: None,
                 skip_recall: false,
+                inbound_user_message_id: None,
             },
             Some(&prompt),
             crate::agent::InboundImages::new(),
@@ -660,7 +743,7 @@ async fn run_scheduled_agent_and_finalize(
                 "Scheduled task #{} timed out after {} seconds.",
                 task_id, task_timeout_secs
             );
-            record_scheduled_output(
+            let run_id = record_scheduled_output(
                 &state,
                 task_id,
                 chat_id,
@@ -669,6 +752,16 @@ async fn run_scheduled_agent_and_finalize(
                 "timeout",
                 &err_text,
                 Some(&err_text),
+            )
+            .await;
+            maybe_store_scheduled_transcript(
+                &state,
+                &output_delivery,
+                task_id,
+                run_id,
+                chat_id,
+                persona_id,
+                &err_text,
             )
             .await;
             (false, Some(format!("Timed out after {task_timeout_secs}s")))
@@ -711,7 +804,7 @@ async fn run_scheduled_agent_and_finalize(
             }
 
             let response_text = state.env_redactor.redact(&response_text);
-            record_scheduled_output(
+            let run_id = record_scheduled_output(
                 &state,
                 task_id,
                 chat_id,
@@ -720,6 +813,16 @@ async fn run_scheduled_agent_and_finalize(
                 "ok",
                 &response_text,
                 None,
+            )
+            .await;
+            maybe_store_scheduled_transcript(
+                &state,
+                &output_delivery,
+                task_id,
+                run_id,
+                chat_id,
+                persona_id,
+                &response_text,
             )
             .await;
             let _ = hb_tx.send(HeartbeatSignal::Finished(format!(
@@ -754,7 +857,7 @@ async fn run_scheduled_agent_and_finalize(
                 "Scheduled task #{} failed: {}",
                 task_id, redacted_error_user
             );
-            record_scheduled_output(
+            let run_id = record_scheduled_output(
                 &state,
                 task_id,
                 chat_id,
@@ -763,6 +866,16 @@ async fn run_scheduled_agent_and_finalize(
                 "error",
                 &err_text,
                 Some(&redacted_error_internal),
+            )
+            .await;
+            maybe_store_scheduled_transcript(
+                &state,
+                &output_delivery,
+                task_id,
+                run_id,
+                chat_id,
+                persona_id,
+                &err_text,
             )
             .await;
             (false, Some(format!("Error: {}", redacted_error_internal)))

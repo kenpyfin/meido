@@ -130,7 +130,7 @@ impl Tool for ListTodosTool {
                     },
                     "status": {
                         "type": "string",
-                        "description": "Filter: open (default), done, or all"
+                        "description": "Filter: open (default), done, all, or a column: todo, plan, build, verify"
                     },
                     "limit": {
                         "type": "integer",
@@ -156,11 +156,10 @@ impl Tool for ListTodosTool {
         let status_filter: Option<String> = match status_raw.as_str() {
             "all" => None,
             "open" | "done" => Some(status_raw.clone()),
-            other => {
-                return ToolResult::error(format!(
-                    "Invalid status '{other}'; use open, done, or all"
-                ));
-            }
+            other => match crate::db::normalize_board_status(other) {
+                Ok(status) => Some(status.to_string()),
+                Err(err) => return ToolResult::error(err.to_string()),
+            },
         };
         let limit = input
             .get("limit")
@@ -316,6 +315,57 @@ mod tests {
         assert!(!result.is_error, "{}", result.content);
         let open = db.list_persona_todos(7, pid, Some("open"), 10).unwrap();
         assert!(open.is_empty());
+        let done = db.get_persona_todo(todo_id).unwrap().unwrap();
+        assert_eq!(done.status, "verify");
+        assert!(done.completed_at.is_some());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn complete_flag_keeps_the_column_and_leaves_the_open_list() {
+        let dir = std::env::temp_dir().join(format!("meido_todo_flag_{}", uuid::Uuid::new_v4()));
+        let db = Database::new(dir.to_str().unwrap()).unwrap();
+        db.upsert_chat(7, None, "private").unwrap();
+        let pid = db.get_or_create_default_persona(7).unwrap();
+        let created = db
+            .add_persona_todo(7, pid, "Hold the column", Some("inbox"))
+            .unwrap();
+        let updated = db
+            .apply_board_patch(
+                7,
+                created.id,
+                &crate::db_collab::BoardPatch {
+                    status: None,
+                    title: None,
+                    description: None,
+                    owner_persona_id: None,
+                    priority: None,
+                    due_at: None,
+                    blocked_reason: None,
+                    position: None,
+                    before_position: None,
+                    after_position: None,
+                    actor_kind: "operator",
+                    actor_persona_id: None,
+                    auto_advance: None,
+                    completed: Some(true),
+                    deploy_prompt: Some("Check the hinge.".into()),
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.status, "todo");
+        assert!(updated.completed_at.is_some());
+        assert_eq!(updated.deploy_prompt.as_deref(), Some("Check the hinge."));
+        let open = db.list_persona_todos(7, pid, Some("open"), 10).unwrap();
+        assert!(open.is_empty());
+        let events = db
+            .list_board_item_events(7, created.id, 20)
+            .unwrap()
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].from_status.as_deref(), Some("todo"));
+        assert_eq!(events[0].to_status, "todo");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -46,12 +46,13 @@ impl Tool for UpdateBoardItemTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::new(
             "update_board_item",
-            "Update a board item you own. Status is todo, doing, blocked, or done. You cannot assign it to another persona.",
+            "Update a board item you own. Status is todo, plan, build, or verify. A status change is ignored while a stage run is in progress. Set blocked_reason instead of a blocked column. You cannot assign the item to another persona.",
             schema_object(
                 json!({
                     "item_id": {"type": "integer"},
                     "status": {"type": "string"},
                     "title": {"type": "string"},
+                    "description": {"type": "string"},
                     "blocked_reason": {"type": "string"},
                     "due_at": {"type": "string"}
                 }),
@@ -85,6 +86,10 @@ impl Tool for UpdateBoardItemTool {
             .get("due_at")
             .and_then(|v| v.as_str())
             .map(str::to_string);
+        let description = input
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
         let result = call_blocking(db, move |db| {
             let Some(existing) = db.get_persona_todo(item_id)? else {
                 return Ok(None);
@@ -98,10 +103,12 @@ impl Tool for UpdateBoardItemTool {
                     "you can only update your own board items".into(),
                 ));
             }
+            let running = existing.stage_outcome.as_deref() == Some("running");
+            let status_ignored = running && status.is_some();
             let patch = BoardPatch {
-                status,
+                status: if running { None } else { status },
                 title,
-                description: None,
+                description,
                 owner_persona_id: None,
                 priority: None,
                 due_at,
@@ -111,12 +118,24 @@ impl Tool for UpdateBoardItemTool {
                 after_position: None,
                 actor_kind: "persona",
                 actor_persona_id: Some(persona_id),
+                auto_advance: None,
+                completed: None,
+                deploy_prompt: None,
             };
             db.apply_board_patch(chat_id, item_id, &patch)
+                .map(|item| item.map(|item| (item, status_ignored)))
         })
         .await;
         match result {
-            Ok(Some(item)) => ToolResult::success(format!("#{} is now {}", item.id, item.status)),
+            Ok(Some((item, status_ignored))) => {
+                let mut message = format!("#{} is now {}", item.id, item.status);
+                if status_ignored {
+                    message.push_str(
+                        ". Status was left unchanged because this stage is still running",
+                    );
+                }
+                ToolResult::success(message)
+            }
             Ok(None) => ToolResult::error("board item not found".into()),
             Err(e) => ToolResult::error(e.to_string()),
         }
@@ -145,7 +164,7 @@ impl Tool for ListBoardTool {
             "List board items in this chat. Coordinator only. At most 20 rows.",
             schema_object(
                 json!({
-                    "status": {"type": "string", "description": "todo, doing, blocked, done, open, or all"}
+                    "status": {"type": "string", "description": "todo, plan, build, verify, open, done, or all"}
                 }),
                 &[],
             ),
@@ -344,7 +363,7 @@ impl Tool for ProposeBoardChangeTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::new(
             "propose_board_change",
-            "Propose a board change for the operator to confirm. Coordinator only. Does not apply the change.",
+            "Propose a board change for the operator to accept on the card. The item owner or the Coordinator may call this. Does not apply the change.",
             schema_object(
                 json!({
                     "item_id": {"type": "integer"},
@@ -364,12 +383,13 @@ impl Tool for ProposeBoardChangeTool {
             Ok(pair) => pair,
             Err(e) => return ToolResult::error(e),
         };
-        if !require_coordinator(&self.db, chat_id, persona_id).await {
+        let item_id = input.get("item_id").and_then(|v| v.as_i64());
+        if !can_propose_board_change(&self.db, chat_id, persona_id, item_id).await {
             return ToolResult::error(
-                "propose_board_change is only available to the Coordinator".into(),
+                "propose_board_change is available to the card owner, or the Coordinator for a new card"
+                    .into(),
             );
         }
-        let item_id = input.get("item_id").and_then(|v| v.as_i64());
         let change = json!({
             "item_id": item_id,
             "status": input.get("status").and_then(|v| v.as_str()),
@@ -385,6 +405,130 @@ impl Tool for ProposeBoardChangeTool {
             Err(e) => ToolResult::error(e.to_string()),
         }
     }
+}
+
+pub struct FinishPipelineStageTool {
+    db: Arc<Database>,
+}
+
+impl FinishPipelineStageTool {
+    pub fn new(db: Arc<Database>) -> Self {
+        Self { db }
+    }
+}
+
+#[async_trait]
+impl Tool for FinishPipelineStageTool {
+    fn name(&self) -> &str {
+        "finish_pipeline_stage"
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new(
+            "finish_pipeline_stage",
+            "Finish the board stage you are running. outcome is pass or blocked. A note is appended to the card description. This does not move the card; Auto does that after a pass.",
+            schema_object(
+                json!({
+                    "item_id": {"type": "integer"},
+                    "outcome": {"type": "string", "description": "pass or blocked"},
+                    "blocked_reason": {"type": "string"},
+                    "note": {"type": "string"}
+                }),
+                &["item_id", "outcome"],
+            ),
+        )
+    }
+
+    async fn execute(&self, input: serde_json::Value) -> ToolResult {
+        let (chat_id, persona_id) = match caller(&input) {
+            Ok(pair) => pair,
+            Err(e) => return ToolResult::error(e),
+        };
+        let Some(item_id) = input.get("item_id").and_then(|v| v.as_i64()) else {
+            return ToolResult::error("item_id is required".into());
+        };
+        let outcome = input
+            .get("outcome")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        let stored = match outcome.as_str() {
+            "pass" | "passed" => "passed".to_string(),
+            "blocked" | "block" => "blocked".to_string(),
+            _ => {
+                return ToolResult::error("outcome must be pass or blocked".into());
+            }
+        };
+        let blocked_reason = input
+            .get("blocked_reason")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let note = input
+            .get("note")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let db = self.db.clone();
+        let result = call_blocking(db, move |db| {
+            let Some(existing) = db.get_persona_todo(item_id)? else {
+                return Ok(None);
+            };
+            if existing.chat_id != chat_id {
+                return Ok(None);
+            }
+            let owner = existing.owner_persona_id.unwrap_or(existing.persona_id);
+            if owner != persona_id && existing.persona_id != persona_id {
+                return Err(crate::error::FinallyAValueBotError::ToolExecution(
+                    "you can only finish your own board items".into(),
+                ));
+            }
+            db.mark_board_stage_outcome(
+                chat_id,
+                item_id,
+                stored.as_str(),
+                blocked_reason.as_deref(),
+                note.as_deref(),
+            )
+        })
+        .await;
+        match result {
+            Ok(Some(item)) => ToolResult::success(format!(
+                "#{id} stage {status} finished as {outcome}",
+                id = item.id,
+                status = item.status,
+                outcome = item.stage_outcome.as_deref().unwrap_or("finished"),
+            )),
+            Ok(None) => ToolResult::error("board item not found".into()),
+            Err(e) => ToolResult::error(e.to_string()),
+        }
+    }
+}
+
+async fn can_propose_board_change(
+    db: &Arc<Database>,
+    chat_id: i64,
+    persona_id: i64,
+    item_id: Option<i64>,
+) -> bool {
+    if require_coordinator(db, chat_id, persona_id).await {
+        return true;
+    }
+    let Some(item_id) = item_id else {
+        return false;
+    };
+    let db = db.clone();
+    call_blocking(db, move |db| {
+        let Some(item) = db.get_persona_todo(item_id)? else {
+            return Ok(false);
+        };
+        if item.chat_id != chat_id {
+            return Ok(false);
+        }
+        let owner = item.owner_persona_id.unwrap_or(item.persona_id);
+        Ok(owner == persona_id || item.persona_id == persona_id)
+    })
+    .await
+    .unwrap_or(false)
 }
 
 async fn require_coordinator(db: &Arc<Database>, chat_id: i64, persona_id: i64) -> bool {

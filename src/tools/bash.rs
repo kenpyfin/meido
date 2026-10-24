@@ -180,7 +180,11 @@ impl Tool for BashTool {
         {
             return blocked;
         }
-        if let Some(blocked) = check_self_repo_git(&command, &self.working_dir) {
+        let external_roots = auth
+            .as_ref()
+            .map(|a| a.external_roots.as_slice())
+            .unwrap_or(&[]);
+        if let Some(blocked) = check_self_repo_git(&command, &self.working_dir, external_roots) {
             return blocked;
         }
         let command = maybe_rewrite_leading_tool_path(&self.working_dir, &working_dir, &command)

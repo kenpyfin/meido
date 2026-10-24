@@ -1,5 +1,13 @@
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { ChevronDown } from 'lucide-react'
 import React from 'react'
 import type { InstallationStatus, QueueLane } from '../types'
 import { IconInbox } from './icons'
@@ -95,6 +103,7 @@ export type MobileOpsSheetProps = {
   onOpenQueue: () => void
   onOpenInbox: () => void
   inboxBadgeCount?: number
+  schedulesBadgeCount?: number
   onOpenSchedules: () => void
   onOpenPrinciples: () => void
   onOpenArtifacts: () => void
@@ -103,6 +112,83 @@ export type MobileOpsSheetProps = {
   onOpenTerminal?: () => void
   terminalAvailable?: boolean
   agentHistoryDisabled?: boolean
+  onOpenPersona?: () => void
+  onOpenSettings?: () => void
+}
+
+export type RecordsMenuProps = {
+  personaModule: boolean
+  terminalAvailable: boolean
+  schedulesBadgeCount: number
+  agentHistoryDisabled: boolean
+  onOpenSchedules: () => void
+  onOpenPrinciples: () => void
+  onOpenArtifacts: () => void
+  onOpenMemory: () => void
+  onOpenAgentHistory: () => void
+  onOpenTerminal?: () => void
+}
+
+export function RecordsMenu({
+  personaModule,
+  terminalAvailable,
+  schedulesBadgeCount,
+  agentHistoryDisabled,
+  onOpenSchedules,
+  onOpenPrinciples,
+  onOpenArtifacts,
+  onOpenMemory,
+  onOpenAgentHistory,
+  onOpenTerminal,
+}: RecordsMenuProps) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="sm"
+          variant="secondary"
+          className="!hidden md:!inline-flex items-center gap-1"
+          aria-label="Open Records menu"
+        >
+          Records
+          <ChevronDown className="size-3.5 shrink-0" aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="mc-records-menu">
+        {schedulesBadgeCount === 0 ? (
+          <DropdownMenuItem onSelect={onOpenSchedules}>
+            Schedules
+          </DropdownMenuItem>
+        ) : null}
+        <DropdownMenuItem onSelect={onOpenArtifacts}>
+          Artifacts
+        </DropdownMenuItem>
+        {terminalAvailable && onOpenTerminal ? (
+          <DropdownMenuItem onSelect={onOpenTerminal}>
+            Terminal
+          </DropdownMenuItem>
+        ) : null}
+        {personaModule ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={onOpenPrinciples}>
+              Principles
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={onOpenMemory}>
+              Memory
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={agentHistoryDisabled}
+              onSelect={onOpenAgentHistory}
+            >
+              Last agent run
+            </DropdownMenuItem>
+          </>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
 }
 
 export function MobileOpsSheet({
@@ -111,6 +197,7 @@ export function MobileOpsSheet({
   onOpenQueue,
   onOpenInbox,
   inboxBadgeCount = 0,
+  schedulesBadgeCount = 0,
   onOpenSchedules,
   onOpenPrinciples,
   onOpenArtifacts,
@@ -119,7 +206,13 @@ export function MobileOpsSheet({
   onOpenTerminal,
   terminalAvailable = false,
   agentHistoryDisabled,
+  onOpenPersona,
+  onOpenSettings,
 }: MobileOpsSheetProps) {
+  const [configOpen, setConfigOpen] = React.useState(false)
+  React.useEffect(() => {
+    if (!open) setConfigOpen(false)
+  }, [open])
   const pick = (fn: () => void) => () => {
     onOpenChange(false)
     fn()
@@ -140,7 +233,7 @@ export function MobileOpsSheet({
             onClick={pick(onOpenInbox)}
           />
           <OpsRow icon={<OpsGlyph d="M4 6h16M4 12h16M4 18h10" />} label="Queue" onClick={pick(onOpenQueue)} />
-          <OpsRow icon={<OpsGlyph d="M8 7V3m8 4V3M4 11h16M6 5h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" />} label="Schedules" onClick={pick(onOpenSchedules)} />
+          <OpsRow icon={<OpsGlyph d="M8 7V3m8 4V3M4 11h16M6 5h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z" />} label="Schedules" badge={schedulesBadgeCount} onClick={pick(onOpenSchedules)} />
           <OpsRow icon={<OpsGlyph d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h5" />} label="Principles" onClick={pick(onOpenPrinciples)} />
           <OpsRow icon={<OpsGlyph d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />} label="Artifacts" onClick={pick(onOpenArtifacts)} />
           {terminalAvailable && onOpenTerminal ? (
@@ -153,6 +246,34 @@ export function MobileOpsSheet({
             disabled={agentHistoryDisabled}
             onClick={pick(onOpenAgentHistory)}
           />
+          {onOpenPersona || onOpenSettings ? (
+            <div className="mt-2 border-t border-[color:var(--mc-border-soft)] pt-2">
+              <button
+                type="button"
+                className="flex h-12 w-full items-center px-1 text-left text-sm text-[color:var(--mc-text-muted)]"
+                aria-expanded={configOpen}
+                onClick={() => setConfigOpen((open) => !open)}
+              >
+                Configuration
+              </button>
+              {configOpen ? (
+                <>
+                  <OpsRow
+                    icon={<OpsGlyph d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z" />}
+                    label="Persona configuration"
+                    disabled={!onOpenPersona}
+                    onClick={onOpenPersona ? pick(onOpenPersona) : () => {}}
+                  />
+                  <OpsRow
+                    icon={<OpsGlyph d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />}
+                    label="Web UI configuration"
+                    disabled={!onOpenSettings}
+                    onClick={onOpenSettings ? pick(onOpenSettings) : () => {}}
+                  />
+                </>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <div className="flex justify-end mt-4">
           <DialogClose>

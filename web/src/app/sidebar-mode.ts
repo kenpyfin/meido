@@ -3,12 +3,13 @@ export type SidebarMode = 'personas' | 'groups' | 'coordinator'
 export const SIDEBAR_MODE_TITLES: Record<SidebarMode, string> = {
   personas: 'Personas',
   groups: 'Groups',
-  coordinator: 'Coordinator',
+  coordinator: 'Board',
 }
 
 const STORAGE_KEY = 'favb-sidebar-mode'
 
 export function parseSidebarMode(value: string | null | undefined): SidebarMode | null {
+  if (value === 'board') return 'coordinator'
   if (value === 'groups' || value === 'coordinator' || value === 'personas') {
     return value
   }
@@ -25,6 +26,6 @@ export function readSidebarMode(): SidebarMode {
 export function writeSidebarMode(mode: SidebarMode): void {
   window.localStorage.setItem(STORAGE_KEY, mode)
   const url = new URL(window.location.href)
-  url.hash = mode === 'personas' ? '' : mode
+  url.hash = mode === 'personas' ? '' : mode === 'coordinator' ? 'board' : mode
   window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
 }

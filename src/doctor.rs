@@ -502,63 +502,48 @@ fn check_llm_provider_base_url(report: &mut DoctorReport) {
     let Ok(config) = Config::load() else {
         return;
     };
-    let provider = crate::llm_catalog::resolve_catalog_provider_id(&config.llm_provider);
-    if provider != "xai" {
+    let Ok(db) = crate::db::Database::new(&config.runtime_data_dir()) else {
         return;
+    };
+    let Ok(personas) = db.list_personas_for_doctor() else {
+        return;
+    };
+    let mut warned = false;
+    for persona in personas {
+        let provider = persona
+            .llm_provider_override
+            .as_deref()
+            .map(crate::llm_catalog::resolve_catalog_provider_id)
+            .unwrap_or_default();
+        if provider != "xai" {
+            continue;
+        }
+        let base = persona
+            .llm_base_url_override
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("https://api.x.ai/v1");
+        if !base.contains("api.x.ai") {
+            warned = true;
+            report.push(
+                "llm.xai_base_url",
+                "xAI Grok base URL",
+                CheckStatus::Warn,
+                format!("Persona {} uses xAI with base URL {base}", persona.name),
+                Some("Expected https://api.x.ai/v1 unless you use a deliberate proxy.".to_string()),
+            );
+        }
     }
-    let base = config
-        .llm_base_url
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("https://api.openai.com/v1");
-    let openai_default = base.eq_ignore_ascii_case("https://api.openai.com/v1");
-    if openai_default {
-        report.push(
-            "llm.xai_base_url",
-            "xAI Grok base URL",
-            CheckStatus::Warn,
-            format!("LLM_PROVIDER=xai but LLM_BASE_URL resolves to {base} (OpenAI default)"),
-            Some(
-                "Select xAI in Web UI → Settings → LLM and set XAI_API_KEY in .env, or set LLM_BASE_URL=https://api.x.ai/v1.".to_string(),
-            ),
-        );
-    } else if !base.contains("api.x.ai") {
-        report.push(
-            "llm.xai_base_url",
-            "xAI Grok base URL",
-            CheckStatus::Warn,
-            format!("LLM_PROVIDER=xai with unexpected LLM_BASE_URL={base}"),
-            Some("Expected https://api.x.ai/v1 unless you use a deliberate proxy.".to_string()),
-        );
-    } else {
+    if !warned {
         report.push(
             "llm.xai_base_url",
             "xAI Grok base URL",
             CheckStatus::Pass,
-            format!("LLM_BASE_URL={base}"),
+            "No persona stores an unexpected xAI base URL.".to_string(),
             None,
         );
     }
-}
-
-fn evaluator_local_endpoint_from_env() -> Option<(String, String)> {
-    let mm = crate::local_delegate::LocalDelegateConfig {
-        local_base_url: std::env::var(crate::local_delegate::APP_SETTING_LOCAL_BASE_URL)
-            .unwrap_or_default(),
-        local_model: std::env::var(crate::local_delegate::APP_SETTING_LOCAL_MODEL)
-            .unwrap_or_default(),
-        tier1_base_url: std::env::var(crate::local_delegate::APP_SETTING_TIER1_BASE_URL)
-            .unwrap_or_default(),
-        tier1_model: std::env::var(crate::local_delegate::APP_SETTING_TIER1_MODEL)
-            .unwrap_or_default(),
-        tier2_base_url: std::env::var(crate::local_delegate::APP_SETTING_TIER2_BASE_URL)
-            .unwrap_or_default(),
-        tier2_model: std::env::var(crate::local_delegate::APP_SETTING_TIER2_MODEL)
-            .unwrap_or_default(),
-        ..crate::local_delegate::LocalDelegateConfig::default()
-    };
-    crate::local_delegate::resolve_local_evaluator_endpoint(&mm)
 }
 
 fn check_evaluator_api_key(report: &mut DoctorReport) {
@@ -569,38 +554,34 @@ fn check_evaluator_api_key(report: &mut DoctorReport) {
     if !needs_key {
         return;
     }
-    let local_ready = evaluator_local_endpoint_from_env().is_some();
-    let perplexity_configured = config
-        .perplexity_api_key
-        .as_ref()
-        .is_some_and(|k| !k.trim().is_empty());
-    if local_ready {
+    let Ok(db) = crate::db::Database::new(&config.runtime_data_dir()) else {
+        return;
+    };
+    let pair = crate::topics::read_system_llm_settings(&db).ok();
+    let ready = pair.is_some_and(|(provider, model)| {
+        provider
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            && model
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+    });
+    if ready {
         report.push(
-            "evaluator.local",
-            "Local evaluator endpoint (PTE/PDQE)",
+            "evaluator.system_llm",
+            "System LLM (PTE/PDQE)",
             CheckStatus::Pass,
-            "Local multimodel endpoint configured (preferred for PTE/PDQE)".to_string(),
+            "System LLM provider and model are saved.".to_string(),
             None,
         );
-    }
-    if perplexity_configured {
+    } else {
         report.push(
-            "evaluator.perplexity_key",
-            "Perplexity API key (PTE/PDQE fallback)",
-            CheckStatus::Pass,
-            "PERPLEXITY_API_KEY is set".to_string(),
-            None,
-        );
-    } else if !local_ready {
-        report.push(
-            "evaluator.provider",
-            "Evaluator provider (PTE/PDQE)",
+            "evaluator.system_llm",
+            "System LLM (PTE/PDQE)",
             CheckStatus::Warn,
-            "No local multimodel endpoint and PERPLEXITY_API_KEY is missing".to_string(),
-            Some(
-                "Configure MULTIMODEL_LOCAL_* (or tier URLs) or set PERPLEXITY_API_KEY for PTE/PDQE."
-                    .to_string(),
-            ),
+            "PTE and PDQE do not run until Settings → System LLM has a provider and model."
+                .to_string(),
+            Some("Open Settings → System LLM and save a provider and model.".to_string()),
         );
     }
 }
@@ -613,49 +594,48 @@ fn check_cost_routing_local(report: &mut DoctorReport) {
     let Ok(db) = crate::db::Database::new(&runtime_dir_str) else {
         return;
     };
-    let engine = crate::runtime_toggles::RuntimeToggles::agent_engine_from_app_settings(&db)
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| {
-            crate::runtime_toggles::AgentEngine::parse(
-                &std::env::var("AGENT_ENGINE").unwrap_or_default(),
-            )
-        });
-    if engine != crate::runtime_toggles::AgentEngine::ClassicCostRouting {
+    let Ok(personas) = db.list_personas_for_doctor() else {
         return;
-    }
-    let mm = crate::local_delegate::load_from_db(&db).unwrap_or_default();
-    if mm.local_routable() {
-        report.push(
-            "local_delegate.cost_routing",
-            "Classic · Cost routing local delegate",
-            CheckStatus::Pass,
-            format!(
-                "Local delegate verified ({} @ {})",
-                mm.local_model, mm.local_base_url
-            ),
-            None,
-        );
-    } else if mm.local_configured() && !mm.local_tools_ok {
-        report.push(
-            "local_delegate.cost_routing",
-            "Classic · Cost routing local delegate",
-            CheckStatus::Warn,
-            "Local endpoint configured but tool calling not verified".to_string(),
-            Some("Open Settings → Local delegate and run the tool-calling test.".to_string()),
-        );
-    } else {
-        report.push(
-            "local_delegate.cost_routing",
-            "Classic · Cost routing local delegate",
-            CheckStatus::Warn,
-            "Cost routing active but local delegate is not ready — runs fall back to cloud only"
-                .to_string(),
-            Some(
-                "Configure local URL + model and run Test, or switch Runtime to Single turn."
-                    .to_string(),
-            ),
-        );
+    };
+    for persona in personas {
+        if persona.agent_engine_override.as_deref() != Some("classic_cost_routing") {
+            continue;
+        }
+        let local = crate::local_delegate::from_persona(&persona);
+        if local.local_routable() {
+            report.push(
+                "local_delegate.cost_routing",
+                "Classic · Cost routing local delegate",
+                CheckStatus::Pass,
+                format!(
+                    "Persona {} local delegate verified ({} @ {})",
+                    persona.name, local.local_model, local.local_base_url
+                ),
+                None,
+            );
+        } else if local.local_configured() && !local.local_tools_ok {
+            report.push(
+                "local_delegate.cost_routing",
+                "Classic · Cost routing local delegate",
+                CheckStatus::Warn,
+                format!(
+                    "Persona {} has a local URL and model, but tool calling is not verified. The turn stops until Test passes.",
+                    persona.name
+                ),
+                Some("Open the Persona page and run the tool-calling test.".to_string()),
+            );
+        } else {
+            report.push(
+                "local_delegate.cost_routing",
+                "Classic · Cost routing local delegate",
+                CheckStatus::Warn,
+                format!(
+                    "Persona {} uses cost routing without a local URL and model. The turn stops.",
+                    persona.name
+                ),
+                Some("Set the local URL and model on the Persona page.".to_string()),
+            );
+        }
     }
 }
 

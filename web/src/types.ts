@@ -70,6 +70,8 @@ export type InstallationStatus = {
   requires_restart_to_apply_runtime_settings?: boolean
   requires_restart_for_env_changes?: boolean
   needs_initialization?: boolean
+  /** False when `.env` has no `WORKSPACE_DIR`. The setup wizard opens. */
+  workspace_configured?: boolean
   runtime_env_merge_from_app_settings?: boolean
   llm_model_from_app_settings?: boolean
 }
@@ -189,6 +191,9 @@ export type RuntimeConfigResponse = {
     response_quality_evaluator_enabled?: 'env' | 'app_settings'
     agent_engine?: 'env' | 'app_settings'
   }
+  max_tool_iterations?: number
+  max_tool_iterations_floor?: number
+  max_tool_iterations_ceiling?: number
   description?: string
   message?: string
 }
@@ -343,6 +348,16 @@ export type LocalDelegateConfigResponse = {
 /** @deprecated use LocalDelegateConfigResponse */
 export type MultimodelConfigResponse = LocalDelegateConfigResponse
 
+export type SystemLlmJobRow = {
+  id: string
+  label: string
+  detail: string
+  provider?: string
+  model?: string | null
+  using_default?: boolean
+  legacy_model?: string | null
+}
+
 export type TopicsModelResponse = {
   ok?: boolean
   source?: string
@@ -353,6 +368,7 @@ export type TopicsModelResponse = {
   strategy_provider?: string
   strategy_model?: string
   local_base_url?: string
+  jobs?: SystemLlmJobRow[]
   message?: string | null
 }
 
@@ -432,6 +448,7 @@ export type ScheduleTask = {
   last_run: string | null
   status: string
   created_at: string | null
+  output_delivery?: 'runs_only' | 'transcript'
 }
 
 export type PersonaTodo = {
@@ -452,6 +469,10 @@ export type PersonaTodo = {
   position?: number
   source_kind?: string | null
   source_ref?: string | null
+  auto_advance?: boolean
+  stage_run_id?: string | null
+  stage_outcome?: string | null
+  deploy_prompt?: string | null
 }
 
 export type MessageItem = {

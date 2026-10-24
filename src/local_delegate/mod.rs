@@ -240,7 +240,18 @@ impl LocalDelegateConfig {
 }
 
 pub fn cost_routing_active(engine: AgentEngine, cfg: &LocalDelegateConfig) -> bool {
-    engine == AgentEngine::ClassicCostRouting && cfg.routing_enabled && cfg.local_routable()
+    engine == AgentEngine::ClassicCostRouting && cfg.local_configured() && cfg.local_tools_ok
+}
+
+pub fn from_persona(persona: &crate::db::Persona) -> LocalDelegateConfig {
+    LocalDelegateConfig {
+        routing_enabled: true,
+        local_base_url: persona.local_delegate_base_url.clone().unwrap_or_default(),
+        local_model: persona.local_delegate_model.clone().unwrap_or_default(),
+        local_tools_ok: persona.local_delegate_tools_ok.unwrap_or(false),
+        ..LocalDelegateConfig::default()
+    }
+    .normalize()
 }
 
 pub fn cost_routing_effective(engine: AgentEngine, cfg: &LocalDelegateConfig) -> bool {

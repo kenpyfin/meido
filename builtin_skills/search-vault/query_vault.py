@@ -17,12 +17,7 @@ def _checkout_root() -> Path | None:
 
 def _workspace_root() -> Path:
     """Workspace directory. A relative WORKSPACE_DIR is anchored at the checkout, not cwd."""
-    raw = (
-        os.environ.get("MEIDO_WORKSPACE_DIR")
-        or os.environ.get("WORKSPACE_DIR")
-        or os.environ.get("FINALLY_A_VALUE_BOT_WORKSPACE_DIR")
-        or ""
-    ).strip()
+    raw = (os.environ.get("WORKSPACE_DIR") or "").strip()
     if raw:
         candidate = Path(raw).expanduser()
         if candidate.is_absolute():

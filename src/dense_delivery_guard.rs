@@ -63,6 +63,7 @@ pub trait DeliverySummarizer: Send + Sync {
 pub struct LlmDeliverySummarizer<'a> {
     config: &'a Config,
     env_redactor: &'a EnvSecretRedactor,
+    direct: Option<(String, String, Option<String>)>,
 }
 
 impl<'a> LlmDeliverySummarizer<'a> {
@@ -70,7 +71,13 @@ impl<'a> LlmDeliverySummarizer<'a> {
         Self {
             config,
             env_redactor,
+            direct: None,
         }
+    }
+
+    pub fn with_direct(mut self, direct: Option<(String, String, Option<String>)>) -> Self {
+        self.direct = direct;
+        self
     }
 }
 
@@ -82,7 +89,14 @@ impl DeliverySummarizer for LlmDeliverySummarizer<'_> {
         summary_chars: usize,
         _public_url: Option<&str>,
     ) -> Result<String, String> {
-        summarize_with_llm(self.config, self.env_redactor, full_text, summary_chars).await
+        summarize_with_llm(
+            self.config,
+            self.env_redactor,
+            full_text,
+            summary_chars,
+            self.direct.as_ref(),
+        )
+        .await
     }
 }
 
@@ -639,7 +653,10 @@ pub async fn maybe_apply_dense_delivery(
     if persona.chat_id != chat_id {
         return None;
     }
-    let summarizer = LlmDeliverySummarizer::new(config, env_redactor);
+    let direct = crate::topics::resolve_job_choice(db, crate::topics::SystemLlmJob::LongReply)
+        .ok()
+        .and_then(crate::topics::system_llm_direct);
+    let summarizer = LlmDeliverySummarizer::new(config, env_redactor).with_direct(direct);
     maybe_apply_dense_delivery_with(
         config,
         &persona,
@@ -890,9 +907,12 @@ async fn summarize_with_llm(
     env_redactor: &EnvSecretRedactor,
     full_text: &str,
     summary_chars: usize,
+    direct: Option<&(String, String, Option<String>)>,
 ) -> Result<String, String> {
     let mut llm_config = config.clone();
-    if !config.hook_prompt_model.trim().is_empty() {
+    if let Some((provider_id, model, base_url)) = direct {
+        llm_config.apply_llm_provider_switch(provider_id, model, base_url.as_deref());
+    } else if !config.hook_prompt_model.trim().is_empty() {
         llm_config.model = config.hook_prompt_model.trim().to_string();
     }
     llm_config.max_tokens = SUMMARY_MAX_TOKENS.min(summary_chars as u32 + 200).max(256);
@@ -1107,6 +1127,10 @@ mod tests {
             cursor_sdk_model_params: None,
             llm_provider_override: None,
             llm_base_url_override: None,
+            local_delegate_base_url: None,
+            local_delegate_model: None,
+            local_delegate_tools_ok: None,
+            user_message_rewrite_enabled: false,
         }
     }
 

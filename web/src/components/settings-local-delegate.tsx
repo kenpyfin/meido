@@ -1,6 +1,6 @@
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
+import { ModelSelect } from './model-select'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { SettingsPanelSkeleton } from './skeleton'
 import type { LocalDelegateConfigResponse } from '../types'
@@ -26,7 +26,6 @@ export function SettingsLocalDelegatePanel({ api, onError }: Props) {
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
   const [modelsNotice, setModelsNotice] = useState<string | null>(null)
-  const [useCustomModel, setUseCustomModel] = useState(false)
   const autoLoadedModelsRef = useRef(false)
   const lastLoadedBaseUrlRef = useRef('')
 
@@ -80,12 +79,7 @@ export function SettingsLocalDelegatePanel({ api, onError }: Props) {
         setAvailableModels(ids)
         lastLoadedBaseUrlRef.current = baseUrl
         const current = (opts?.model ?? localModel).trim()
-        if (current && ids.includes(current)) {
-          setUseCustomModel(false)
-        } else if (!current && ids[0]) {
-          setLocalModel(ids[0])
-          setUseCustomModel(false)
-        }
+        if (!current && ids[0]) setLocalModel(ids[0])
         setModelsNotice(`${ids.length} model${ids.length === 1 ? '' : 's'} loaded from server.`)
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
@@ -97,13 +91,6 @@ export function SettingsLocalDelegatePanel({ api, onError }: Props) {
     },
     [api, localBaseUrl, localModel, onError],
   )
-
-  useEffect(() => {
-    const model = localModel.trim()
-    if (model && availableModels.includes(model)) {
-      setUseCustomModel(false)
-    }
-  }, [localModel, availableModels])
 
   useEffect(() => {
     const baseUrl = localBaseUrl.trim()
@@ -142,6 +129,10 @@ export function SettingsLocalDelegatePanel({ api, onError }: Props) {
   ]
 
   async function save() {
+    if (!availableModels.includes(localModel.trim())) {
+      onError('Pick a model from the list.')
+      return
+    }
     setSaving(true)
     setSaveNotice(null)
     try {
@@ -235,7 +226,7 @@ export function SettingsLocalDelegatePanel({ api, onError }: Props) {
       </span>
 
       {!localToolsOk ? (
-        <div role="alert" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100">
+        <div role="status" className="mc-notice-owed">
             Tool calling is not verified for the local model. Run the test below before using
             Classic · Cost routing. Until verified, cost routing runs use the cloud model only.
           </div>
@@ -258,25 +249,13 @@ export function SettingsLocalDelegatePanel({ api, onError }: Props) {
             onChange={(e) => setLocalBaseUrl(e.target.value)}
           />
           <div className="flex gap-2 flex-wrap items-center">
-            {!useCustomModel && availableModels.length > 0 ? (
-              <Select value={localModel} onValueChange={setLocalModel}>
-                <SelectTrigger placeholder="Select model" style={{ flex: 1, minWidth: 160 }} ><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {availableModels.map((id) => (
-                    <SelectItem key={id} value={id}>
-                      {id}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <Input
-                placeholder="qwen2.5-coder-14b-instruct"
-                value={localModel}
-                onChange={(e) => setLocalModel(e.target.value)}
-                style={{ flex: 1, minWidth: 160 }}
-              />
-            )}
+            <ModelSelect
+              ariaLabel="Local model"
+              value={localModel}
+              disabled={loadingModels}
+              options={availableModels.map((id) => ({ id }))}
+              onChange={setLocalModel}
+            />
             <Button
               size="sm"
               variant="outline"
@@ -287,16 +266,6 @@ export function SettingsLocalDelegatePanel({ api, onError }: Props) {
               {loadingModels ? 'Loading…' : 'Refresh models'}
             </Button>
           </div>
-          {availableModels.length > 0 ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              type="button"
-              onClick={() => setUseCustomModel((v) => !v)}
-            >
-              {useCustomModel ? 'Use model list' : 'Type custom model id'}
-            </Button>
-          ) : null}
           {modelsNotice ? (
             <span role="status">
               {modelsNotice}
@@ -352,7 +321,7 @@ export function SettingsLocalDelegatePanel({ api, onError }: Props) {
       </div>
 
       {saveNotice ? (
-        <div role="status" className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-900 dark:text-green-100">{saveNotice}</div>
+        <div role="status" className="mc-notice-settled">{saveNotice}</div>
       ) : null}
     </div>
   )

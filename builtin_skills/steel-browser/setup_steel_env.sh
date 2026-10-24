@@ -1,7 +1,7 @@
 #!/bin/sh
 # Create Steel Python venv with steel-sdk and playwright (CDP client only).
 set -e
-WORKSPACE="${WORKSPACE_DIR:-${MEIDO_WORKSPACE_DIR:-${FINALLY_A_VALUE_BOT_WORKSPACE_DIR:-$(pwd)}}}"
+WORKSPACE="${WORKSPACE_DIR:-$(pwd)}"
 VENV_DIR="$WORKSPACE/shared/.venv-steel"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 

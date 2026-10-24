@@ -116,6 +116,7 @@ pub async fn run_app(
             post_tool_evaluator_enabled: config.post_tool_evaluator_enabled,
             response_quality_evaluator_enabled: config.response_quality_evaluator_enabled,
             agent_engine: crate::runtime_toggles::AgentEngine::Classic,
+            max_tool_iterations: config.max_tool_iterations,
         },
         &db,
     )?;

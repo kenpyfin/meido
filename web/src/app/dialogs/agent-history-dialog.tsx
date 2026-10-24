@@ -69,7 +69,7 @@ const { appearance, activePersonaId, agentHistory } = props
         ) : null}
     
         {agentHistoryError ? (
-          <div role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100 mb-2">{agentHistoryError}</div>
+          <div role="alert" className="mb-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{agentHistoryError}</div>
         ) : null}
     
         {!agentHistoryBusy && !agentHistoryError && agentHistoryParsed != null ? (

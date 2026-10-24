@@ -32,12 +32,16 @@ export function SettingsRunContextPanel({
 }: Props) {
   const [historySuffix, setHistorySuffix] = useState<PersonaBulletinHistorySuffix | null>(null)
   const [denseDelivery, setDenseDelivery] = useState<PersonaDenseDeliveryInfo | null>(null)
+  const [rewriteEnabled, setRewriteEnabled] = useState(false)
   const [depthBusy, setDepthBusy] = useState(false)
   const [deliveryBusy, setDeliveryBusy] = useState(false)
+  const [rewriteBusy, setRewriteBusy] = useState(false)
   const [depthError, setDepthError] = useState('')
   const [deliveryError, setDeliveryError] = useState('')
+  const [rewriteError, setRewriteError] = useState('')
   const [saveNotice, setSaveNotice] = useState<string | null>(null)
   const [externalPaths, setExternalPaths] = useState('')
+  const [automaticPaths, setAutomaticPaths] = useState<string[]>([])
   const [externalEnvKey, setExternalEnvKey] = useState<string | null>(null)
   const [externalBusy, setExternalBusy] = useState(false)
   const [externalError, setExternalError] = useState('')
@@ -46,7 +50,9 @@ export function SettingsRunContextPanel({
     if (activePersonaId == null) {
       setHistorySuffix(null)
       setDenseDelivery(null)
+      setRewriteEnabled(false)
       setExternalPaths('')
+      setAutomaticPaths([])
       setExternalEnvKey(null)
       return
     }
@@ -55,8 +61,10 @@ export function SettingsRunContextPanel({
         history_suffix?: unknown
         dense_delivery?: PersonaDenseDeliveryInfo | null
         dense_delivery_enabled?: boolean
+        user_message_rewrite_enabled?: boolean
       }>(`/api/personas/${activePersonaId}/bulletin`)
       setHistorySuffix(parsePersonaBulletinHistorySuffix(data.history_suffix))
+      setRewriteEnabled(data.user_message_rewrite_enabled === true)
       if (data.dense_delivery && typeof data.dense_delivery.enabled === 'boolean') {
         setDenseDelivery(data.dense_delivery)
       } else {
@@ -67,15 +75,19 @@ export function SettingsRunContextPanel({
           summary_chars: 800,
         })
       }
-      const external = await api<{ paths?: string[]; env_key?: string | null }>(
-        `/api/personas/${activePersonaId}/external-paths`,
-      )
+      const external = await api<{
+        paths?: string[]
+        automatic_paths?: string[]
+        env_key?: string | null
+      }>(`/api/personas/${activePersonaId}/external-paths`)
       setExternalPaths((external.paths ?? []).join('\n'))
+      setAutomaticPaths(external.automatic_paths ?? [])
       setExternalEnvKey(external.env_key ?? null)
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
       setHistorySuffix(null)
       setDenseDelivery(null)
+      setRewriteEnabled(false)
       setExternalPaths('')
       setExternalEnvKey(null)
     }
@@ -139,6 +151,30 @@ export function SettingsRunContextPanel({
     [activePersonaId, api, load, onPersonaBulletinChanged],
   )
 
+  const applyUserMessageRewrite = useCallback(
+    async (enabled: boolean) => {
+      if (activePersonaId == null) return
+      setRewriteBusy(true)
+      setRewriteError('')
+      setSaveNotice(null)
+      try {
+        await api(`/api/personas/${activePersonaId}/bulletin`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_message_rewrite_enabled: enabled }),
+        })
+        await load()
+        await onPersonaBulletinChanged?.()
+        setSaveNotice(enabled ? 'User message rewrite on.' : 'User message rewrite off.')
+      } catch (e) {
+        setRewriteError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setRewriteBusy(false)
+      }
+    },
+    [activePersonaId, api, load, onPersonaBulletinChanged],
+  )
+
   const saveExternalPaths = useCallback(async () => {
     if (activePersonaId == null) return
     setExternalBusy(true)
@@ -179,7 +215,7 @@ export function SettingsRunContextPanel({
         </span>
         {disabled ? (
           <span>
-            Select a persona in the sidebar to edit chat depth and dense delivery.
+            Select a persona in the sidebar to edit chat depth, message rewrite, and dense delivery.
           </span>
         ) : (
           <span>
@@ -189,7 +225,7 @@ export function SettingsRunContextPanel({
       </div>
 
       {saveNotice ? (
-        <div role="status" className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-900 dark:text-green-100">{saveNotice}</div>
+        <div role="status" className="mc-notice-settled">{saveNotice}</div>
       ) : null}
 
       <div className="mc-run-context-block">
@@ -244,6 +280,27 @@ export function SettingsRunContextPanel({
 
       <div className="mc-run-context-block mc-run-context-delivery">
         <div className="flex flex-col gap-1 min-w-0 flex-1">
+          <span className="font-medium">User message rewrite</span>
+          <span className="leading-snug">
+            Before a turn, the system LLM reads this persona's context depth and memory and rewrites
+            the user message so it stands alone. The rewritten text is what is saved and shown in
+            the chat. Set the model under Settings → System LLM → User message rewrite. A blank row
+            uses the shared default. If that pair is missing, the original message is kept.
+          </span>
+          {rewriteError ? <span>{rewriteError}</span> : null}
+        </div>
+        <div className="mc-run-context-switch-row">
+          <Switch
+            size="default"
+            checked={rewriteEnabled}
+            disabled={disabled || rewriteBusy}
+            onCheckedChange={(checked) => void applyUserMessageRewrite(checked)}
+          />
+        </div>
+      </div>
+
+      <div className="mc-run-context-block mc-run-context-delivery">
+        <div className="flex flex-col gap-1 min-w-0 flex-1">
           <span className="font-medium">
             Dense delivery (short message + PDF link)
           </span>
@@ -277,7 +334,15 @@ export function SettingsRunContextPanel({
         <span className="font-medium">Paths outside the workspace</span>
         <span className="mt-1 block leading-snug">
           Absolute paths this persona may read and write. One path per line. Only listed paths
-          are reachable outside the workspace. Vault paths set for the process stay available.
+          are reachable outside the workspace. Listing the Meido source checkout allows edits
+          there; other paths in that checkout stay blocked. Vault paths set for the process stay available.
+          {automaticPaths.length > 0 ? (
+            <>
+              {' '}
+              The workspace is outside the app directory, so every persona may already edit{' '}
+              {automaticPaths.join(', ')}.
+            </>
+          ) : null}
           The list is stored as{' '}
           {externalEnvKey ? (
             <code className="text-[11px]">{externalEnvKey}</code>

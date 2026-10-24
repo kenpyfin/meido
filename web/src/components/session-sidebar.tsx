@@ -5,9 +5,21 @@ import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { SidebarMode } from '../app/sidebar-mode'
+import { IconMeidoCrest, IconRibbonBow } from './icons'
 import type { Persona } from '../types'
 
-const PRIMARY_THEME_KEYS = new Set(['green', 'slate', 'blue'])
+const PRIMARY_THEME_KEYS = new Set([
+  'meido',
+  'sakura',
+  'matcha',
+  'royal',
+  'lit',
+  'lit-sakura',
+  'lit-matcha',
+  'lit-salon',
+  'lit-amber',
+  'lit-wisteria',
+])
 
 function IconPalette({ className }: { className?: string }) {
   return (
@@ -45,7 +57,7 @@ type SessionSidebarProps = {
   onToggleAppearance: () => void
   uiTheme: string
   onUiThemeChange: (theme: string) => void
-  uiThemeOptions: Array<{ key: string; label: string; color: string }>
+  uiThemeOptions: Array<{ key: string; label: string; color: string; canvas: string }>
   personas: Persona[]
   personaHasNew?: Record<number, boolean>
   selectedPersonaId: number | null
@@ -55,12 +67,14 @@ type SessionSidebarProps = {
   mode?: SidebarMode
   onModeChange?: (mode: SidebarMode) => void
   blockedItems?: number
+  onOpenPersonaConfig?: () => void
+  onOpenSettings?: () => void
 }
 
 const SIDEBAR_MODES: Array<{ id: SidebarMode; label: string }> = [
   { id: 'personas', label: 'Personas' },
   { id: 'groups', label: 'Groups' },
-  { id: 'coordinator', label: 'Coordinator' },
+  { id: 'coordinator', label: 'Board' },
 ]
 
 function ThemeSwatchButton({
@@ -68,7 +82,7 @@ function ThemeSwatchButton({
   selected,
   onSelect,
 }: {
-  theme: { key: string; label: string; color: string }
+  theme: { key: string; label: string; color: string; canvas: string }
   selected: boolean
   onSelect: () => void
 }) {
@@ -81,8 +95,8 @@ function ThemeSwatchButton({
       }}
       className={
         selected
-          ? 'flex items-center gap-2 rounded-md border border-[color:var(--mc-accent)] bg-[color:var(--mc-bg-panel)] px-2 py-1 text-left text-xs text-[color:var(--mc-text-primary)]'
-          : 'flex items-center gap-2 rounded-md border border-transparent px-2 py-1 text-left text-xs text-[color:var(--mc-text-muted)] hover:border-[color:var(--mc-border-soft)] hover:bg-[color:var(--mc-bg-panel)]'
+          ? 'flex min-w-0 items-center gap-2 rounded-md border border-[color:var(--mc-accent)] bg-[color:var(--mc-bg-panel)] px-2 py-1 text-left text-xs text-[color:var(--mc-text-primary)]'
+          : 'flex min-w-0 items-center gap-2 rounded-md border border-transparent px-2 py-1 text-left text-xs text-[color:var(--mc-text-muted)] hover:border-[color:var(--mc-border-soft)] hover:bg-[color:var(--mc-bg-panel)]'
       }
       style={
         selected
@@ -91,11 +105,13 @@ function ThemeSwatchButton({
       }
     >
       <span
-        className="h-3 w-3 rounded-sm border border-[color:var(--mc-border-soft)]"
-        style={{ backgroundColor: theme.color }}
+        className="relative h-5 w-8 shrink-0 overflow-hidden rounded-sm border border-[color:var(--mc-border-soft)]"
+        style={{ backgroundColor: theme.canvas }}
         aria-hidden="true"
-      />
-      {theme.label}
+      >
+        <span className="absolute inset-x-0 bottom-0 h-1.5" style={{ backgroundColor: theme.color }} />
+      </span>
+      <span className="min-w-0 truncate">{theme.label}</span>
     </button>
   )
 }
@@ -115,6 +131,8 @@ export const SessionSidebar = React.memo(function SessionSidebar({
   mode = 'personas',
   onModeChange,
   blockedItems = 0,
+  onOpenPersonaConfig,
+  onOpenSettings,
 }: SessionSidebarProps) {
   const isDark = appearance === 'dark'
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
@@ -155,19 +173,17 @@ export const SessionSidebar = React.memo(function SessionSidebar({
     <aside
       className="flex h-full min-h-0 flex-col border-r border-[color:var(--mc-border-soft)] bg-[color:var(--mc-bg-sidebar)] p-4"
     >
-      <div className="flex justify-between items-center mb-4">
+      <div className="relative z-30 mb-4 flex items-center justify-between">
         <div className="min-w-0">
-          <span className="text-xl font-semibold tracking-tight">
+          <span className="mc-display-title flex items-center gap-2 text-2xl leading-none">
+            <IconMeidoCrest className="mc-crest-plate size-8" />
             Meido
           </span>
-          <span className="mt-0.5 block text-xs text-[color:var(--mc-text-muted)]">
-            Finally a helpful one.
-          </span>
-          <span className="mt-0.5 block">
+          <span className="mt-1.5 block text-xs text-[color:var(--mc-text-muted)]">
             {mode === 'personas' ? 'Personas & sessions' : mode}
           </span>
         </div>
-        <div className="relative flex items-center gap-2">
+        <div className="flex items-center gap-2">
           {onCloseRequest ? (
             <button
               type="button"
@@ -209,9 +225,9 @@ export const SessionSidebar = React.memo(function SessionSidebar({
           {themeMenuOpen ? (
             <div
               ref={themeMenuRef}
-              className="absolute right-0 top-10 z-50 w-56 rounded-lg border border-[color:var(--mc-border-soft)] bg-[color:var(--mc-bg-sidebar)] p-2"
+              className="absolute inset-x-0 top-full z-50 mt-2 w-full rounded-lg border border-[color:var(--mc-border-strong)] bg-[color:var(--mc-bg-panel)] p-2 shadow-[0_14px_32px_rgba(8,4,10,0.65)]"
             >
-              <span>Theme</span>
+              <span className="px-0.5 text-[11px] font-medium uppercase tracking-wide text-[color:var(--mc-text-muted)]">Theme</span>
               <div className="mt-2 grid grid-cols-2 gap-1">
                 {primaryThemes.map((theme) => (
                   <ThemeSwatchButton
@@ -329,10 +345,13 @@ export const SessionSidebar = React.memo(function SessionSidebar({
                       onCloseRequest?.()
                     }}
                   >
+                    {selectedPersonaId === p.id ? (
+                      <IconRibbonBow className="size-3.5 shrink-0 text-[color:var(--mc-accent)]" />
+                    ) : null}
                     <span className="min-w-0 truncate">{p.name}</span>
                     {personaHasNew?.[p.id] ? (
                       <span
-                        className="h-2 w-2 shrink-0 rounded-full bg-[color:var(--mc-accent)]"
+                        className="h-2 w-2 shrink-0 rounded-full bg-[color:var(--mc-accent-brass)] ring-1 ring-[color:var(--mc-accent)]"
                         aria-label="New messages"
                         title="New messages"
                       />
@@ -362,6 +381,36 @@ export const SessionSidebar = React.memo(function SessionSidebar({
             : 'The Coordinator board and daily brief open in the main pane.'}
         </p>
       )}
+
+      {onOpenPersonaConfig || onOpenSettings ? (
+        <div className="mt-3 border-t border-[color:var(--mc-border-soft)] pt-3 md:hidden">
+          <span className="text-xs font-medium text-[color:var(--mc-text-muted)]">Configuration</span>
+          <div className="mt-1 flex flex-col">
+            <button
+              type="button"
+              className="flex h-11 w-full items-center rounded-md px-1 text-left text-sm disabled:opacity-40"
+              disabled={selectedPersonaId == null || !onOpenPersonaConfig}
+              title={selectedPersonaId == null ? 'Choose a persona first' : 'Persona configuration'}
+              onClick={() => {
+                onCloseRequest?.()
+                onOpenPersonaConfig?.()
+              }}
+            >
+              Persona configuration
+            </button>
+            <button
+              type="button"
+              className="flex h-11 w-full items-center rounded-md px-1 text-left text-sm"
+              onClick={() => {
+                onCloseRequest?.()
+                onOpenSettings?.()
+              }}
+            >
+              Web UI configuration
+            </button>
+          </div>
+        </div>
+      ) : null}
 
     </aside>
   )

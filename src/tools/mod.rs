@@ -660,12 +660,18 @@ pub fn assert_persona_tool_path_allowed_with_memory(
     origin_vault: &Path,
 ) -> Result<(), String> {
     if is_write && crate::self_repo::is_self_repo_source_path(workspace_root, resolved_path) {
-        return Err(format!(
-            "Write blocked: '{}' is inside the bot's own source checkout. \
-             Persona Tier-1 target repos (`Repo: …`) are allowed; the Meido \
-             install/source tree is not.",
-            resolved_path.display()
-        ));
+        let covered = auth.is_some_and(|a| {
+            crate::self_repo::path_covered_by_roots(resolved_path, &a.external_roots)
+        });
+        if !covered {
+            return Err(format!(
+                "Write blocked: '{}' is inside the bot's own source checkout and is not on \
+                 this persona's external paths. Add that directory under Paths outside the \
+                 workspace to allow writes there. Persona Tier-1 target repos (`Repo: …`) \
+                 stay allowed.",
+                resolved_path.display()
+            ));
+        }
     }
     if !has_persona_scope(auth) {
         return Ok(());
@@ -683,6 +689,13 @@ pub fn assert_persona_tool_path_allowed_with_memory(
              scripts, or write persona files under `shared/personas/{chat_id}/{persona_id}/`."
                 .to_string(),
         );
+    }
+
+    // A data workspace that does not overlap the app checkout is editable by every persona.
+    if crate::self_repo::workspace_disjoint_from_app(workspace_root)
+        && crate::self_repo::is_under_workspace_data(workspace_root, resolved_path)
+    {
+        return Ok(());
     }
 
     let registry =
@@ -927,6 +940,7 @@ impl ToolRegistry {
             Box::new(collab_tools::ListPersonaActivityTool::new(db.clone())),
             Box::new(collab_tools::ListScheduledRunsTool::new(db.clone())),
             Box::new(collab_tools::ProposeBoardChangeTool::new(db.clone())),
+            Box::new(collab_tools::FinishPipelineStageTool::new(db.clone())),
             Box::new(
                 search_history::SearchHistoryTool::new(db.clone()).with_recall(recall.clone()),
             ),
@@ -1597,6 +1611,67 @@ mod tests {
     }
 
     #[test]
+    fn test_external_root_lifts_self_repo_write_ban() {
+        let checkout =
+            std::env::temp_dir().join(format!("meido_self_allow_{}", uuid::Uuid::new_v4()));
+        let workspace = checkout.join("workspace");
+        let src = checkout.join("src");
+        let persona = persona_shared_dir(&workspace, 10, 2);
+        let origin = workspace.join("shared").join("ORIGIN");
+        std::fs::create_dir_all(&persona).unwrap();
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(checkout.join("Cargo.toml"), "[package]\nname = \"meido\"\n").unwrap();
+        let file = src.join("lib.rs");
+        std::fs::write(&file, "x").unwrap();
+        let elsewhere = checkout.join("docs").join("note.md");
+        std::fs::create_dir_all(elsewhere.parent().unwrap()).unwrap();
+        std::fs::write(&elsewhere, "x").unwrap();
+
+        let mut auth = ToolAuthContext {
+            run_id: None,
+            caller_channel: "web".to_string(),
+            caller_chat_id: 10,
+            caller_persona_id: 2,
+            control_chat_ids: vec![],
+            is_scheduled_task: false,
+            session_id: None,
+            vector_db_root: None,
+            external_roots: vec![src.clone()],
+        };
+        assert!(
+            assert_persona_tool_path_allowed_with_origin(
+                &workspace,
+                &file,
+                Some(&auth),
+                true,
+                &origin
+            )
+            .is_ok(),
+            "listed subdirectory should be writable"
+        );
+        let denied = assert_persona_tool_path_allowed_with_origin(
+            &workspace,
+            &elsewhere,
+            Some(&auth),
+            true,
+            &origin,
+        )
+        .unwrap_err();
+        assert!(denied.contains("external paths"));
+        auth.external_roots.clear();
+        let blocked = assert_persona_tool_path_allowed_with_origin(
+            &workspace,
+            &file,
+            Some(&auth),
+            true,
+            &origin,
+        )
+        .unwrap_err();
+        assert!(blocked.contains("external paths"));
+        let _ = std::fs::remove_dir_all(&checkout);
+    }
+
+    #[test]
     fn test_assert_persona_allows_missing_file_under_allowed_root() {
         let root =
             std::env::temp_dir().join(format!("meido_missing_scope_{}", uuid::Uuid::new_v4()));
@@ -1619,11 +1694,77 @@ mod tests {
             assert_persona_tool_path_allowed(&root, &missing, Some(&auth), false).is_ok(),
             "missing in-scope path should be allowed (not-found is for read_file)"
         );
-        let outside = root.join("elsewhere").join("x.md");
-        std::fs::create_dir_all(outside.parent().unwrap()).unwrap();
+        let outside = std::env::temp_dir().join(format!(
+            "meido_missing_scope_outside_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&outside).unwrap();
+        let outside_file = outside.join("x.md");
+        std::fs::write(&outside_file, "x").unwrap();
         let err =
-            assert_persona_tool_path_allowed(&root, &outside, Some(&auth), false).unwrap_err();
+            assert_persona_tool_path_allowed(&root, &outside_file, Some(&auth), false).unwrap_err();
         assert!(err.contains("Permission denied"));
+        let loose = root.join("loose.md");
+        std::fs::write(&loose, "x").unwrap();
+        assert!(
+            assert_persona_tool_path_allowed(&root, &loose, Some(&auth), true).is_ok(),
+            "a workspace outside the app directory is editable by every persona"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn test_workspace_inside_app_does_not_blanket_approve_loose_files() {
+        let app = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let root = app
+            .join("target")
+            .join(format!("meido_inside_ws_{}", uuid::Uuid::new_v4()));
+        let auth = ToolAuthContext {
+            run_id: None,
+            caller_channel: "web".to_string(),
+            caller_chat_id: 10,
+            caller_persona_id: 2,
+            control_chat_ids: vec![],
+            is_scheduled_task: false,
+            session_id: None,
+            vector_db_root: None,
+            external_roots: Vec::new(),
+        };
+        let persona = persona_shared_dir(&root, 10, 2);
+        std::fs::create_dir_all(&persona).unwrap();
+        let loose = root.join("loose.md");
+        std::fs::write(&loose, "x").unwrap();
+        let err = assert_persona_tool_path_allowed(&root, &loose, Some(&auth), true).unwrap_err();
+        assert!(err.contains("Permission denied"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_app_directory_is_editable_when_workspace_is_outside() {
+        let root = std::env::temp_dir().join(format!("meido_app_allow_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut external_roots = Vec::new();
+        crate::self_repo::append_auto_approved_app_directory(&root, &mut external_roots);
+        let app = crate::self_repo::current_app_directory().expect("app checkout");
+        let file = app.join("Cargo.toml");
+        let auth = ToolAuthContext {
+            run_id: None,
+            caller_channel: "web".to_string(),
+            caller_chat_id: 10,
+            caller_persona_id: 2,
+            control_chat_ids: vec![],
+            is_scheduled_task: false,
+            session_id: None,
+            vector_db_root: None,
+            external_roots,
+        };
+        let persona = persona_shared_dir(&root, 10, 2);
+        std::fs::create_dir_all(&persona).unwrap();
+        assert!(
+            assert_persona_tool_path_allowed(&root, &file, Some(&auth), true).is_ok(),
+            "the app directory is approved for every persona when the workspace is outside it"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

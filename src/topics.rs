@@ -21,8 +21,180 @@ use crate::error::FinallyAValueBotError;
 
 pub const APP_SETTING_SYSTEM_LLM_PROVIDER: &str = "SYSTEM_LLM_PROVIDER";
 pub const APP_SETTING_SYSTEM_LLM_MODEL: &str = "SYSTEM_LLM_MODEL";
+pub const APP_SETTING_HOOK_PROMPT_MODEL: &str = "HOOK_PROMPT_MODEL";
 const LEGACY_APP_SETTING_SYSTEM_LLM_PROVIDER: &str = "TOPICS_MODEL_SOURCE";
 const LEGACY_APP_SETTING_SYSTEM_LLM_MODEL: &str = "TOPICS_MODEL";
+
+/// One background call that can override the shared System LLM pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemLlmJob {
+    TopicSplit,
+    Bulletin,
+    GroupSpeaker,
+    GroupSummary,
+    LongReply,
+    BackgroundWrapup,
+    PromptHooks,
+    Checks,
+    Learn,
+    UserMessageRewrite,
+}
+
+impl SystemLlmJob {
+    pub const ALL: [SystemLlmJob; 10] = [
+        Self::TopicSplit,
+        Self::Bulletin,
+        Self::GroupSpeaker,
+        Self::GroupSummary,
+        Self::LongReply,
+        Self::BackgroundWrapup,
+        Self::PromptHooks,
+        Self::Checks,
+        Self::Learn,
+        Self::UserMessageRewrite,
+    ];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::TopicSplit => "topic_split",
+            Self::Bulletin => "bulletin",
+            Self::GroupSpeaker => "group_speaker",
+            Self::GroupSummary => "group_summary",
+            Self::LongReply => "long_reply",
+            Self::BackgroundWrapup => "background_wrapup",
+            Self::PromptHooks => "prompt_hooks",
+            Self::Checks => "checks",
+            Self::Learn => "learn",
+            Self::UserMessageRewrite => "user_message_rewrite",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|job| job.id() == id.trim())
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::TopicSplit => "Topic split",
+            Self::Bulletin => "Bulletin summary",
+            Self::GroupSpeaker => "Group speaker",
+            Self::GroupSummary => "Group summary",
+            Self::LongReply => "Long-reply summary",
+            Self::BackgroundWrapup => "Background wrap-up",
+            Self::PromptHooks => "Prompt hooks",
+            Self::Checks => "Post-tool check and delivery check",
+            Self::Learn => "Learn and optimize",
+            Self::UserMessageRewrite => "User message rewrite",
+        }
+    }
+
+    pub fn detail(self) -> &'static str {
+        match self {
+            Self::TopicSplit => {
+                "Reads the open topic and newer lines, up to 40 shortened messages, and asks for JSON boundaries and titles. Closed topics and titles you edited stay."
+            }
+            Self::Bulletin => "Writes the service-ledger focus after a turn.",
+            Self::GroupSpeaker => {
+                "Picks which personas answer in a group. A moderator saved on that group still wins."
+            }
+            Self::GroupSummary => "Compresses a group session every few messages.",
+            Self::LongReply => "Shortens a long answer for chat. The PDF stays the full reply.",
+            Self::BackgroundWrapup => "Turns a finished background job into the user-facing reply.",
+            Self::PromptHooks => {
+                "Runs prompt hooks. A model set on the hook itself still wins. A model with no provider keeps HOOK_PROMPT_MODEL on the process provider."
+            }
+            Self::Checks => "Scores a tool round and the reply before send. One pair for both checks.",
+            Self::Learn => "Reads an agent trace and writes the optimization note.",
+            Self::UserMessageRewrite => {
+                "Rewrites the inbound user message using the context-depth window and memory. The rewritten text is stored and shown in the chat. A missing pair keeps the original."
+            }
+        }
+    }
+
+    fn provider_key(self) -> &'static str {
+        match self {
+            Self::TopicSplit => "SYSTEM_LLM_TOPIC_SPLIT_PROVIDER",
+            Self::Bulletin => "SYSTEM_LLM_BULLETIN_PROVIDER",
+            Self::GroupSpeaker => "SYSTEM_LLM_GROUP_SPEAKER_PROVIDER",
+            Self::GroupSummary => "SYSTEM_LLM_GROUP_SUMMARY_PROVIDER",
+            Self::LongReply => "SYSTEM_LLM_LONG_REPLY_PROVIDER",
+            Self::BackgroundWrapup => "SYSTEM_LLM_BACKGROUND_WRAPUP_PROVIDER",
+            Self::PromptHooks => "SYSTEM_LLM_PROMPT_HOOKS_PROVIDER",
+            Self::Checks => "SYSTEM_LLM_CHECKS_PROVIDER",
+            Self::Learn => "SYSTEM_LLM_LEARN_PROVIDER",
+            Self::UserMessageRewrite => "SYSTEM_LLM_USER_MESSAGE_REWRITE_PROVIDER",
+        }
+    }
+
+    fn model_key(self) -> &'static str {
+        match self {
+            Self::TopicSplit => "SYSTEM_LLM_TOPIC_SPLIT_MODEL",
+            Self::Bulletin => "SYSTEM_LLM_BULLETIN_MODEL",
+            Self::GroupSpeaker => "SYSTEM_LLM_GROUP_SPEAKER_MODEL",
+            Self::GroupSummary => "SYSTEM_LLM_GROUP_SUMMARY_MODEL",
+            Self::LongReply => "SYSTEM_LLM_LONG_REPLY_MODEL",
+            Self::BackgroundWrapup => "SYSTEM_LLM_BACKGROUND_WRAPUP_MODEL",
+            Self::PromptHooks => "SYSTEM_LLM_PROMPT_HOOKS_MODEL",
+            Self::Checks => "SYSTEM_LLM_CHECKS_MODEL",
+            Self::Learn => "SYSTEM_LLM_LEARN_MODEL",
+            Self::UserMessageRewrite => "SYSTEM_LLM_USER_MESSAGE_REWRITE_MODEL",
+        }
+    }
+}
+
+/// How one System LLM row is saved. A blank row clears the override.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SystemLlmJobWrite {
+    Clear,
+    /// Prompt hooks only: model on the process provider (`HOOK_PROMPT_MODEL`).
+    ModelOnly(String),
+    Pair {
+        provider: String,
+        model: String,
+    },
+}
+
+pub fn parse_system_llm_job_write(
+    job: SystemLlmJob,
+    provider: &str,
+    model: &str,
+) -> Result<SystemLlmJobWrite, String> {
+    let provider = provider.trim();
+    let model = model.trim();
+    if provider.is_empty() && model.is_empty() {
+        return Ok(SystemLlmJobWrite::Clear);
+    }
+    if provider.is_empty() {
+        if job == SystemLlmJob::PromptHooks {
+            return Ok(SystemLlmJobWrite::ModelOnly(model.to_string()));
+        }
+        return Err(format!(
+            "Set a provider and a model for {}, or leave the row blank to use the shared default.",
+            job.label()
+        ));
+    }
+    if model.is_empty() {
+        return Err(format!(
+            "Choose a model for {}, or leave the row blank to use the shared default.",
+            job.label()
+        ));
+    }
+    if provider.eq_ignore_ascii_case("strategy") {
+        return Err("Strategy is not a system LLM provider.".into());
+    }
+    let provider_id = if provider.eq_ignore_ascii_case("local") {
+        "local".to_string()
+    } else {
+        crate::llm_catalog::resolve_catalog_provider_id(provider)
+    };
+    if provider_id != "local" && crate::llm_catalog::find_provider(&provider_id).is_none() {
+        return Err(format!("Unknown provider for {}.", job.label()));
+    }
+    Ok(SystemLlmJobWrite::Pair {
+        provider: provider_id,
+        model: model.to_string(),
+    })
+}
 
 fn nonempty_setting(value: Option<String>) -> Option<String> {
     value.filter(|item| !item.trim().is_empty())
@@ -57,6 +229,88 @@ pub(crate) fn read_system_llm_settings(
         nonempty_setting(db.get_app_setting(LEGACY_APP_SETTING_SYSTEM_LLM_MODEL)?),
     );
     Ok((provider, model))
+}
+
+pub(crate) fn read_system_llm_job(
+    db: &crate::db::Database,
+    job: SystemLlmJob,
+) -> Result<(Option<String>, Option<String>), crate::error::FinallyAValueBotError> {
+    let provider = nonempty_setting(db.get_app_setting(job.provider_key())?);
+    let model = nonempty_setting(db.get_app_setting(job.model_key())?);
+    Ok((provider, model))
+}
+
+pub(crate) fn apply_system_llm_job_write(
+    db: &crate::db::Database,
+    job: SystemLlmJob,
+    write: &SystemLlmJobWrite,
+) -> Result<(), crate::error::FinallyAValueBotError> {
+    match write {
+        SystemLlmJobWrite::Clear => {
+            db.set_app_setting(job.provider_key(), "")?;
+            db.set_app_setting(job.model_key(), "")?;
+            if job == SystemLlmJob::PromptHooks {
+                db.set_app_setting(APP_SETTING_HOOK_PROMPT_MODEL, "")?;
+            }
+        }
+        SystemLlmJobWrite::ModelOnly(model) => {
+            db.set_app_setting(job.provider_key(), "")?;
+            db.set_app_setting(job.model_key(), "")?;
+            db.set_app_setting(APP_SETTING_HOOK_PROMPT_MODEL, model)?;
+        }
+        SystemLlmJobWrite::Pair { provider, model } => {
+            db.set_app_setting(job.provider_key(), provider)?;
+            db.set_app_setting(job.model_key(), model)?;
+            if job == SystemLlmJob::PromptHooks {
+                db.set_app_setting(APP_SETTING_HOOK_PROMPT_MODEL, model)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `Some("")` in app settings means the operator cleared `HOOK_PROMPT_MODEL`.
+/// `None` means the key was never saved, so the process config still applies.
+pub fn effective_hook_prompt_model(stored: Option<&str>, config_model: &str) -> Option<String> {
+    match stored {
+        Some(value) if value.trim().is_empty() => None,
+        Some(value) => Some(value.trim().to_string()),
+        None => {
+            let trimmed = config_model.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+    }
+}
+
+/// A saved job pair wins. A blank job uses the shared default pair.
+pub fn effective_system_llm_pair<'a>(
+    job_provider: Option<&'a str>,
+    job_model: Option<&'a str>,
+    default_provider: Option<&'a str>,
+    default_model: Option<&'a str>,
+) -> (Option<&'a str>, Option<&'a str>) {
+    let job_provider = job_provider
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if job_provider.is_some() {
+        (
+            job_provider,
+            job_model.map(str::trim).filter(|value| !value.is_empty()),
+        )
+    } else {
+        (
+            default_provider
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+            default_model
+                .map(str::trim)
+                .filter(|value| !value.is_empty()),
+        )
+    }
 }
 
 /// Apply installer system-LLM settings when the database does not have them yet.
@@ -524,55 +778,41 @@ pub enum SystemLlmChoice {
     Local { base_url: String, model: String },
     /// A catalog provider and model, called directly. Not the cost-routing strategy tier.
     Provider { provider_id: String, model: String },
-    /// No explicit choice yet: the persona's chat model.
-    Strategy,
+    /// Saved pair is missing or incomplete. The feature does not run.
+    Missing,
 }
 
 pub struct SystemLlmInputs<'a> {
     pub saved_source: Option<&'a str>,
     pub saved_model: Option<&'a str>,
-    pub prefer_tier2: bool,
-    pub tier2_base_url: &'a str,
-    pub tier2_model: &'a str,
-    pub tier2_tools_ok: bool,
-    pub local_base_url: &'a str,
-    pub local_model: &'a str,
+    /// OpenAI-compatible server from Settings → Connections.
+    pub local_server_url: &'a str,
+    pub local_server_model: &'a str,
 }
 
-/// Saved Settings override `TOPICS_PREFER_TIER2`. With no saved choice, a verified
-/// Tier 2 endpoint is used when that flag is on.
+/// A saved provider and model is the only System LLM. There is no persona or tier fallback.
 pub fn resolve_system_llm_choice(input: SystemLlmInputs<'_>) -> SystemLlmChoice {
     let saved_source = input
         .saved_source
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| s.to_ascii_lowercase());
-    let local_base = first_nonempty(input.tier2_base_url, input.local_base_url);
-    let default_local_model = first_nonempty(input.tier2_model, input.local_model);
     match saved_source.as_deref() {
-        Some("strategy") => SystemLlmChoice::Strategy,
+        Some("strategy") | None => SystemLlmChoice::Missing,
         Some("local") => local_choice(
-            local_base.as_deref().unwrap_or(""),
+            input.local_server_url.trim(),
             input
                 .saved_model
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
-                .or(default_local_model.as_deref())
-                .unwrap_or(""),
+                .unwrap_or(input.local_server_model.trim()),
         ),
         Some(provider) => catalog_choice(
             provider,
             input.saved_model,
-            local_base.as_deref().unwrap_or(""),
-            default_local_model.as_deref().unwrap_or(""),
+            input.local_server_url.trim(),
+            input.local_server_model.trim(),
         ),
-        None => {
-            if input.prefer_tier2 && input.tier2_tools_ok {
-                local_choice(input.tier2_base_url.trim(), input.tier2_model.trim())
-            } else {
-                SystemLlmChoice::Strategy
-            }
-        }
     }
 }
 
@@ -584,17 +824,15 @@ fn catalog_choice(
 ) -> SystemLlmChoice {
     let provider_id = crate::llm_catalog::resolve_catalog_provider_id(provider);
     if crate::llm_catalog::find_provider(&provider_id).is_none() {
-        return SystemLlmChoice::Strategy;
+        return SystemLlmChoice::Missing;
     }
     let saved_model = saved_model.map(str::trim).filter(|s| !s.is_empty());
     if crate::llm_catalog::is_local_provider(&provider_id) {
         return local_choice(local_base_url, saved_model.unwrap_or(default_local_model));
     }
-    let model =
-        saved_model.unwrap_or_else(|| crate::llm_catalog::default_model_for_provider(&provider_id));
-    if model.is_empty() {
-        return SystemLlmChoice::Strategy;
-    }
+    let Some(model) = saved_model else {
+        return SystemLlmChoice::Missing;
+    };
     SystemLlmChoice::Provider {
         provider_id,
         model: model.to_string(),
@@ -603,7 +841,7 @@ fn catalog_choice(
 
 fn local_choice(base_url: &str, model: &str) -> SystemLlmChoice {
     if base_url.is_empty() || model.is_empty() {
-        SystemLlmChoice::Strategy
+        SystemLlmChoice::Missing
     } else {
         SystemLlmChoice::Local {
             base_url: base_url.to_string(),
@@ -612,45 +850,98 @@ fn local_choice(base_url: &str, model: &str) -> SystemLlmChoice {
     }
 }
 
-fn first_nonempty(primary: &str, fallback: &str) -> Option<String> {
-    let primary = primary.trim();
-    if !primary.is_empty() {
-        return Some(primary.to_string());
-    }
-    let fallback = fallback.trim();
-    if fallback.is_empty() {
-        None
-    } else {
-        Some(fallback.to_string())
-    }
+fn resolve_saved_pair(
+    db: &crate::db::Database,
+    saved_source: Option<&str>,
+    saved_model: Option<&str>,
+) -> Result<SystemLlmChoice, crate::error::FinallyAValueBotError> {
+    let local_url = db.get_app_setting("LOCAL_SERVER_URL")?.unwrap_or_default();
+    let local_model = db
+        .get_app_setting("LOCAL_SERVER_MODEL")?
+        .unwrap_or_default();
+    Ok(resolve_system_llm_choice(SystemLlmInputs {
+        saved_source,
+        saved_model,
+        local_server_url: &local_url,
+        local_server_model: &local_model,
+    }))
 }
 
-pub(crate) async fn load_system_llm_choice(state: &AppState) -> SystemLlmChoice {
-    let db = state.db.clone();
-    let saved = call_blocking(db, read_system_llm_settings).await;
-    let (saved_source, saved_model) = match saved {
-        Ok(pair) => pair,
-        Err(_) => {
-            warn!("system LLM setting could not be read");
-            (None, None)
-        }
-    };
-    let mm = state.llm.local_delegate_config();
-    resolve_system_llm_choice(SystemLlmInputs {
-        saved_source: saved_source.as_deref(),
-        saved_model: saved_model.as_deref(),
-        prefer_tier2: state.config.topics_prefer_tier2,
-        tier2_base_url: &mm.tier2_base_url,
-        tier2_model: &mm.tier2_model,
-        tier2_tools_ok: mm.tier2_tools_ok,
-        local_base_url: &mm.local_base_url,
-        local_model: &mm.local_model,
+pub(crate) fn resolve_job_choice(
+    db: &crate::db::Database,
+    job: SystemLlmJob,
+) -> Result<SystemLlmChoice, crate::error::FinallyAValueBotError> {
+    let (job_provider, job_model) = read_system_llm_job(db, job)?;
+    let (default_provider, default_model) = read_system_llm_settings(db)?;
+    let (source, model) = effective_system_llm_pair(
+        job_provider.as_deref(),
+        job_model.as_deref(),
+        default_provider.as_deref(),
+        default_model.as_deref(),
+    );
+    resolve_saved_pair(db, source, model)
+}
+
+/// Prompt-hook model selection. A row pair wins, then `HOOK_PROMPT_MODEL`, then the shared default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptHookRoute {
+    Direct {
+        provider_id: String,
+        model: String,
+        base_url: Option<String>,
+    },
+    ModelOnly(String),
+    Missing,
+}
+
+pub(crate) fn read_prompt_hook_route(
+    db: &crate::db::Database,
+    config_hook_model: &str,
+) -> Result<PromptHookRoute, crate::error::FinallyAValueBotError> {
+    let (job_provider, _) = read_system_llm_job(db, SystemLlmJob::PromptHooks)?;
+    if job_provider
+        .as_ref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        let choice = resolve_job_choice(db, SystemLlmJob::PromptHooks)?;
+        return Ok(match system_llm_direct(choice) {
+            Some((provider_id, model, base_url)) => PromptHookRoute::Direct {
+                provider_id,
+                model,
+                base_url,
+            },
+            None => PromptHookRoute::Missing,
+        });
+    }
+    let stored = db.get_app_setting(APP_SETTING_HOOK_PROMPT_MODEL)?;
+    if let Some(model) = effective_hook_prompt_model(stored.as_deref(), config_hook_model) {
+        return Ok(PromptHookRoute::ModelOnly(model));
+    }
+    let choice = resolve_job_choice(db, SystemLlmJob::PromptHooks)?;
+    Ok(match system_llm_direct(choice) {
+        Some((provider_id, model, base_url)) => PromptHookRoute::Direct {
+            provider_id,
+            model,
+            base_url,
+        },
+        None => PromptHookRoute::Missing,
     })
+}
+
+pub(crate) async fn load_job_choice(state: &AppState, job: SystemLlmJob) -> SystemLlmChoice {
+    let db = state.db.clone();
+    match call_blocking(db, move |db| resolve_job_choice(db, job)).await {
+        Ok(choice) => choice,
+        Err(_) => {
+            warn!("system LLM job setting could not be read");
+            SystemLlmChoice::Missing
+        }
+    }
 }
 
 async fn request_plan(
     state: &AppState,
-    scope: &TopicScope,
+    _scope: &TopicScope,
     messages: &[SegmentMessage],
 ) -> Result<SegmentPlan, String> {
     let system = "You segment one chat window into topics. Reply with JSON only, no markdown. \
@@ -672,18 +963,20 @@ If the window is a single topic, boundaries is empty. Do not invent ids.";
         role: "user".to_string(),
         content: MessageContent::Text(body),
     }];
-    let (provider_id, model, local_base_url) = match load_system_llm_choice(state).await {
+    let (provider_id, model, local_base_url) = match load_job_choice(
+        state,
+        SystemLlmJob::TopicSplit,
+    )
+    .await
+    {
         choice @ (SystemLlmChoice::Local { .. } | SystemLlmChoice::Provider { .. }) => {
             system_llm_direct(choice).expect("saved system LLM is a direct endpoint")
         }
-        SystemLlmChoice::Strategy => {
-            let db = state.db.clone();
-            let persona_id = scope.persona_id;
-            let persona = call_blocking(db, move |db| db.get_persona(persona_id))
-                .await
-                .map_err(|e| e.to_string())?;
-            let strategy = state.llm.resolve_strategy_selection(persona.as_ref())?;
-            (strategy.provider_id, strategy.model, strategy.base_url)
+        SystemLlmChoice::Missing => {
+            return Err(
+                "System LLM is not configured. Set a provider and model under Settings → System LLM."
+                    .into(),
+            );
         }
     };
     let response = send_direct_llm(
@@ -700,13 +993,23 @@ If the window is a single topic, boundaries is empty. Do not invent ids.";
     parse_segment_response(&response_text(&response))
 }
 
+pub(crate) fn system_llm_target(choice: SystemLlmChoice) -> Option<crate::llm::DirectLlmTarget> {
+    system_llm_direct(choice).map(
+        |(provider_id, model, base_url)| crate::llm::DirectLlmTarget {
+            provider_id,
+            model,
+            base_url,
+        },
+    )
+}
+
 pub(crate) fn system_llm_direct(
     choice: SystemLlmChoice,
 ) -> Option<(String, String, Option<String>)> {
     match choice {
         SystemLlmChoice::Local { base_url, model } => Some(("llama".into(), model, Some(base_url))),
         SystemLlmChoice::Provider { provider_id, model } => Some((provider_id, model, None)),
-        SystemLlmChoice::Strategy => None,
+        SystemLlmChoice::Missing => None,
     }
 }
 
@@ -1093,49 +1396,31 @@ mod tests {
     }
 
     #[test]
-    fn topic_model_defaults_to_verified_tier2() {
+    fn missing_system_llm_does_not_fall_back() {
         let choice = resolve_system_llm_choice(SystemLlmInputs {
             saved_source: None,
             saved_model: None,
-            prefer_tier2: true,
-            tier2_base_url: "http://127.0.0.1:8080/v1",
-            tier2_model: "qwen2.5-coder:14b",
-            tier2_tools_ok: true,
-            local_base_url: "http://127.0.0.1:8080/v1",
-            local_model: "qwen3-32b",
+            local_server_url: "http://127.0.0.1:8080/v1",
+            local_server_model: "qwen2.5-coder:14b",
         });
-        assert_eq!(
-            choice,
-            SystemLlmChoice::Local {
-                base_url: "http://127.0.0.1:8080/v1".into(),
-                model: "qwen2.5-coder:14b".into(),
-            }
-        );
+        assert_eq!(choice, SystemLlmChoice::Missing);
     }
 
     #[test]
-    fn saved_topic_model_overrides_the_env_default() {
+    fn saved_system_llm_is_the_only_choice() {
         let strategy = resolve_system_llm_choice(SystemLlmInputs {
             saved_source: Some("strategy"),
             saved_model: None,
-            prefer_tier2: true,
-            tier2_base_url: "http://127.0.0.1:8080/v1",
-            tier2_model: "qwen2.5-coder:14b",
-            tier2_tools_ok: true,
-            local_base_url: "",
-            local_model: "",
+            local_server_url: "http://127.0.0.1:8080/v1",
+            local_server_model: "qwen2.5-coder:14b",
         });
-        assert_eq!(strategy, SystemLlmChoice::Strategy);
+        assert_eq!(strategy, SystemLlmChoice::Missing);
 
         let picked = resolve_system_llm_choice(SystemLlmInputs {
             saved_source: Some("local"),
             saved_model: Some("qwen3-32b"),
-            prefer_tier2: false,
-            tier2_base_url: "http://127.0.0.1:8080/v1",
-            tier2_model: "qwen2.5-coder:14b",
-            tier2_tools_ok: false,
-            local_base_url: "",
-            local_model: "",
+            local_server_url: "http://127.0.0.1:8080/v1",
+            local_server_model: "qwen2.5-coder:14b",
         });
         assert_eq!(
             picked,
@@ -1148,12 +1433,8 @@ mod tests {
         let named = resolve_system_llm_choice(SystemLlmInputs {
             saved_source: Some("anthropic"),
             saved_model: Some("claude-sonnet-4-5"),
-            prefer_tier2: true,
-            tier2_base_url: "http://127.0.0.1:8080/v1",
-            tier2_model: "qwen2.5-coder:14b",
-            tier2_tools_ok: true,
-            local_base_url: "",
-            local_model: "",
+            local_server_url: "",
+            local_server_model: "",
         });
         assert_eq!(
             named,
@@ -1161,6 +1442,52 @@ mod tests {
                 provider_id: "anthropic".into(),
                 model: "claude-sonnet-4-5".into(),
             }
+        );
+    }
+
+    #[test]
+    fn blank_job_uses_the_shared_default() {
+        let (source, model) =
+            effective_system_llm_pair(None, None, Some("google"), Some("gemini-2.5-flash"));
+        assert_eq!(source, Some("google"));
+        assert_eq!(model, Some("gemini-2.5-flash"));
+    }
+
+    #[test]
+    fn job_pair_replaces_the_shared_default() {
+        let (source, model) = effective_system_llm_pair(
+            Some("anthropic"),
+            Some("claude-sonnet-4-5"),
+            Some("google"),
+            Some("gemini-2.5-flash"),
+        );
+        assert_eq!(source, Some("anthropic"));
+        assert_eq!(model, Some("claude-sonnet-4-5"));
+    }
+
+    #[test]
+    fn cleared_hook_model_does_not_fall_back_to_process_config() {
+        assert_eq!(effective_hook_prompt_model(Some(""), "sonar"), None);
+        assert_eq!(
+            effective_hook_prompt_model(None, "sonar").as_deref(),
+            Some("sonar")
+        );
+        assert_eq!(
+            effective_hook_prompt_model(Some("gemini-2.5-flash"), "sonar").as_deref(),
+            Some("gemini-2.5-flash")
+        );
+    }
+
+    #[test]
+    fn prompt_hooks_allow_a_model_without_a_provider() {
+        assert_eq!(
+            parse_system_llm_job_write(SystemLlmJob::PromptHooks, "", "sonar"),
+            Ok(SystemLlmJobWrite::ModelOnly("sonar".into()))
+        );
+        assert!(parse_system_llm_job_write(SystemLlmJob::TopicSplit, "", "sonar").is_err());
+        assert_eq!(
+            parse_system_llm_job_write(SystemLlmJob::Bulletin, "", ""),
+            Ok(SystemLlmJobWrite::Clear)
         );
     }
 }

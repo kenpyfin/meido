@@ -17,7 +17,7 @@ function SettingsAlert({ tone, children }: { tone: 'ok' | 'err'; children: React
       role={tone === 'ok' ? 'status' : undefined}
       className={
         tone === 'ok'
-          ? 'rounded-md border border-green-500/30 bg-green-500/10 px-3 py-2 text-sm text-green-800 dark:text-green-200'
+          ? 'mc-notice-settled'
           : 'rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive'
       }
     >

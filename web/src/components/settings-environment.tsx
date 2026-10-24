@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { LlmModelFields } from './llm-model-fields'
 import type { EnvConfigResponse } from '@/types'
 
 type Api = <T>(path: string, init?: RequestInit) => Promise<T>
@@ -46,6 +47,7 @@ export function SettingsEnvironmentPanel({
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [systemModels, setSystemModels] = useState<string[]>([])
 
   const load = useCallback(async () => {
     const next = await api<EnvConfigResponse>('/api/env-config')
@@ -69,6 +71,10 @@ export function SettingsEnvironmentPanel({
     }
     if (Object.keys(values).length === 0) {
       setMessage('No changes.')
+      return
+    }
+    if ('SYSTEM_LLM_MODEL' in values && !systemModels.includes(values.SYSTEM_LLM_MODEL)) {
+      setError('Pick a model from the list.')
       return
     }
     setBusy(true)
@@ -112,6 +118,12 @@ export function SettingsEnvironmentPanel({
   }
 
   const byKey = new Map((data?.fields ?? []).map((field) => [field.key, field]))
+  const envDirty = (data?.fields ?? []).some((field) => {
+    const next = drafts[field.key] ?? ''
+    if (field.secret && next === '') return false
+    return next !== (field.value ?? '')
+  })
+  const restartOwed = message.includes('Restart Meido')
 
   return (
     <div className="space-y-4">
@@ -121,9 +133,6 @@ export function SettingsEnvironmentPanel({
         </Button>
         <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => void load()}>
           Reload from .env
-        </Button>
-        <Button type="button" size="sm" disabled={busy || !data} onClick={() => void save()}>
-          Save .env
         </Button>
       </div>
       {data?.probes ? (
@@ -135,7 +144,19 @@ export function SettingsEnvironmentPanel({
       {GROUPS.map((group) => (
         <section key={group.title} className="space-y-2">
           <h3 className="text-sm font-medium">{group.title}</h3>
+          {group.title === 'System LLM' ? (
+            <LlmModelFields
+              api={api}
+              provider={drafts.SYSTEM_LLM_PROVIDER ?? ''}
+              model={drafts.SYSTEM_LLM_MODEL ?? ''}
+              onProvider={(value) => setDrafts((prev) => ({ ...prev, SYSTEM_LLM_PROVIDER: value }))}
+              onModel={(value) => setDrafts((prev) => ({ ...prev, SYSTEM_LLM_MODEL: value }))}
+              onListed={setSystemModels}
+              disabled={busy}
+            />
+          ) : null}
           {group.keys.map((key) => {
+            if (group.title === 'System LLM') return null
             const field = byKey.get(key)
             if (!field) return null
             return (
@@ -156,6 +177,11 @@ export function SettingsEnvironmentPanel({
           })}
         </section>
       ))}
+      <div>
+        <Button type="button" size="sm" disabled={busy || !data || !envDirty} onClick={() => void save()}>
+          {busy ? 'Saving…' : 'Save .env'}
+        </Button>
+      </div>
       <div className="space-y-2">
         <p className="text-xs">
           MemPalace: {data?.probes.mempalace_installed ? 'installed' : 'not installed'}
@@ -179,8 +205,16 @@ export function SettingsEnvironmentPanel({
           </Button>
         </div>
       </div>
-      {message ? <p className="text-xs text-muted-foreground">{message}</p> : null}
-      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      {message ? (
+        <p className={restartOwed ? 'mc-notice-owed' : 'mc-notice-settled'} role="status">
+          {message}
+        </p>
+      ) : null}
+      {error ? (
+        <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
+          {error}
+        </p>
+      ) : null}
     </div>
   )
 }

@@ -32,12 +32,11 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CircleXIcon,
-  CopyIcon,
   FileIcon,
   PaperclipIcon,
-  SendHorizontalIcon,
   SquareIcon,
 } from 'lucide-react'
+import { IconCopy, IconSendBow } from './icons'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -219,7 +218,7 @@ function CodeHeader({ language, code }: { language?: string; code?: string }) {
     <div className="aui-code-header-root">
       <span className="aui-code-header-language">{language}</span>
       <TooltipIconButton tooltip={tooltip} onClick={onCopy} type="button">
-        {!copied ? <CopyIcon /> : <CheckIcon />}
+        {!copied ? <IconCopy /> : <CheckIcon className="size-4 shrink-0" />}
       </TooltipIconButton>
     </div>
   )
@@ -697,7 +696,7 @@ const ComposerInput = forwardRef<
   React.ComponentProps<typeof ComposerPrimitive.Input>
 >((props, ref) => {
   const {
-    strings: { composer: { input: { placeholder = 'Write a message...' } = {} } = {} } = {},
+    strings: { composer: { input: { placeholder = 'Give your instructions, or press / to summon…' } = {} } = {} } = {},
   } = useThreadConfig()
   return <ComposerInputStyled placeholder={placeholder} {...props} ref={ref} />
 })
@@ -756,7 +755,7 @@ const ComposerSend = forwardRef<HTMLButtonElement, Partial<TooltipIconButtonProp
   return (
     <ComposerPrimitive.Send asChild>
       <ComposerSendButton tooltip={tooltip} {...props} ref={ref}>
-        {props.children ?? <SendHorizontalIcon />}
+        {props.children ?? <IconSendBow />}
       </ComposerSendButton>
     </ComposerPrimitive.Send>
   )

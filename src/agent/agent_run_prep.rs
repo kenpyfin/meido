@@ -20,7 +20,7 @@ use super::{
     history_to_claude_messages, latest_user_text, latest_user_text_from_message,
     load_messages_from_db, sops_prompt_sections, split_trailing_user_request,
     trim_to_recent_balanced, trim_to_token_budget, user_request_is_conversational,
-    workspace_data_path_display, AgentRequestContext, AppState,
+    workspace_data_path_display, AgentRequestContext, AppState, EMPTY_USER_REQUEST,
 };
 
 /// Session block shared by the classic loop and `prepare_agent_run`.
@@ -209,23 +209,27 @@ pub async fn prepare_agent_run(
         &origin_vault,
     );
     let locate_roots_section = crate::tools::locate::format_registry_for_prompt(&locate_registry);
-    let system_prompt = build_system_prompt(
-        &state.config.bot_username,
-        &principles_content,
-        &agents_md_path,
-        chat_id,
-        persona_id,
-        &skills_catalog,
-        &workspace_path,
-        &skills_dir_for_prompt,
-        vault_paths_section.as_deref(),
-        &state.config.timezone,
-        &workspace_data_root_display,
-        &config_env_summary,
-        identity_tier1_system.as_str(),
-        &sops_caps_line,
-        &sops_body,
-        &locate_roots_section,
+    let system_prompt = crate::self_repo::rewrite_self_repo_ban_for_external_paths(
+        build_system_prompt(
+            &state.config.bot_username,
+            &principles_content,
+            &agents_md_path,
+            chat_id,
+            persona_id,
+            &skills_catalog,
+            &workspace_path,
+            &skills_dir_for_prompt,
+            vault_paths_section.as_deref(),
+            &state.config.timezone,
+            &workspace_data_root_display,
+            &config_env_summary,
+            identity_tier1_system.as_str(),
+            &sops_caps_line,
+            &sops_body,
+            &locate_roots_section,
+        ),
+        Path::new(&workspace_data_root_display),
+        &locate_auth.external_roots,
     );
 
     let mut messages = if context.is_background_job {
@@ -274,7 +278,7 @@ pub async fn prepare_agent_run(
 
     let (history_messages, current_request) = split_trailing_user_request(messages);
     let Some(current_request) = current_request else {
-        return Err(anyhow::anyhow!("I didn't receive any message to process."));
+        return Err(anyhow::anyhow!(EMPTY_USER_REQUEST));
     };
 
     let bulletin_focus_for_prompt = call_blocking(state.db.clone(), {

@@ -16,8 +16,7 @@ use crate::claude::{ContentBlock, Message, MessageContent, ResponseContentBlock,
 use crate::db::call_blocking;
 use crate::error::FinallyAValueBotError;
 use crate::job_heartbeat::{spawn_shared_heartbeat, HeartbeatSignal, JobType};
-use crate::llm::{create_openai_compatible_provider_with_timeout, LlmProvider, LlmSendOptions};
-use crate::local_delegate::ModelTier;
+use crate::llm::LlmSendOptions;
 use crate::tools::ToolAuthContext;
 
 const MAX_OPTIMIZE_HISTORY_BYTES: usize = 80 * 1024;
@@ -160,54 +159,50 @@ pub fn build_optimize_user_message(
     body
 }
 
-fn local_tier_config_ready(mm: &crate::local_delegate::LocalDelegateConfig) -> bool {
-    mm.local_routable() || mm.tier1_configured() || mm.tier2_configured()
+async fn require_system_llm(state: &AppState) -> Result<crate::llm::DirectLlmTarget, String> {
+    crate::topics::system_llm_target(
+        crate::topics::load_job_choice(state, crate::topics::SystemLlmJob::Learn).await,
+    )
+    .ok_or_else(|| {
+        "System LLM is not configured. Set a provider and model under Settings → System LLM."
+            .to_string()
+    })
 }
 
-fn resolve_optimizer_local_endpoint(
-    mm: &crate::local_delegate::LocalDelegateConfig,
-) -> (String, String) {
-    if !mm.local_base_url.trim().is_empty() {
-        (mm.local_base_url.clone(), mm.local_model.clone())
-    } else if !mm.tier1_base_url.trim().is_empty() {
-        (mm.tier1_base_url.clone(), mm.tier1_model.clone())
-    } else {
-        (mm.tier2_base_url.clone(), mm.tier2_model.clone())
-    }
-}
-
-async fn send_local_tier_message(
+async fn send_system_llm_message(
     state: &AppState,
+    target: &crate::llm::DirectLlmTarget,
     system: &str,
     messages: Vec<Message>,
     tools: Option<Vec<ToolDefinition>>,
 ) -> Result<crate::claude::MessagesResponse, FinallyAValueBotError> {
-    let mm = state.llm.local_delegate_config();
-    let (base_url, model) = resolve_optimizer_local_endpoint(&mm);
-    let request_timeout = std::time::Duration::from_secs(OPTIMIZE_LLM_TIMEOUT_SECS);
-    let provider: Arc<dyn LlmProvider> = Arc::from(create_openai_compatible_provider_with_timeout(
-        &state.config,
-        &base_url,
-        &model,
-        request_timeout,
-    ));
     let has_tools = tools.as_ref().is_some_and(|t| !t.is_empty());
     let options = LlmSendOptions {
         tool_choice: if has_tools {
-            crate::local_delegate::tool_choice_for_tier(ModelTier::LocalReadOnly, true)
+            Some("auto".to_string())
         } else {
             None
         },
     };
-    provider
-        .send_message_with_options(system, messages, tools, options)
-        .await
+    crate::topics::send_direct_llm(
+        state,
+        &target.provider_id,
+        &target.model,
+        target.base_url.as_deref(),
+        system,
+        messages,
+        tools,
+        options,
+    )
+    .await
+    .map_err(FinallyAValueBotError::LlmApi)
 }
 
 async fn run_restricted_memory_loop(
     state: &AppState,
     chat_id: i64,
     persona_id: i64,
+    target: &crate::llm::DirectLlmTarget,
     system_prompt: &str,
     user_message: String,
     cancel: &AtomicBool,
@@ -260,8 +255,9 @@ async fn run_restricted_memory_loop(
 
         let response = tokio::time::timeout(
             std::time::Duration::from_secs(OPTIMIZE_LLM_TIMEOUT_SECS),
-            send_local_tier_message(
+            send_system_llm_message(
                 state,
+                target,
                 system_prompt,
                 messages.clone(),
                 Some(tool_defs.clone()),
@@ -397,23 +393,17 @@ pub async fn run_optimizer_from_history(
     cancel: &AtomicBool,
     hb_tx: Option<&UnboundedSender<HeartbeatSignal>>,
 ) -> Result<RunOptimizeOutcome, String> {
-    let mm = state.llm.local_delegate_config();
-    if !local_tier_config_ready(&mm) {
-        return Err(
-            "Local model base URL and model must be configured in Settings → Multi-model.".into(),
-        );
-    }
+    let target = require_system_llm(state).await?;
 
     let user_message = build_optimize_user_message(history_content, operator_notes, |s| {
         state.env_redactor.redact(s)
     });
-    let (local_base_url, local_model) = resolve_optimizer_local_endpoint(&mm);
     let system = build_optimize_system_prompt(
         chat_id,
         persona_id,
         history_filename,
-        &local_base_url,
-        &local_model,
+        target.base_url.as_deref().unwrap_or(&target.provider_id),
+        &target.model,
     );
 
     if let Some(tx) = hb_tx {
@@ -426,6 +416,7 @@ pub async fn run_optimizer_from_history(
         state,
         chat_id,
         persona_id,
+        &target,
         &system,
         user_message,
         cancel,
@@ -443,9 +434,15 @@ pub async fn try_enqueue_run_optimize(
     history_content: String,
     operator_notes: Option<String>,
 ) -> RunOptimizeEnqueueOutcome {
-    let mm = state.llm.local_delegate_config();
-    if !local_tier_config_ready(&mm) {
-        return RunOptimizeEnqueueOutcome::DbCreateFailed("Local model is not configured.".into());
+    if crate::topics::system_llm_target(
+        crate::topics::load_job_choice(&state, crate::topics::SystemLlmJob::Learn).await,
+    )
+    .is_none()
+    {
+        return RunOptimizeEnqueueOutcome::DbCreateFailed(
+            "System LLM is not configured. Set a provider and model under Settings → System LLM."
+                .into(),
+        );
     }
 
     let now = chrono::Utc::now().to_rfc3339();

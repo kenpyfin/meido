@@ -3,6 +3,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 import { Tooltip } from '@/components/ui/tooltip'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { LedgerSection, ServiceNote } from './ledger-chrome'
 import { SettingsPanelSkeleton } from './skeleton'
 import { useConfirmDialog } from './confirm-dialog'
 import type { BotInstanceRow, ChannelIntegrationSettings } from '../types'
@@ -56,6 +57,24 @@ function draftFromRow(row: BotInstanceRow): InstanceDraft {
     wecomAibotId: row.wecom_aibot_id ?? '',
     wecomMode: wecomModeFromRow(row),
   }
+}
+
+function instanceRestartDirty(row: BotInstanceRow, draft: InstanceDraft): boolean {
+  const saved = draftFromRow(row)
+  if (draft.token.trim() || draft.whatsappVerifyToken.trim()) return true
+  if (draft.wecomCallbackToken.trim() || draft.wecomEncodingAesKey.trim()) return true
+  if (row.platform === 'whatsapp') {
+    if (draft.whatsappPhoneNumberId.trim() !== saved.whatsappPhoneNumberId.trim()) return true
+    if (draft.whatsappWebhookPort.trim() !== saved.whatsappWebhookPort.trim()) return true
+  }
+  if (row.platform === 'wecom') {
+    if (draft.wecomMode !== saved.wecomMode) return true
+    if (draft.wecomAibotId.trim() !== saved.wecomAibotId.trim()) return true
+    if (draft.wecomCorpId.trim() !== saved.wecomCorpId.trim()) return true
+    if (draft.wecomAgentId.trim() !== saved.wecomAgentId.trim()) return true
+    if (draft.wecomWebhookPort.trim() !== saved.wecomWebhookPort.trim()) return true
+  }
+  return false
 }
 
 function wecomModeFromRow(row: BotInstanceRow): 'aibot' | 'callback' {
@@ -261,10 +280,7 @@ export function SettingsIntegrationsPanel({
   const [newToken, setNewToken] = useState('')
   const [newWecom, setNewWecom] = useState<WecomExtraValues>(() => emptyWecomExtra())
 
-  const panelStyle =
-    appearance === 'dark'
-      ? { borderColor: 'var(--mc-border-soft)', background: 'var(--mc-bg-panel)' }
-      : { borderColor: 'var(--gray-6)', background: 'var(--gray-2)' }
+  void appearance
 
   const applyCfg = useCallback((data: ChannelIntegrationSettings) => {
     const rows = Array.isArray(data.instances) ? data.instances : []
@@ -490,43 +506,48 @@ export function SettingsIntegrationsPanel({
     return <SettingsPanelSkeleton />
   }
 
+  const sharedDirty = controlChatIds !== (cfg.control_chat_ids ?? '')
+  const addDirty =
+    newToken.trim().length > 0 ||
+    newWecom.aibotId.trim().length > 0 ||
+    newWecom.corpId.trim().length > 0 ||
+    newWecom.callbackToken.trim().length > 0 ||
+    newWecom.encodingAesKey.trim().length > 0
+
   return (
     <div className="space-y-3">
       {notice ? (
-        <div role="status" className="rounded-lg border border-green-500/30 bg-green-500/10 p-3 text-sm text-green-900 dark:text-green-100">{notice}</div>
+        <div
+          role="status"
+          className={/Restart Meido to/i.test(notice) ? 'mc-notice-owed' : 'mc-notice-settled'}
+        >
+          {notice}
+        </div>
       ) : null}
 
-      <div role="status" className="rounded-lg border border-border bg-muted/50 p-3 text-sm">
-          Integrations are bot credentials and platform access controls. Persona routing for a
-          contact lives on the Channels tab.
-        </div>
+      <ServiceNote summary="Save bot tokens and access lists here. Persona routing for a contact is on Channels.">
+        Allowlists apply on the next message. A new token, a new bot, or a connection change waits for Restart Meido.
+      </ServiceNote>
 
       {instances.length === 0 ? (
-        <div className="rounded-md border p-3" style={panelStyle}>
-          <span>
-            No bot instances configured yet.
-          </span>
-        </div>
+        <LedgerSection title="Bot instances" scope="restart">
+          <span>No bot instances configured yet. Add one below.</span>
+        </LedgerSection>
       ) : null}
 
       {instances.map((row) => {
         const draft = drafts[row.id] ?? draftFromRow(row)
         const tokenLabel = row.token_set ? `Current token: ${row.token_redacted}` : 'No token set'
         return (
-          <div key={row.id} className="rounded-md border p-3" style={panelStyle}>
+          <LedgerSection
+            key={row.id}
+            title={`${platformLabel(row.platform)} #${row.id}${row.is_primary ? ' · primary' : ''}`}
+            scope="restart"
+            dirty={instanceRestartDirty(row, draft)}
+          >
             <div className="flex justify-between gap-2 flex-wrap items-start mb-2">
-              <div>
-                <span className="font-semibold block">
-                  {platformLabel(row.platform)} #{row.id}
-                  {row.is_primary ? ' · primary' : ''}
-                </span>
-                <span>
-                  {integrationDescription(row)}
-                </span>
-              </div>
-              <span>
-                {tokenLabel}
-              </span>
+              <span>{integrationDescription(row)}</span>
+              <span>{tokenLabel}</span>
             </div>
             <div className="flex flex-col gap-2">
               <Input
@@ -662,18 +683,14 @@ export function SettingsIntegrationsPanel({
                 Delete
               </Button>
             </div>
-          </div>
+          </LedgerSection>
         )
       })}
 
-      <div className="rounded-md border p-3" style={panelStyle}>
-        <span className="font-semibold mb-1 block">
-          Add Bot Instance
-        </span>
-        <span className="mb-2 block">
-          Telegram and Discord can have multiple bot instances. WhatsApp and WeCom support one
-          app/number on this Meido.
-        </span>
+      <LedgerSection title="Add bot instance" scope="restart" dirty={addDirty}>
+        <ServiceNote summary="Add a bot. Restart Meido before it can answer.">
+          Telegram and Discord can have more than one bot. WhatsApp and WeCom support one app or number on this Meido.
+        </ServiceNote>
         <div className="flex flex-col gap-2">
           <div className="flex gap-2 flex-wrap items-end">
             <div>
@@ -766,12 +783,12 @@ export function SettingsIntegrationsPanel({
             </>
           ) : null}
         </div>
-      </div>
+      </LedgerSection>
 
-      <div className="rounded-md border p-3" style={panelStyle}>
+      <LedgerSection title="Shared access" scope="restart" dirty={sharedDirty}>
         <div className="flex items-center gap-1 mb-1">
           <span className="font-semibold">
-            Shared Access
+            Control chats
           </span>
           <Tooltip
             maxWidth="320px"
@@ -827,7 +844,7 @@ export function SettingsIntegrationsPanel({
             {restartBusy ? 'Restarting…' : 'Restart Meido'}
           </Button>
         </div>
-      </div>
+      </LedgerSection>
       {confirmDialog}
     </div>
   )

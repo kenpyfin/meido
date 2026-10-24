@@ -33,7 +33,7 @@ use crate::db::{
 };
 use crate::hook_actions::{apply_hook_memory_effects, apply_persona_memory_hygiene};
 use crate::hook_runtime::{run_hooks_for_event_async, HookEventName, HookRunInput};
-use crate::llm::{LlmProvider, LlmSendOptions};
+use crate::llm::LlmSendOptions;
 use crate::memory::MemoryManager;
 use crate::memory::{
     enrich_persona_memory_for_prompt, render_identity_and_tier1_for_system, render_memory_for_llm,
@@ -221,6 +221,9 @@ pub(super) fn build_current_request_from_message(msg: Message) -> Message {
     }
 }
 
+/// Successful reply when the prepared history has no trailing user message.
+pub const EMPTY_USER_REQUEST: &str = "I didn't receive any message to process.";
+
 /// Split the trailing user turn (the triggering ask) from prior conversation history.
 pub(super) fn split_trailing_user_request(
     messages: Vec<Message>,
@@ -301,7 +304,12 @@ pub struct AppState {
 
 impl AppState {
     pub fn external_roots_for_persona(&self, persona_id: i64) -> Vec<std::path::PathBuf> {
-        self.persona_external_paths.paths_for(persona_id)
+        let mut paths = self.persona_external_paths.paths_for(persona_id);
+        crate::self_repo::append_auto_approved_app_directory(
+            &self.config.workspace_root_absolute(),
+            &mut paths,
+        );
+        paths
     }
 
     pub fn primary_telegram_bot(&self) -> Option<&Bot> {
@@ -337,6 +345,8 @@ pub struct AgentRequestContext<'a> {
     pub tool_iteration_cap: Option<usize>,
     /// When true, skip recall ingestion. Used by guest and group turns.
     pub skip_recall: bool,
+    /// Stored user row to rewrite before history is loaded. `None` skips the rewrite.
+    pub inbound_user_message_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -388,6 +398,11 @@ pub enum AgentEvent {
         matched_hook_ids: Vec<i64>,
         blocked_reason: Option<String>,
         additional_context_count: usize,
+    },
+    UserMessageRewritten {
+        message_id: String,
+        original: String,
+        rewritten: String,
     },
     FinalResponse {
         text: String,
@@ -454,6 +469,14 @@ pub async fn process_with_agent_with_events(
         })
         .await;
     }
+    crate::user_message_rewrite::apply_before_run(
+        state,
+        &context,
+        override_prompt,
+        event_tx,
+        cancel.clone(),
+    )
+    .await;
     let global_engine = state.runtime_toggles.agent_engine();
     let run_engine = call_blocking(state.db.clone(), move |db| {
         Ok(
@@ -503,7 +526,7 @@ pub(crate) async fn process_classic_agent_with_events(
 ) -> anyhow::Result<AgentProcessResult> {
     let chat_id = context.chat_id;
     let persona_id = context.persona_id;
-    let configured_tool_iterations = state.config.max_tool_iterations;
+    let configured_tool_iterations = state.runtime_toggles.max_tool_iterations();
     let max_tool_iterations = context
         .tool_iteration_cap
         .unwrap_or(configured_tool_iterations)
@@ -531,12 +554,14 @@ pub(crate) async fn process_classic_agent_with_events(
         .llm
         .resolve_strategy_selection(persona_row.as_ref())
         .map_err(|e| anyhow::anyhow!("persona strategy LLM: {e}"))?;
-    if strategy_llm.from_persona {
-        info!(
-            "Classic strategy LLM from persona override: chat_id={}, persona_id={}, provider={}, model={}",
-            chat_id, persona_id, strategy_llm.provider_id, strategy_llm.model
-        );
-    }
+    info!(
+        "Classic strategy LLM: chat_id={}, persona_id={}, provider={}, model={}",
+        chat_id, persona_id, strategy_llm.provider_id, strategy_llm.model
+    );
+    let persona_local = persona_row
+        .as_ref()
+        .map(crate::local_delegate::from_persona)
+        .unwrap_or_default();
 
     // Build system prompt: principles from AGENTS.md; identity + Tier 1 in system; Tier 2+ in [persona_context].
     let principles_content = state.memory.read_groups_root_memory().unwrap_or_default();
@@ -807,23 +832,27 @@ pub(crate) async fn process_classic_agent_with_events(
         &origin_vault,
     );
     let locate_roots_section = crate::tools::locate::format_registry_for_prompt(&locate_registry);
-    let system_prompt = build_system_prompt(
-        &state.config.bot_username,
-        &principles_content,
-        &agents_md_path,
-        chat_id,
-        persona_id,
-        &skills_catalog,
-        &workspace_path,
-        &skills_dir_for_prompt,
-        vault_paths_section.as_deref(),
-        &state.config.timezone,
-        &workspace_data_root_display,
-        &config_env_summary,
-        identity_tier1_system.as_str(),
-        &sops_caps_line,
-        &sops_body,
-        &locate_roots_section,
+    let system_prompt = crate::self_repo::rewrite_self_repo_ban_for_external_paths(
+        build_system_prompt(
+            &state.config.bot_username,
+            &principles_content,
+            &agents_md_path,
+            chat_id,
+            persona_id,
+            &skills_catalog,
+            &workspace_path,
+            &skills_dir_for_prompt,
+            vault_paths_section.as_deref(),
+            &state.config.timezone,
+            &workspace_data_root_display,
+            &config_env_summary,
+            identity_tier1_system.as_str(),
+            &sops_caps_line,
+            &sops_body,
+            &locate_roots_section,
+        ),
+        std::path::Path::new(&workspace_data_root_display),
+        &locate_auth.external_roots,
     );
 
     // Background-job runs are detached and do not consume foreground chat context while running.
@@ -897,7 +926,7 @@ pub(crate) async fn process_classic_agent_with_events(
     let (history_messages, current_request) = split_trailing_user_request(messages);
     let Some(current_request) = current_request else {
         return Ok(AgentProcessResult {
-            response: "I didn't receive any message to process.".into(),
+            response: EMPTY_USER_REQUEST.into(),
         });
     };
 
@@ -994,19 +1023,16 @@ pub(crate) async fn process_classic_agent_with_events(
         persona_id,
         global_engine,
     );
-    let mm_cfg_for_routing = state.llm.local_delegate_config();
+    let mm_cfg_for_routing = persona_local.clone();
+    if agent_engine == crate::runtime_toggles::AgentEngine::ClassicCostRouting
+        && !crate::local_delegate::cost_routing_active(agent_engine, &mm_cfg_for_routing)
+    {
+        return Err(anyhow::anyhow!(
+            "Cost routing needs this persona's local URL, model, and a passed tool-call check. Set them on the Persona page."
+        ));
+    }
     let cost_routing =
         crate::local_delegate::cost_routing_active(agent_engine, &mm_cfg_for_routing);
-    if agent_engine == crate::runtime_toggles::AgentEngine::ClassicCostRouting
-        && !mm_cfg_for_routing.local_routable()
-    {
-        info!(
-            "cost_routing_requested_but_local_unverified: routing_enabled={}, local_configured={}, tools_ok={}",
-            mm_cfg_for_routing.routing_enabled,
-            mm_cfg_for_routing.local_configured(),
-            mm_cfg_for_routing.local_tools_ok
-        );
-    }
     info!(
         "Cost routing: active={}, engine={}, intent={:?}, local_routable={}, local_tools_ok={}",
         cost_routing,
@@ -1081,13 +1107,17 @@ pub(crate) async fn process_classic_agent_with_events(
     const DISCOVERY_STREAK_STALL_THRESHOLD: usize = 20;
 
     let tool_names_list: Vec<String> = tool_defs.iter().map(|d| d.name.clone()).collect();
-    let local_delegate_run_summary = state
-        .llm
-        .local_delegate_run_summary_with_strategy(cost_routing, Some(&strategy_llm));
+    let local_delegate_run_summary = state.llm.local_delegate_run_summary_with_strategy(
+        cost_routing,
+        Some(&strategy_llm),
+        Some(&mm_cfg_for_routing),
+    );
     let iter0_tier = crate::local_delegate::RouteTarget::Strategy;
-    let iter0_tier_snap = state
-        .llm
-        .tier_endpoint_snapshot_with_strategy(iter0_tier, Some(&strategy_llm));
+    let iter0_tier_snap = state.llm.tier_endpoint_snapshot_with_strategy(
+        iter0_tier,
+        Some(&strategy_llm),
+        Some(&mm_cfg_for_routing),
+    );
     let routing_v1 = local_delegate_run_summary.routing_v1_json(&iter0_tier_snap);
     let initial_llm_snapshot_json = format_initial_llm_snapshot_json(
         &system_prompt,
@@ -1282,7 +1312,7 @@ pub(crate) async fn process_classic_agent_with_events(
 
         let model_tier = crate::local_delegate::resolve_inverse_route(
             agent_engine,
-            &state.llm.local_delegate_config(),
+            &mm_cfg_for_routing,
             &crate::local_delegate::InverseRouteContext {
                 iteration,
                 last_iteration_tools: &last_iteration_tools,
@@ -1290,9 +1320,11 @@ pub(crate) async fn process_classic_agent_with_events(
                 local_error_streak: local_tier_error_streak,
             },
         );
-        let tier_snap = state
-            .llm
-            .tier_endpoint_snapshot_with_strategy(model_tier, Some(&strategy_llm));
+        let tier_snap = state.llm.tier_endpoint_snapshot_with_strategy(
+            model_tier,
+            Some(&strategy_llm),
+            Some(&mm_cfg_for_routing),
+        );
         let (tier_label, tier_provider, tier_model, tier_endpoint) =
             IterationRecord::tier_fields_from_snapshot(&tier_snap);
 
@@ -1331,6 +1363,7 @@ pub(crate) async fn process_classic_agent_with_events(
                     state.llm.send_message_for_tier_with_strategy(
                         model_tier,
                         &strategy_llm,
+                        &mm_cfg_for_routing,
                         &effective_system,
                         llm_messages,
                         tool_defs,
@@ -1516,6 +1549,7 @@ pub(crate) async fn process_classic_agent_with_events(
                     state.llm.send_message_for_tier_with_strategy(
                         crate::local_delegate::ModelTier::Strategy,
                         &strategy_llm,
+                        &mm_cfg_for_routing,
                         &system_prompt,
                         llm_messages,
                         fallback_tools,
@@ -1534,9 +1568,11 @@ pub(crate) async fn process_classic_agent_with_events(
                         "tier_tool_fallback incremented local_error_streak={}",
                         local_tier_error_streak
                     );
-                    let fallback_snap = state
-                        .llm
-                        .tier_endpoint_snapshot_with_strategy(model_tier, Some(&strategy_llm));
+                    let fallback_snap = state.llm.tier_endpoint_snapshot_with_strategy(
+                        model_tier,
+                        Some(&strategy_llm),
+                        Some(&mm_cfg_for_routing),
+                    );
                     (tier_label, tier_provider, tier_model, tier_endpoint) =
                         IterationRecord::tier_fields_from_snapshot(&fallback_snap);
                     assistant_text = response
@@ -2480,16 +2516,21 @@ Use the strategy model for mutations or delegate_local_subjob for discovery."
                     );
                 }
                 let pte_start = std::time::Instant::now();
+                let system_llm_target = crate::topics::system_llm_target(
+                    crate::topics::load_job_choice(state, crate::topics::SystemLlmJob::Checks)
+                        .await,
+                );
                 match await_with_cancel(
                     evaluate_completion(
                         state.runtime_toggles.post_tool_evaluator_enabled(),
                         &state.config,
-                        Some(&state.llm.local_delegate_config()),
+                        system_llm_target.as_ref(),
                         state.env_redactor.as_ref(),
                         &principles_content,
                         &pte_memory_prose,
                         &messages,
                         iteration,
+                        max_tool_iterations,
                     ),
                     cancel.as_ref(),
                 )
@@ -2525,6 +2566,7 @@ Use the strategy model for mutations or delegate_local_subjob for discovery."
                                         state.llm.send_message_for_tier_with_strategy(
                                             crate::local_delegate::ModelTier::Strategy,
                                             &strategy_llm,
+                                            &mm_cfg_for_routing,
                                             &system_prompt,
                                             messages.clone(),
                                             None,
@@ -2646,6 +2688,7 @@ Use the strategy model for mutations or delegate_local_subjob for discovery."
                                 let pte_snap = state.llm.tier_endpoint_snapshot_with_strategy(
                                     crate::local_delegate::ModelTier::Strategy,
                                     Some(&strategy_llm),
+                                    Some(&mm_cfg_for_routing),
                                 );
                                 if let Some(last) = history_iterations.last_mut() {
                                     last.hook_events.push(format!(
@@ -3152,10 +3195,11 @@ async fn finish_turn_with_quality_gate(
     )
     .is_none()
     {
-        let provider_label = crate::llm::resolve_evaluator_provider_label(
-            &state.config,
-            Some(&state.llm.local_delegate_config()),
+        let system_llm_target = crate::topics::system_llm_target(
+            crate::topics::load_job_choice(state, crate::topics::SystemLlmJob::Checks).await,
         );
+        let provider_label =
+            crate::llm::resolve_evaluator_provider_label(system_llm_target.as_ref());
         push_pdqe_step(pdqe_steps, "quality_eval_started", "", &provider_label);
         crate::response_quality_evaluator::append_quality_timeline(
             state.db.clone(),
@@ -3174,7 +3218,7 @@ async fn finish_turn_with_quality_gate(
             crate::response_quality_evaluator::evaluate_delivery_quality(
                 state.runtime_toggles.response_quality_evaluator_enabled(),
                 &state.config,
-                Some(&state.llm.local_delegate_config()),
+                system_llm_target.as_ref(),
                 state.env_redactor.as_ref(),
                 &pdqe_ctx,
             ),
@@ -4789,6 +4833,16 @@ Be concise and helpful. When executing commands or tools, show the relevant resu
             section.push_str(&crate::self_repo::self_repo_ban_prompt_section(
                 &std::path::PathBuf::from(workspace_data_root_display),
             ));
+            let workspace_for_approval = std::path::PathBuf::from(workspace_data_root_display);
+            if let Some(app) =
+                crate::self_repo::auto_approved_app_directory(&workspace_for_approval)
+            {
+                section.push_str(&format!(
+                    "\n- **Workspace outside the app:** `{workspace}` is approved for reads and writes by every persona. The app directory `{app}` is approved for every persona as well.\n",
+                    workspace = workspace_for_approval.display(),
+                    app = app.display(),
+                ));
+            }
             section
         },
     );
@@ -5370,8 +5424,16 @@ async fn run_persona_focus_sync_after_delivery(
     } else {
         FOCUS_SYNC_MAX_ITERATIONS
     };
-    let system_llm =
-        crate::topics::system_llm_direct(crate::topics::load_system_llm_choice(state).await);
+    let system_llm = crate::topics::system_llm_direct(
+        crate::topics::load_job_choice(state, crate::topics::SystemLlmJob::Bulletin).await,
+    );
+    if system_llm.is_none() {
+        warn!(
+            chat_id,
+            persona_id, "focus_sync_skipped reason=system_llm_missing"
+        );
+        return None;
+    }
     let mut updated_bulletin = false;
     let mut tools_called: Vec<String> = Vec::new();
 
@@ -5381,30 +5443,19 @@ async fn run_persona_focus_sync_after_delivery(
         } else {
             LlmSendOptions::default()
         };
-        let response = match &system_llm {
-            Some((provider_id, model, base)) => {
-                crate::topics::send_direct_llm(
-                    state,
-                    provider_id,
-                    model,
-                    base.as_deref(),
-                    &sync_system,
-                    sync_messages.clone(),
-                    Some(tool_defs.clone()),
-                    options,
-                )
-                .await
-            }
-            None => state
-                .llm
-                .send_message_with_options(
-                    &sync_system,
-                    sync_messages.clone(),
-                    Some(tool_defs.clone()),
-                    options,
-                )
-                .await
-                .map_err(|err| err.to_string()),
+        let response = {
+            let (provider_id, model, base) = system_llm.as_ref().expect("system LLM checked above");
+            crate::topics::send_direct_llm(
+                state,
+                provider_id,
+                model,
+                base.as_deref(),
+                &sync_system,
+                sync_messages.clone(),
+                Some(tool_defs.clone()),
+                options,
+            )
+            .await
         };
         let response = match response {
             Ok(r) => r,

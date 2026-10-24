@@ -10,6 +10,7 @@ use crate::db::{call_blocking, Database, HookDefinitionRecord};
 use crate::error::FinallyAValueBotError;
 use crate::hook_executor::{
     execute_command_hook, execute_prompt_hook, HookCommandPayload, HookOutput, HookPromptPayload,
+    PagePromptModel,
 };
 use crate::safety_redaction::EnvSecretRedactor;
 
@@ -190,6 +191,32 @@ pub fn run_hooks_for_event(
     Ok(HookRunResult::default())
 }
 
+async fn prompt_hook_page_model(db: Arc<Database>, config: &Config) -> Option<PagePromptModel> {
+    let config_model = config.hook_prompt_model.clone();
+    let route = call_blocking(db, move |db| {
+        crate::topics::read_prompt_hook_route(db, &config_model)
+    })
+    .await
+    .ok()?;
+    match route {
+        crate::topics::PromptHookRoute::Direct {
+            provider_id,
+            model,
+            base_url,
+        } => Some(PagePromptModel {
+            provider_id: Some(provider_id),
+            model,
+            base_url,
+        }),
+        crate::topics::PromptHookRoute::ModelOnly(model) => Some(PagePromptModel {
+            provider_id: None,
+            model,
+            base_url: None,
+        }),
+        crate::topics::PromptHookRoute::Missing => None,
+    }
+}
+
 pub async fn run_hooks_for_event_async(
     db: Arc<Database>,
     config: &Config,
@@ -296,8 +323,15 @@ pub async fn run_hooks_for_event_async(
                         hook.name
                     ))
                 })?;
-                let output =
-                    execute_prompt_hook(config, env_redactor, &payload, &hook_input_json).await?;
+                let page_model = prompt_hook_page_model(db.clone(), config).await;
+                let output = execute_prompt_hook(
+                    config,
+                    env_redactor,
+                    &payload,
+                    &hook_input_json,
+                    page_model.as_ref(),
+                )
+                .await?;
                 apply_output(&mut out, output, &hook.name);
                 if out.blocked_reason.is_some() {
                     break;

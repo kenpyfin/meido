@@ -23,6 +23,7 @@ use axum::http::{HeaderMap, StatusCode};
 pub(crate) fn routes() -> Router<WebState> {
     Router::new()
         .route("/api/schedules/runs", get(list_runs))
+        .route("/api/schedules/runs/read", post(mark_all_runs_read))
         .route("/api/schedules/runs/:id", get(get_run))
         .route("/api/schedules/runs/:id/attach", post(attach_run))
         .route("/api/schedules/:id/attach", post(attach_task))
@@ -95,6 +96,20 @@ async fn list_runs(
         })
         .collect();
     Ok(Json(json!({"ok": true, "runs": runs})))
+}
+
+async fn mark_all_runs_read(
+    headers: HeaderMap,
+    State(state): State<WebState>,
+    Query(query): Query<ChatQuery>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let chat_id = chat(&headers, &state, query.chat_id).await?;
+    let cleared = call_blocking(state.app_state.db.clone(), move |db| {
+        db.mark_all_scheduled_runs_read(chat_id)
+    })
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(json!({ "ok": true, "cleared": cleared })))
 }
 
 async fn get_run(
@@ -623,16 +638,24 @@ async fn coordinator_session(
     let title = crate::collab::coordinator::day_title(&tz);
     let db = state.app_state.db.clone();
     let found = call_blocking(db, move |db| {
-        let persona_id = db.ensure_named_persona(chat_id, crate::collab::COORDINATOR_NAME)?;
+        let Some(persona_id) = db.coordinator_persona_id(chat_id)? else {
+            return Ok(None);
+        };
         let session_id = db.ensure_coordinator_day_session(chat_id, persona_id, &title)?;
-        Ok((persona_id, session_id))
+        Ok(Some((persona_id, session_id)))
     })
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let Some((persona_id, session_id)) = found else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            "the board overview does not create a Coordinator persona".into(),
+        ));
+    };
     Ok(Json(json!({
         "ok": true,
-        "persona_id": found.0,
-        "session_id": found.1,
+        "persona_id": persona_id,
+        "session_id": session_id,
     })))
 }
 
@@ -644,7 +667,16 @@ async fn coordinator_digest(
     let digest = crate::collab::coordinator::build_digest(&state.app_state, chat_id)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    Ok(Json(json!({"ok": true, "digest": digest})))
+    let brief = crate::collab::coordinator::latest_written_brief(&state.app_state, chat_id)
+        .await
+        .ok()
+        .flatten();
+    Ok(Json(json!({
+        "ok": true,
+        "digest": digest,
+        "brief": brief.as_ref().map(|item| item.text.clone()),
+        "brief_at": brief.as_ref().map(|item| item.at.clone()),
+    })))
 }
 
 async fn list_proposals(
@@ -726,6 +758,9 @@ async fn decide_proposal(
                 after_position: None,
                 actor_kind: "operator",
                 actor_persona_id: None,
+                auto_advance: None,
+                completed: None,
+                deploy_prompt: None,
             };
             let _ = call_blocking(state.app_state.db.clone(), move |db| {
                 db.apply_board_patch(chat_id, item_id, &patch)

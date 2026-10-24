@@ -10,9 +10,16 @@ use crate::agent::AppState;
 use crate::db::call_blocking;
 use crate::db_collab::clip_chars;
 
-use super::{is_coordinator_name, BRIEF_PREFIX, COORDINATOR_NAME};
+use super::{is_coordinator_name, BRIEF_PREFIX};
 
 const DIGEST_CHARS: usize = 4_000;
+const BRIEF_CHARS: usize = 6_000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrittenBrief {
+    pub text: String,
+    pub at: String,
+}
 
 pub async fn build_digest(state: &AppState, chat_id: i64) -> Result<String, String> {
     let db = state.db.clone();
@@ -99,6 +106,67 @@ pub async fn build_digest(state: &AppState, chat_id: i64) -> Result<String, Stri
     Ok(clip_chars(&out, DIGEST_CHARS))
 }
 
+/// Latest stored daily brief, if a brief job has already run. The board overview does not read a persona chat.
+pub async fn latest_written_brief(
+    state: &AppState,
+    chat_id: i64,
+) -> Result<Option<WrittenBrief>, String> {
+    let db = state.db.clone();
+    let prefix = BRIEF_PREFIX.to_string();
+    call_blocking(db, move |db| {
+        let run = db.latest_brief_run(chat_id, &prefix)?.and_then(|row| {
+            let at = row.finished_at.clone();
+            let body = load_brief_body(&row);
+            brief_from_text(&body, &at)
+        });
+        Ok(run)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+fn load_brief_body(row: &crate::db_collab::ScheduledRunRow) -> String {
+    let body = crate::db_collab::load_run_body(row);
+    if body.trim().is_empty() {
+        row.error.clone().unwrap_or_default()
+    } else {
+        body
+    }
+}
+
+fn brief_from_text(text: &str, at: &str) -> Option<WrittenBrief> {
+    let text = strip_scheduled_header(text);
+    let text = clip_chars(text.trim(), BRIEF_CHARS);
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(WrittenBrief {
+            text,
+            at: at.to_string(),
+        })
+    }
+}
+
+fn strip_scheduled_header(text: &str) -> String {
+    let rest = text.trim_start();
+    let Some(rest) = rest.strip_prefix("[Scheduled task #") else {
+        return text.trim().to_string();
+    };
+    match rest.find('\n') {
+        Some(idx) => rest[idx + 1..].trim().to_string(),
+        None => String::new(),
+    }
+}
+
+#[cfg(test)]
+fn pick_brief(chat: Option<WrittenBrief>, run: Option<WrittenBrief>) -> Option<WrittenBrief> {
+    match (chat, run) {
+        (Some(chat), Some(run)) if chat.at > run.at => Some(chat),
+        (Some(chat), None) => Some(chat),
+        (_, run) => run,
+    }
+}
+
 pub fn prompt_is_brief(prompt: &str) -> bool {
     prompt.starts_with(BRIEF_PREFIX)
 }
@@ -127,7 +195,14 @@ pub async fn enable(
     let db = state.db.clone();
     let tz = timezone.to_string();
     call_blocking(db, move |db| {
-        let persona_id = db.ensure_named_persona(chat_id, COORDINATOR_NAME)?;
+        let persona_id = match db.coordinator_persona_id(chat_id)? {
+            Some(id) => id,
+            None => {
+                return Err(crate::error::FinallyAValueBotError::Config(
+                    "the board overview does not create a Coordinator persona".into(),
+                ));
+            }
+        };
         let task_id = if brief_enabled {
             let cron = format!("0 0 {hour} * * *");
             let next = next_cron(&cron, &tz)?;
@@ -145,6 +220,7 @@ pub async fn enable(
                     "cron",
                     &cron,
                     &next,
+                    "runs_only",
                 )?)
             }
         } else {
@@ -172,4 +248,40 @@ pub fn day_title(timezone: &str) -> String {
     let tz: Tz = timezone.parse().unwrap_or(chrono_tz::Tz::UTC);
     let day = Utc::now().with_timezone(&tz).format("%Y-%m-%d");
     format!("Coordinator {day}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn brief(text: &str, at: &str) -> WrittenBrief {
+        WrittenBrief {
+            text: text.into(),
+            at: at.into(),
+        }
+    }
+
+    #[test]
+    fn newer_chat_replaces_older_brief() {
+        let picked = pick_brief(
+            Some(brief("chat", "2026-10-20T18:00:00+00:00")),
+            Some(brief("run", "2026-10-20T15:00:00+00:00")),
+        );
+        assert_eq!(picked.unwrap().text, "chat");
+    }
+
+    #[test]
+    fn older_chat_keeps_the_brief() {
+        let picked = pick_brief(
+            Some(brief("chat", "2026-10-20T12:00:00+00:00")),
+            Some(brief("run", "2026-10-20T15:00:00+00:00")),
+        );
+        assert_eq!(picked.unwrap().text, "run");
+    }
+
+    #[test]
+    fn scheduled_header_is_not_the_overview() {
+        let text = strip_scheduled_header("[Scheduled task #3 run #9]\nWhat changed today.");
+        assert_eq!(text, "What changed today.");
+    }
 }

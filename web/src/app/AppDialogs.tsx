@@ -28,6 +28,23 @@ import { AgentHistoryDialog } from './dialogs/agent-history-dialog'
 import { TerminalDialog } from './dialogs/terminal-dialog'
 import { SetupWizardDialog } from '../components/setup-wizard-dialog'
 
+export function setupWizardShouldOpen(
+  status: { needs_initialization?: boolean; workspace_configured?: boolean } | null | undefined,
+  sessionDismissed: boolean,
+): boolean {
+  if (!status) return false
+  if (status.workspace_configured === false) return true
+  return status.needs_initialization === true && !sessionDismissed
+}
+
+function readSetupWizardDismissed(): boolean {
+  try {
+    return sessionStorage.getItem('meido_setup_wizard_dismissed') === '1'
+  } catch {
+    return true
+  }
+}
+
 export function AppDialogs(props: AppDialogsProps) {
   const {
     appearance,
@@ -36,6 +53,7 @@ export function AppDialogs(props: AppDialogsProps) {
     activePersonaId,
     personas,
     settings,
+    onConfigurePersona,
     persona,
     queue,
     schedules,
@@ -51,14 +69,10 @@ export function AppDialogs(props: AppDialogsProps) {
   const wizardDismissed = React.useRef(false)
   React.useEffect(() => {
     if (wizardDismissed.current) return
-    if (!settings.installationStatus?.needs_initialization) return
-    try {
-      if (sessionStorage.getItem('meido_setup_wizard_dismissed') === '1') return
-    } catch {
-      return
-    }
+    const status = settings.installationStatus
+    if (!setupWizardShouldOpen(status, readSetupWizardDismissed())) return
     setWizardOpen(true)
-  }, [settings.installationStatus?.needs_initialization])
+  }, [settings.installationStatus])
 
   function setWizard(open: boolean) {
     setWizardOpen(open)
@@ -82,6 +96,7 @@ export function AppDialogs(props: AppDialogsProps) {
         personas={personas}
         settings={settings}
         onRunSetupWizard={() => setWizardOpen(true)}
+        onConfigurePersona={onConfigurePersona}
       />
       <SetupWizardDialog
         api={api}
@@ -100,11 +115,19 @@ export function AppDialogs(props: AppDialogsProps) {
       <InboxDialog appearance={appearance} personas={personas} inbox={inbox} />
       <SchedulesDialog
         appearance={appearance}
+        api={api}
+        chatId={chatId}
         activePersonaId={activePersonaId}
         personas={personas}
         schedules={schedules}
       />
-      <ScheduleDetailDialog appearance={appearance} personas={personas} scheduleDetail={scheduleDetail} />
+      <ScheduleDetailDialog
+        appearance={appearance}
+        api={api}
+        chatId={chatId}
+        personas={personas}
+        scheduleDetail={scheduleDetail}
+      />
       <AgentsMdDialog appearance={appearance} agentsMd={agentsMd} />
       <ArtifactsDialog
         appearance={appearance}

@@ -52,7 +52,8 @@ FEATURES:
 
 SETUP:
     1. Copy .env.example to .env and set bootstrap values:
-       MEIDO_WORKSPACE_DIR (or WORKSPACE_DIR), WEB_HOST/WEB_PORT, WEB_AUTH_TOKEN when exposing non-local.
+       WORKSPACE_DIR, WEB_HOST/WEB_PORT, WEB_AUTH_TOKEN when exposing non-local.
+       When WORKSPACE_DIR is missing, the web UI opens the setup wizard.
     2. Start the app: meido start
     3. Open Web UI: http://127.0.0.1:10961 and finish runtime settings there.
 
@@ -69,7 +70,8 @@ CONFIG FILE (.env):
       llm_base_url           Custom base URL (optional)
 
     Runtime:
-      workspace_dir          Workspace root (default: ./workspace). Layout: runtime/, skills/, shared/ under this path. Copy to migrate.
+      WORKSPACE_DIR          Workspace root. Layout: runtime/, skills/, shared/ under this path. Copy to migrate.
+                             When unset, the process can still boot and the web UI opens the setup wizard.
       max_tokens             Max tokens per response (default: 8192)
       max_tool_iterations    Max tool loop iterations (default: 100)
       max_history_messages   Chat history context size (default: 50)
@@ -550,10 +552,33 @@ async fn main() -> anyhow::Result<()> {
 
     config.merge_llm_selection_from_app_settings(&db)?;
     meido::topics::seed_system_llm_from_env(&db)?;
-    info!(
-        "LLM selection: provider={} model={}",
-        config.llm_provider, config.model
-    );
+    if let Ok(Some(env_path)) = meido::config::Config::resolve_config_path() {
+        if let Ok(content) = std::fs::read_to_string(&env_path) {
+            let mut next = content.clone();
+            for key in [
+                "LLM_PROVIDER",
+                "LLM_MODEL",
+                "LLM_BASE_URL",
+                "TOPICS_PREFER_TIER2",
+                "MULTIMODEL_ENABLED",
+                "MULTIMODEL_LOCAL_BASE_URL",
+                "MULTIMODEL_LOCAL_MODEL",
+                "MULTIMODEL_LOCAL_TOOLS_OK",
+                "MULTIMODEL_TIER1_BASE_URL",
+                "MULTIMODEL_TIER1_MODEL",
+                "MULTIMODEL_TIER1_TOOLS_OK",
+                "MULTIMODEL_TIER2_BASE_URL",
+                "MULTIMODEL_TIER2_MODEL",
+                "MULTIMODEL_TIER2_TOOLS_OK",
+            ] {
+                next = meido::dotenv_sync::remove_env_line(&next, key);
+            }
+            if next != content {
+                let _ = std::fs::write(&env_path, next);
+            }
+        }
+    }
+    info!("Chat models are stored on each persona. System LLM is a separate pair.");
 
     match meido::persona_shared_migrate::maybe_run(&config, &db) {
         Ok(stats) => {

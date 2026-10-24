@@ -291,75 +291,82 @@ pub struct EvaluatorProviderBundle {
     pub label: String,
 }
 
-fn perplexity_api_key(config: &Config) -> String {
-    config
-        .perplexity_api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            crate::engine_connections::saved_secret(
-                &config.runtime_data_dir(),
-                "PERPLEXITY_API_KEY",
-            )
-        })
-        .unwrap_or_default()
+/// Human-readable backend label for agent history / UI.
+pub fn resolve_evaluator_provider_label(target: Option<&DirectLlmTarget>) -> String {
+    let Some(target) = target else {
+        return String::new();
+    };
+    if crate::llm_catalog::is_local_provider(&target.provider_id) {
+        let base = target.base_url.as_deref().unwrap_or("");
+        return format!("system · {} @ {}", target.model, base);
+    }
+    if target.provider_id.trim().is_empty() || target.model.trim().is_empty() {
+        return String::new();
+    }
+    format!("system · {} / {}", target.provider_id, target.model)
 }
 
-/// Human-readable backend label for agent history / UI (`local · model @ url` or `perplexity · sonar`).
-pub fn resolve_evaluator_provider_label(
-    config: &Config,
-    multimodel: Option<&crate::local_delegate::LocalDelegateConfig>,
-) -> String {
-    if let Some(mm) = multimodel {
-        if let Some((base_url, model)) = crate::local_delegate::resolve_local_evaluator_endpoint(mm)
-        {
-            return format!("local · {} @ {}", model, base_url);
-        }
-    }
-    if !perplexity_api_key(config).is_empty() {
-        return format!("perplexity · {}", config.evaluator_model);
-    }
-    String::new()
+/// Saved System LLM pair used by PTE / PDQE. Missing pair means the feature does not run.
+#[derive(Debug, Clone)]
+pub struct DirectLlmTarget {
+    pub provider_id: String,
+    pub model: String,
+    pub base_url: Option<String>,
 }
 
-/// Sidecar LLM for PTE / PDQE. Prefers local multimodel endpoint; falls back to Perplexity.
+/// Sidecar LLM for PTE / PDQE. Uses the saved System LLM pair only.
 /// Never used for the main agent loop.
 pub fn create_evaluator_provider(
     config: &Config,
-    multimodel: Option<&crate::local_delegate::LocalDelegateConfig>,
+    target: Option<&DirectLlmTarget>,
 ) -> Result<EvaluatorProviderBundle, FinallyAValueBotError> {
-    let request_timeout = std::time::Duration::from_secs(EVALUATOR_TIMEOUT_SECS);
-    if let Some(mm) = multimodel {
-        if let Some((base_url, model)) = crate::local_delegate::resolve_local_evaluator_endpoint(mm)
-        {
-            let mut eval_config = config.clone();
-            eval_config.max_tokens = EVALUATOR_MAX_TOKENS;
-            let label = format!("local · {} @ {}", model, base_url);
-            let provider = create_openai_compatible_provider_with_timeout(
-                &eval_config,
-                &base_url,
-                &model,
-                request_timeout,
-            );
-            return Ok(EvaluatorProviderBundle { provider, label });
-        }
-    }
-    let key = perplexity_api_key(config);
-    if key.is_empty() {
+    let Some(target) = target else {
         return Err(FinallyAValueBotError::Config(
-            "No evaluator provider: configure a local model server, or set PERPLEXITY_API_KEY in .env or Settings → Connections"
+            "System LLM is not configured. Set a provider and model under Settings → System LLM."
+                .into(),
+        ));
+    };
+    let provider_id = target.provider_id.trim();
+    let model = target.model.trim();
+    if provider_id.is_empty() || model.is_empty() {
+        return Err(FinallyAValueBotError::Config(
+            "System LLM is not configured. Set a provider and model under Settings → System LLM."
                 .into(),
         ));
     }
+    let request_timeout = std::time::Duration::from_secs(EVALUATOR_TIMEOUT_SECS);
+    if crate::llm_catalog::is_local_provider(provider_id) {
+        let base_url = target
+            .base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .ok_or_else(|| {
+                FinallyAValueBotError::Config(
+                    "System LLM is a local provider but Connections has no local server URL."
+                        .into(),
+                )
+            })?;
+        let mut eval_config = config.clone();
+        eval_config.max_tokens = EVALUATOR_MAX_TOKENS;
+        let label = format!("system · {model} @ {base_url}");
+        let provider = create_openai_compatible_provider_with_timeout(
+            &eval_config,
+            base_url,
+            model,
+            request_timeout,
+        );
+        return Ok(EvaluatorProviderBundle { provider, label });
+    }
     let mut eval_config = config.clone();
     eval_config.max_tokens = EVALUATOR_MAX_TOKENS;
-    eval_config.llm_provider = "openai".into();
-    eval_config.api_key = key.to_string();
-    eval_config.model = config.evaluator_model.clone();
-    eval_config.llm_base_url = Some(config.evaluator_base_url.clone());
-    let label = format!("perplexity · {}", config.evaluator_model);
+    eval_config.apply_llm_provider_switch(provider_id, model, None);
+    if eval_config.api_key.trim().is_empty() {
+        return Err(FinallyAValueBotError::Config(
+            format!("No API key for System LLM provider {provider_id}. Set it under Settings → Connections."),
+        ));
+    }
+    let label = format!("system · {provider_id} / {model}");
     Ok(EvaluatorProviderBundle {
         provider: create_provider(&eval_config),
         label,
@@ -509,13 +516,33 @@ impl LlmHandle {
         &self,
         tier: crate::local_delegate::RouteTarget,
         strategy: &StrategyLlmSelection,
+        local: &crate::local_delegate::LocalDelegateConfig,
         system: &str,
         messages: Vec<Message>,
         tools: Option<Vec<ToolDefinition>>,
     ) -> Result<MessagesResponse, FinallyAValueBotError> {
         if tier.is_local() {
-            return self
-                .send_message_for_target(tier, system, messages, tools)
+            if !local.local_configured() {
+                return Err(FinallyAValueBotError::Config(
+                    "Cost routing needs this persona's local URL and model.".into(),
+                ));
+            }
+            let base = self
+                .base_config
+                .read()
+                .map_err(|_| FinallyAValueBotError::LlmApi("config lock poisoned".into()))?
+                .clone();
+            let provider: Arc<dyn LlmProvider> = Arc::from(create_openai_compatible_provider(
+                &base,
+                &local.local_base_url,
+                &local.local_model,
+            ));
+            let has_tools = tools.as_ref().is_some_and(|t| !t.is_empty());
+            let options = LlmSendOptions {
+                tool_choice: crate::local_delegate::tool_choice_for_target(tier, has_tools),
+            };
+            return provider
+                .send_message_with_options(system, messages, tools, options)
                 .await;
         }
         let has_tools = tools.as_ref().is_some_and(|t| !t.is_empty());
@@ -637,7 +664,7 @@ impl LlmHandle {
                 .map(str::trim)
                 .filter(|u| !u.is_empty())
                 .ok_or_else(|| {
-                    "base_url is required when provider is Ollama or llama.cpp (configure in Settings → LLM)."
+                    "base_url is required when provider is Ollama or llama.cpp (set it on the Persona page)."
                         .to_string()
                 })?;
             Some(crate::llm_catalog::normalize_local_base_url(
@@ -650,65 +677,46 @@ impl LlmHandle {
         Ok((provider_id, model, base_url))
     }
 
-    /// Resolve classic strategy LLM for a persona (NULL overrides inherit the global handle).
+    /// Resolve this persona's classic chat model. A missing field stops the turn.
     pub fn resolve_strategy_selection(
         &self,
         persona: Option<&crate::db::Persona>,
     ) -> Result<StrategyLlmSelection, String> {
-        let global_provider = self.current_provider();
-        let global_model = self.current_model();
-        let global_base = self.current_base_url();
-
+        let persona = persona.ok_or_else(|| {
+            "This persona has no chat model. Set the provider and model on the Persona page."
+                .to_string()
+        })?;
         let provider_ov = persona
-            .and_then(|p| p.llm_provider_override.as_deref())
+            .llm_provider_override
+            .as_deref()
             .map(str::trim)
-            .filter(|s| !s.is_empty());
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                "This persona has no provider. Set it on the Persona page.".to_string()
+            })?;
         let model_ov = persona
-            .and_then(|p| p.model_override.as_deref())
+            .model_override
+            .as_deref()
             .map(str::trim)
-            .filter(|s| !s.is_empty());
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| "This persona has no model. Set it on the Persona page.".to_string())?;
         let base_ov = persona
-            .and_then(|p| p.llm_base_url_override.as_deref())
+            .llm_base_url_override
+            .as_deref()
             .map(str::trim)
-            .filter(|s| !s.is_empty());
-        let from_persona = provider_ov.is_some() || model_ov.is_some() || base_ov.is_some();
-
-        if !from_persona {
-            let client = self
-                .provider
-                .read()
-                .map_err(|_| "LLM provider lock poisoned".to_string())?
-                .clone();
-            return Ok(StrategyLlmSelection {
-                provider_id: global_provider,
-                model: global_model,
-                base_url: global_base,
-                endpoint: self.strategy_endpoint(),
-                client,
-                from_persona: false,
-            });
-        }
-
-        let provider_id = crate::llm_catalog::resolve_catalog_provider_id(
-            provider_ov.unwrap_or(global_provider.as_str()),
-        );
-        let model = model_ov.unwrap_or(global_model.as_str()).to_string();
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let provider_id = crate::llm_catalog::resolve_catalog_provider_id(provider_ov);
         let local_base = if crate::llm_catalog::is_local_provider(&provider_id) {
-            Some(
-                base_ov
-                    .map(str::to_string)
-                    .or_else(|| global_base.clone())
-                    .filter(|u| !u.trim().is_empty())
-                    .ok_or_else(|| {
-                        "base_url is required when provider is Ollama or llama.cpp (configure in Settings → LLM)."
-                            .to_string()
-                    })?,
-            )
+            Some(base_ov.ok_or_else(|| {
+                "This persona uses a local provider and needs a base URL. Set it on the Persona page."
+                    .to_string()
+            })?)
         } else {
             None
         };
         let (provider_id, model, base_url) =
-            self.validate_selection(provider_id, model, local_base)?;
+            self.validate_selection(provider_id, model_ov.to_string(), local_base)?;
 
         let mut cfg = self
             .base_config
@@ -733,13 +741,14 @@ impl LlmHandle {
         &self,
         target: crate::local_delegate::RouteTarget,
     ) -> crate::local_delegate::RouteEndpointSnapshot {
-        self.tier_endpoint_snapshot_with_strategy(target, None)
+        self.tier_endpoint_snapshot_with_strategy(target, None, None)
     }
 
     pub fn tier_endpoint_snapshot_with_strategy(
         &self,
         target: crate::local_delegate::RouteTarget,
         strategy: Option<&StrategyLlmSelection>,
+        local: Option<&crate::local_delegate::LocalDelegateConfig>,
     ) -> crate::local_delegate::RouteEndpointSnapshot {
         if !target.is_local() {
             return match strategy {
@@ -747,7 +756,8 @@ impl LlmHandle {
                 None => self.strategy_tier_snapshot(),
             };
         }
-        let mm_cfg = self.local_delegate_config();
+        let owned = self.local_delegate_config();
+        let mm_cfg = local.unwrap_or(&owned);
         crate::local_delegate::RouteEndpointSnapshot {
             target,
             provider: "llama".into(),
@@ -761,15 +771,17 @@ impl LlmHandle {
         &self,
         cost_routing_active: bool,
     ) -> crate::local_delegate::LocalDelegateRunSummary {
-        self.local_delegate_run_summary_with_strategy(cost_routing_active, None)
+        self.local_delegate_run_summary_with_strategy(cost_routing_active, None, None)
     }
 
     pub fn local_delegate_run_summary_with_strategy(
         &self,
         cost_routing_active: bool,
         strategy: Option<&StrategyLlmSelection>,
+        local: Option<&crate::local_delegate::LocalDelegateConfig>,
     ) -> crate::local_delegate::LocalDelegateRunSummary {
-        let mm_cfg = self.local_delegate_config();
+        let owned = self.local_delegate_config();
+        let mm_cfg = local.unwrap_or(&owned);
         let strategy_snap = match strategy {
             Some(s) => self.strategy_tier_snapshot_for(s),
             None => self.strategy_tier_snapshot(),
@@ -2869,7 +2881,7 @@ fn build_gemini_request(
             let func_decls: Vec<serde_json::Value> = tool_defs
                 .iter()
                 .map(|t| {
-                    let parameters = sanitize_oai_parameters(&t.input_schema);
+                    let parameters = sanitize_gemini_parameters(&t.input_schema);
                     json!({
                         "name": t.name,
                         "description": t.description,
@@ -3319,6 +3331,237 @@ fn translate_messages_to_oai(system: &str, messages: &[Message]) -> Vec<serde_js
     }
 
     out
+}
+
+/// Gemini function declarations take one schema `type` string and do not accept
+/// JSON Schema keywords such as `additionalProperties`, `anyOf`, or `oneOf`.
+/// MCP tools (Robinhood) send nullable unions as `"type": ["null", "array"]`.
+fn sanitize_gemini_parameters(schema: &serde_json::Value) -> serde_json::Value {
+    let mut cleaned = sanitize_gemini_schema(schema);
+    let Some(obj) = cleaned.as_object_mut() else {
+        return json!({"type": "object", "properties": {}});
+    };
+    obj.insert("type".to_string(), json!("object"));
+    obj.remove("nullable");
+    obj.remove("items");
+    obj.remove("enum");
+    obj.remove("format");
+    if obj.get("properties").and_then(|p| p.as_object()).is_none() {
+        obj.insert("properties".to_string(), json!({}));
+    }
+    let prop_keys: std::collections::HashSet<String> = obj
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .map(|props| props.keys().cloned().collect())
+        .unwrap_or_default();
+    let required: Vec<String> = obj
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|arr| {
+            let mut keys: Vec<String> = arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .filter(|k| prop_keys.contains(*k))
+                .map(str::to_string)
+                .collect();
+            keys.sort();
+            keys.dedup();
+            keys
+        })
+        .unwrap_or_default();
+    if required.is_empty() {
+        obj.remove("required");
+    } else {
+        obj.insert("required".to_string(), json!(required));
+    }
+    cleaned
+}
+
+fn gemini_named_type(raw: &str) -> (Option<String>, bool) {
+    let lower = raw.to_ascii_lowercase();
+    match lower.as_str() {
+        "null" => (None, true),
+        "object" | "array" | "string" | "number" | "integer" | "boolean" => (Some(lower), false),
+        _ => (Some("string".to_string()), false),
+    }
+}
+
+fn gemini_single_type(type_val: &serde_json::Value) -> (Option<String>, bool) {
+    match type_val {
+        serde_json::Value::String(raw) => gemini_named_type(raw),
+        serde_json::Value::Array(items) => {
+            let mut nullable = false;
+            let mut chosen = None;
+            for item in items {
+                let Some(raw) = item.as_str() else {
+                    continue;
+                };
+                let (ty, is_null) = gemini_named_type(raw);
+                nullable |= is_null;
+                if chosen.is_none() && ty.is_some() {
+                    chosen = ty;
+                }
+            }
+            (chosen, nullable)
+        }
+        _ => (None, false),
+    }
+}
+
+fn is_null_schema_branch(obj: &serde_json::Map<String, serde_json::Value>) -> bool {
+    match obj.get("type") {
+        Some(type_val) => {
+            let (ty, nullable) = gemini_single_type(type_val);
+            ty.is_none() && nullable
+        }
+        None => false,
+    }
+}
+
+/// Collapse `anyOf` / `oneOf` null unions when the node has no `type` of its own.
+fn collapse_gemini_union(
+    map: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    if map.contains_key("type") {
+        return map.clone();
+    }
+    let Some(items) = map
+        .get("anyOf")
+        .or_else(|| map.get("oneOf"))
+        .and_then(|v| v.as_array())
+    else {
+        return map.clone();
+    };
+    let mut nullable = map
+        .get("nullable")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let mut branch: Option<serde_json::Map<String, serde_json::Value>> = None;
+    for item in items {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        if is_null_schema_branch(obj) {
+            nullable = true;
+            continue;
+        }
+        if branch.is_none() {
+            branch = Some(obj.clone());
+        }
+    }
+    let Some(mut branch) = branch else {
+        return map.clone();
+    };
+    if nullable {
+        branch.insert("nullable".to_string(), json!(true));
+    }
+    if !branch.contains_key("description") {
+        if let Some(desc) = map.get("description").cloned() {
+            branch.insert("description".to_string(), desc);
+        }
+    }
+    branch
+}
+
+fn sanitize_gemini_schema(schema: &serde_json::Value) -> serde_json::Value {
+    let Some(map) = schema.as_object() else {
+        return json!({"type": "string"});
+    };
+    let collapsed = collapse_gemini_union(map);
+    let mut nullable = collapsed
+        .get("nullable")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let (mut ty, type_nullable) = collapsed
+        .get("type")
+        .map(gemini_single_type)
+        .unwrap_or((None, false));
+    nullable |= type_nullable;
+    if ty.is_none() {
+        ty = Some(
+            if collapsed
+                .get("properties")
+                .and_then(|p| p.as_object())
+                .is_some()
+            {
+                "object".to_string()
+            } else if collapsed.get("items").is_some() {
+                "array".to_string()
+            } else {
+                "string".to_string()
+            },
+        );
+    }
+    let ty = ty.unwrap_or_else(|| "string".to_string());
+
+    let mut out = serde_json::Map::new();
+    out.insert("type".to_string(), json!(ty.as_str()));
+    if nullable {
+        out.insert("nullable".to_string(), json!(true));
+    }
+    if let Some(desc) = collapsed.get("description").and_then(|d| d.as_str()) {
+        let desc = desc.trim();
+        if !desc.is_empty() {
+            out.insert("description".to_string(), json!(desc));
+        }
+    }
+    if let Some(fmt) = collapsed.get("format").and_then(|f| f.as_str()) {
+        if !fmt.is_empty() && fmt.len() < 64 && !fmt.contains(' ') {
+            out.insert("format".to_string(), json!(fmt));
+        }
+    }
+
+    if ty == "object" {
+        let mut props = serde_json::Map::new();
+        if let Some(incoming) = collapsed.get("properties").and_then(|p| p.as_object()) {
+            for (key, value) in incoming {
+                props.insert(key.clone(), sanitize_gemini_schema(value));
+            }
+        }
+        let prop_keys: std::collections::HashSet<String> = props.keys().cloned().collect();
+        out.insert("properties".to_string(), serde_json::Value::Object(props));
+        if let Some(req) = collapsed.get("required").and_then(|r| r.as_array()) {
+            let mut required: Vec<String> = req
+                .iter()
+                .filter_map(|v| v.as_str())
+                .filter(|k| prop_keys.contains(*k))
+                .map(str::to_string)
+                .collect();
+            required.sort();
+            required.dedup();
+            if !required.is_empty() {
+                out.insert("required".to_string(), json!(required));
+            }
+        }
+    } else if ty == "array" {
+        let items = match collapsed.get("items") {
+            Some(items) if items.is_array() => items
+                .as_array()
+                .and_then(|arr| arr.first())
+                .map(sanitize_gemini_schema)
+                .unwrap_or_else(|| json!({"type": "string"})),
+            Some(items) => sanitize_gemini_schema(items),
+            None => json!({"type": "string"}),
+        };
+        out.insert("items".to_string(), items);
+    } else if ty == "string" {
+        if let Some(values) = collapsed.get("enum").and_then(|e| e.as_array()) {
+            let enums: Vec<String> = values
+                .iter()
+                .filter_map(|v| match v {
+                    serde_json::Value::String(s) => Some(s.clone()),
+                    serde_json::Value::Number(n) => Some(n.to_string()),
+                    serde_json::Value::Bool(b) => Some(b.to_string()),
+                    _ => None,
+                })
+                .collect();
+            if !enums.is_empty() {
+                out.insert("enum".to_string(), json!(enums));
+            }
+        }
+    }
+
+    serde_json::Value::Object(out)
 }
 
 /// Sanitize tool parameters schema so that `required` only lists keys present in
@@ -3868,6 +4111,135 @@ mod tests {
         assert!(required
             .iter()
             .all(|r| props.contains_key(r.as_str().unwrap())));
+    }
+
+    fn schema_is_gemini_safe(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Array(items) => items.iter().all(schema_is_gemini_safe),
+            serde_json::Value::Object(map) => {
+                if map.contains_key("additionalProperties")
+                    || map.contains_key("anyOf")
+                    || map.contains_key("oneOf")
+                    || map.contains_key("allOf")
+                {
+                    return false;
+                }
+                if matches!(map.get("type"), Some(serde_json::Value::Array(_))) {
+                    return false;
+                }
+                map.values().all(schema_is_gemini_safe)
+            }
+            _ => true,
+        }
+    }
+
+    #[test]
+    fn test_sanitize_gemini_parameters_robinhood_nullable_array() {
+        let schema = json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "chart_id": { "type": "string", "description": "chart" },
+                "note": { "type": ["string", "null"], "description": "optional" },
+                "parameters": {
+                    "description": "overrides",
+                    "type": ["null", "array"],
+                    "items": {
+                        "additionalProperties": false,
+                        "type": "object",
+                        "required": ["name", "value", "missing"],
+                        "properties": {
+                            "name": { "type": "string" },
+                            "value": { "type": "string" }
+                        }
+                    }
+                }
+            },
+            "required": ["chart_id", "missing"]
+        });
+        let out = sanitize_gemini_parameters(&schema);
+        assert!(schema_is_gemini_safe(&out), "{out}");
+        assert_eq!(out["type"], "object");
+        assert!(out.get("additionalProperties").is_none());
+        let required = out["required"].as_array().unwrap();
+        assert_eq!(required, &vec![json!("chart_id")]);
+        let note = &out["properties"]["note"];
+        assert_eq!(note["type"], "string");
+        assert_eq!(note["nullable"], true);
+        let params = &out["properties"]["parameters"];
+        assert_eq!(params["type"], "array");
+        assert_eq!(params["nullable"], true);
+        assert_eq!(params["description"], "overrides");
+        let items = &params["items"];
+        assert_eq!(items["type"], "object");
+        assert!(items.get("additionalProperties").is_none());
+        assert_eq!(items["required"], json!(["name", "value"]));
+    }
+
+    #[test]
+    fn test_sanitize_gemini_parameters_anyof_null_union() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "parameters": {
+                    "description": "overrides",
+                    "anyOf": [
+                        {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": { "name": { "type": "string" } }
+                            }
+                        },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        });
+        let out = sanitize_gemini_parameters(&schema);
+        assert!(schema_is_gemini_safe(&out), "{out}");
+        let params = &out["properties"]["parameters"];
+        assert_eq!(params["type"], "array");
+        assert_eq!(params["nullable"], true);
+        assert_eq!(params["description"], "overrides");
+        assert_eq!(params["items"]["type"], "object");
+        assert!(params["items"].get("additionalProperties").is_none());
+    }
+
+    #[test]
+    fn test_build_gemini_request_strips_robinhood_schema() {
+        let tools = vec![ToolDefinition::new(
+            "add_legend_indicator",
+            "Apply indicator",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "parameters": {
+                        "type": ["null", "array"],
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": { "name": { "type": "string" } }
+                        }
+                    }
+                },
+                "required": ["parameters"]
+            }),
+        )];
+        let req = build_gemini_request(
+            "sync",
+            &[],
+            Some(tools),
+            256,
+            "gemini-2.5-flash",
+            false,
+            false,
+        );
+        let params = &req["tools"][0]["functionDeclarations"][0]["parameters"];
+        assert!(schema_is_gemini_safe(params), "{params}");
+        assert_eq!(params["properties"]["parameters"]["type"], "array");
     }
 
     // -----------------------------------------------------------------------

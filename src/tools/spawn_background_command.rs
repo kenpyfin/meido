@@ -87,9 +87,11 @@ impl Tool for SpawnBackgroundCommandTool {
         ) {
             return blocked;
         }
-        if let Some(blocked) =
-            super::bash_safety::check_self_repo_git(&command, Path::new(self.config.working_dir()))
-        {
+        if let Some(blocked) = super::bash_safety::check_self_repo_git(
+            &command,
+            Path::new(self.config.working_dir()),
+            &auth.external_roots,
+        ) {
             return blocked;
         }
 

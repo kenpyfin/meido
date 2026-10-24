@@ -11,11 +11,6 @@ pub const CONFIG: MeidoEnvKey = MeidoEnvKey {
     legacy: "FINALLY_A_VALUE_BOT_CONFIG",
 };
 
-pub const WORKSPACE_DIR: MeidoEnvKey = MeidoEnvKey {
-    preferred: "MEIDO_WORKSPACE_DIR",
-    legacy: "FINALLY_A_VALUE_BOT_WORKSPACE_DIR",
-};
-
 pub const SELF_REPO: MeidoEnvKey = MeidoEnvKey {
     preferred: "MEIDO_SELF_REPO",
     legacy: "FINALLY_A_VALUE_BOT_SELF_REPO",
@@ -65,8 +60,6 @@ pub const REPO_ROOT: MeidoEnvKey = MeidoEnvKey {
 pub const NON_SECRET_KEYS: &[&str] = &[
     CONFIG.preferred,
     CONFIG.legacy,
-    WORKSPACE_DIR.preferred,
-    WORKSPACE_DIR.legacy,
     BUILTIN_SKILLS.preferred,
     BUILTIN_SKILLS.legacy,
     BUILTIN_HOOKS.preferred,

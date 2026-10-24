@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose } from '@/components/ui/dialog'
+import { useIsMobile } from '@/lib/use-is-mobile'
 import React, { useEffect, useState } from 'react'
 import type { QueueDialogProps } from './types'
 
@@ -43,6 +44,16 @@ export function QueueDialog(props: QueueDialogProps) {
   const handleBackgroundJobStop = queue.handleBackgroundJobStop
   const sampledAtMs = queue.sampledAtMs
   const [now, setNow] = useState(() => Date.now())
+  const [pickedRunId, setPickedRunId] = useState<string | null>(null)
+  const [pickedJobId, setPickedJobId] = useState<string | null>(null)
+  const mobile = useIsMobile()
+
+  useEffect(() => {
+    if (!queueDialogOpen) {
+      setPickedRunId(null)
+      setPickedJobId(null)
+    }
+  }, [queueDialogOpen])
 
   useEffect(() => {
     if (!queueDialogOpen) return
@@ -53,6 +64,15 @@ export function QueueDialog(props: QueueDialogProps) {
 
   const borderColor = 'var(--mc-border-soft)'
   void appearance
+  const pickedRun = mobile ? queueDialogItems.find((it) => it.run_id === pickedRunId) ?? null : null
+  const pickedJob = mobile && pickedRun == null
+    ? backgroundJobsVisible.find((job) => job.id === pickedJobId) ?? null
+    : null
+  const jobKind = (kind: string | undefined) =>
+    kind === 'shell' ? 'shell' : kind === 'run_optimize' ? 'optimize' : 'agent'
+
+  const pageClass = 'inset-0 top-0 left-0 flex h-[100dvh] max-h-[100dvh] w-full max-w-none translate-x-0 translate-y-0 flex-col gap-3 rounded-none'
+  const pageStyle = { inset: 0, transform: 'none', width: '100%', maxWidth: 'none', height: '100dvh', maxHeight: '100dvh', borderRadius: 0 }
 
   return (
     <Dialog open={queueDialogOpen} onOpenChange={setQueueDialogOpen}>
@@ -149,43 +169,20 @@ export function QueueDialog(props: QueueDialogProps) {
                 </tbody>
               </table>
               <div className="flex flex-col gap-2 md:hidden">
-                {queueDialogItems.map((it) => {
-                  const isStopping = stoppingRunIds.includes(it.run_id)
-                  const isRunning = it.state === 'running'
-                  return (
-                    <div
-                      key={it.run_id}
-                      className="rounded-lg border border-[color:var(--mc-border-soft)] p-3 text-sm"
-                    >
-                      <div className="mb-2 flex items-start justify-between gap-2">
-                        <span className="font-semibold">
-                          #{it.position} · {it.state}
-                        </span>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          disabled={isStopping}
-                          onClick={() => void handleQueueAction(it.run_id, it.state)}
-                        >
-                          {isStopping
-                            ? isRunning
-                              ? 'Stopping...'
-                              : 'Removing...'
-                            : isRunning
-                              ? 'Stop'
-                              : 'Remove'}
-                        </Button>
-                      </div>
-                      <span className="mb-1 block">
-                        {it.persona_name} · {it.source}
-                      </span>
-                      <span className="break-words">{it.label || '-'}</span>
-                      <span className="mt-1 block font-mono" title={elapsedTitle(it.state)}>
-                        {elapsedText(it.elapsed_ms, sampledAtMs, now)}
-                      </span>
-                    </div>
-                  )
-                })}
+                {queueDialogItems.map((it) => (
+                  <button
+                    key={it.run_id}
+                    type="button"
+                    className="rounded-lg border border-[color:var(--mc-border-soft)] p-3 text-left text-sm"
+                    onClick={() => {
+                      setPickedJobId(null)
+                      setPickedRunId(it.run_id)
+                    }}
+                  >
+                    <span className="block font-semibold">#{it.position} · {it.state}</span>
+                    <span className="block truncate">{it.label || it.persona_name}</span>
+                  </button>
+                ))}
               </div>
             </>
           )}
@@ -261,43 +258,20 @@ export function QueueDialog(props: QueueDialogProps) {
                 </tbody>
               </table>
               <div className="flex flex-col gap-2 md:hidden">
-                {backgroundJobsVisible.map((job) => {
-                  const isActive = isActiveBackgroundJobStatus(job.status)
-                  const isStopping = stoppingBackgroundJobIds.includes(job.id)
-                  const updatedAt = job.finished_at || job.started_at || job.created_at
-                  return (
-                    <div
-                      key={job.id}
-                      className="rounded-lg border border-[color:var(--mc-border-soft)] p-3 text-sm"
-                    >
-                      <div className="mb-2 flex items-start justify-between gap-2">
-                        <span className="font-semibold">
-                          {job.status} ·{' '}
-                          {job.job_kind === 'shell'
-                            ? 'shell'
-                            : job.job_kind === 'run_optimize'
-                              ? 'optimize'
-                              : 'agent'}
-                        </span>
-                        {isActive ? (
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            disabled={isStopping}
-                            onClick={() => void handleBackgroundJobStop(job.id)}
-                          >
-                            {isStopping ? 'Stopping...' : 'Stop'}
-                          </Button>
-                        ) : null}
-                      </div>
-                      <span className="mb-1 block font-mono">{job.id}</span>
-                      <span className="break-words">{job.prompt || '-'}</span>
-                      <span className="mt-1 block">
-                        {updatedAt ? new Date(updatedAt).toLocaleString() : '-'}
-                      </span>
-                    </div>
-                  )
-                })}
+                {backgroundJobsVisible.map((job) => (
+                  <button
+                    key={job.id}
+                    type="button"
+                    className="rounded-lg border border-[color:var(--mc-border-soft)] p-3 text-left text-sm"
+                    onClick={() => {
+                      setPickedRunId(null)
+                      setPickedJobId(job.id)
+                    }}
+                  >
+                    <span className="block font-semibold">{job.status} · {jobKind(job.job_kind)}</span>
+                    <span className="block truncate">{job.label || job.prompt || job.id}</span>
+                  </button>
+                ))}
               </div>
             </>
           )}
@@ -308,6 +282,52 @@ export function QueueDialog(props: QueueDialogProps) {
           </DialogClose>
         </div>
       </DialogContent>
+      {pickedRun ? (
+        <Dialog open onOpenChange={(open) => { if (!open) setPickedRunId(null) }}>
+          <DialogContent className={pageClass} style={pageStyle}>
+            <Button type="button" variant="outline" size="sm" className="self-start" onClick={() => setPickedRunId(null)}>Back</Button>
+            <DialogTitle>#{pickedRun.position} · {pickedRun.state}</DialogTitle>
+            <p className="m-0">{pickedRun.persona_name} · {pickedRun.source}</p>
+            <p className="m-0 break-words">{pickedRun.label || '-'}</p>
+            <p className="m-0 font-mono" title={elapsedTitle(pickedRun.state)}>{elapsedText(pickedRun.elapsed_ms, sampledAtMs, now)}</p>
+            <Button
+              size="sm"
+              variant="destructive"
+              className="self-start"
+              disabled={stoppingRunIds.includes(pickedRun.run_id)}
+              onClick={() => void handleQueueAction(pickedRun.run_id, pickedRun.state)}
+            >
+              {stoppingRunIds.includes(pickedRun.run_id)
+                ? pickedRun.state === 'running' ? 'Stopping...' : 'Removing...'
+                : pickedRun.state === 'running' ? 'Stop' : 'Remove'}
+            </Button>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+      {pickedJob ? (
+        <Dialog open onOpenChange={(open) => { if (!open) setPickedJobId(null) }}>
+          <DialogContent className={pageClass} style={pageStyle}>
+            <Button type="button" variant="outline" size="sm" className="self-start" onClick={() => setPickedJobId(null)}>Back</Button>
+            <DialogTitle>{pickedJob.status} · {jobKind(pickedJob.job_kind)}</DialogTitle>
+            <p className="m-0 font-mono">{pickedJob.id}</p>
+            <p className="m-0 break-words">{pickedJob.prompt || '-'}</p>
+            <p className="m-0">{(pickedJob.finished_at || pickedJob.started_at || pickedJob.created_at)
+              ? new Date(pickedJob.finished_at || pickedJob.started_at || pickedJob.created_at).toLocaleString()
+              : '-'}</p>
+            {isActiveBackgroundJobStatus(pickedJob.status) ? (
+              <Button
+                size="sm"
+                variant="destructive"
+                className="self-start"
+                disabled={stoppingBackgroundJobIds.includes(pickedJob.id)}
+                onClick={() => void handleBackgroundJobStop(pickedJob.id)}
+              >
+                {stoppingBackgroundJobIds.includes(pickedJob.id) ? 'Stopping...' : 'Stop'}
+              </Button>
+            ) : null}
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </Dialog>
   )
 }

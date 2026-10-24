@@ -85,8 +85,8 @@ export function SettingsRuntimePanel({ api, onError }: Props) {
           <span className="text-sm font-medium">Post-tool evaluator (PTE)</span>
           <span className="text-xs text-muted-foreground">
             After each tool iteration, ask a sidecar model whether the session goal is fulfilled.
-            Can exit early or add latency on tool-heavy runs. Uses the local delegate endpoint when
-            configured, else Perplexity. Applies immediately (
+            Can exit early or add latency on tool-heavy runs. Uses the System LLM pair. If that pair
+            is missing, the check does not run. Applies immediately (
             {sourceLabel(sources.post_tool_evaluator_enabled)}).
           </span>
         </div>

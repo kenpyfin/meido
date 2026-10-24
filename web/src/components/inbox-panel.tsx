@@ -28,6 +28,7 @@ export type InboxPanelProps = {
   busyTodoId: number | null
   onRefresh: () => void
   onOpenTarget: (target: InboxOpenTarget) => void
+  onOpenTodo: (todoId: number) => void
   onCompleteTodo: (todoId: number) => void
 }
 
@@ -67,6 +68,7 @@ export function InboxPanel({
   busyTodoId,
   onRefresh,
   onOpenTarget,
+  onOpenTodo,
   onCompleteTodo,
 }: InboxPanelProps) {
   const borderStyle =
@@ -174,10 +176,7 @@ export function InboxPanel({
                           size="sm"
                           variant="secondary"
                           onClick={() => {
-                            onOpenTarget({
-                              personaId: todo.persona_id,
-                              sessionId,
-                            })
+                            onOpenTodo(todo.id)
                             onOpenChange(false)
                           }}
                         >
