@@ -659,6 +659,38 @@ pub fn resolve_tool_working_dir_for_auth(
     resolve_tool_working_dir(base_working_dir)
 }
 
+fn same_compare_path(left: &Path, right: &Path) -> bool {
+    absolutize_for_compare(left) == absolutize_for_compare(right)
+}
+
+fn foreign_persona_scope(workspace_root: &Path, auth: &ToolAuthContext, path: &Path) -> bool {
+    let personas = workspace_shared_root(workspace_root).join("personas");
+    if !path_under_root(path, &personas) {
+        return false;
+    }
+    let own = persona_shared_dir(workspace_root, auth.caller_chat_id, auth.caller_persona_id);
+    !path_under_root(path, &own)
+}
+
+fn superseded_local_origin(shared_root: &Path, origin_vault: &Path, path: &Path) -> bool {
+    let local = shared_root.join("ORIGIN");
+    if same_compare_path(&local, origin_vault) {
+        return false;
+    }
+    path_under_root(path, &local)
+}
+
+fn superseded_local_vector_db(shared_root: &Path, auth: &ToolAuthContext, path: &Path) -> bool {
+    let Some(configured) = auth.vector_db_root.as_deref() else {
+        return false;
+    };
+    let local = shared_root.join("vault_db");
+    if same_compare_path(&local, configured) {
+        return false;
+    }
+    path_under_root(path, &local)
+}
+
 pub fn assert_persona_tool_path_allowed(
     workspace_root: &Path,
     resolved_path: &Path,
@@ -738,8 +770,12 @@ pub fn assert_persona_tool_path_allowed_with_memory(
     }
 
     // A data workspace that does not overlap the app checkout is editable by every persona.
+    // Persona folders, a superseded local ORIGIN, and a superseded local vault_db stay isolated.
     if crate::self_repo::workspace_disjoint_from_app(workspace_root)
         && crate::self_repo::is_under_workspace_data(workspace_root, resolved_path)
+        && !foreign_persona_scope(workspace_root, auth, resolved_path)
+        && !superseded_local_origin(&shared_root, origin_vault, resolved_path)
+        && !superseded_local_vector_db(&shared_root, auth, resolved_path)
     {
         return Ok(());
     }

@@ -423,7 +423,7 @@ pub fn store_path(workspace: &str, value: &str) -> String {
     }
     let ws = workspace.trim();
     let ws_abs = normalize_lexical(ws);
-    let value_abs = if Path::new(trimmed).is_absolute() {
+    let value_abs = if path_text_is_absolute(trimmed) {
         normalize_lexical(trimmed)
     } else {
         normalize_lexical(&format!(
@@ -435,11 +435,16 @@ pub fn store_path(workspace: &str, value: &str) -> String {
     let prefix = format!("{}/", ws_abs.trim_end_matches('/'));
     if value_abs.starts_with(&prefix) {
         value_abs[prefix.len()..].replace('\\', "/")
-    } else if Path::new(trimmed).is_absolute() {
+    } else if path_text_is_absolute(trimmed) {
         trimmed.replace('\\', "/")
     } else {
         trimmed.trim_start_matches("./").replace('\\', "/")
     }
+}
+
+/// `Path::is_absolute` is false for `/tmp/...` on Windows. A leading slash is still absolute.
+fn path_text_is_absolute(value: &str) -> bool {
+    Path::new(value).is_absolute() || value.starts_with('/') || value.starts_with('\\')
 }
 
 fn normalize_lexical(input: &str) -> String {

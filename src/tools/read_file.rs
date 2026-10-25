@@ -295,7 +295,7 @@ mod tests {
         let tool = ReadFileTool::new(".");
         let result = tool.execute(json!({"path": "/nonexistent/file.txt"})).await;
         assert!(result.is_error);
-        assert!(result.content.contains("Failed to read file"));
+        assert!(result.content.contains("Not found:"), "{}", result.content);
     }
 
     #[tokio::test]

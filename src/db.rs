@@ -8781,7 +8781,7 @@ impl Database {
     ) -> Result<Vec<StoredMessage>, FinallyAValueBotError> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT m.id, m.chat_id, m.persona_id, m.session_id, m.sender_name, m.content, m.is_from_bot, m.timestamp, m.origin
+            "SELECT m.id, m.chat_id, m.persona_id, m.session_id, m.sender_name, m.content, m.is_from_bot, m.timestamp, m.origin, m.speaker_persona_id
              FROM messages_fts
              JOIN messages m ON m.rowid = messages_fts.rowid
              WHERE messages_fts MATCH ?1
@@ -11583,6 +11583,7 @@ mod tests {
 
         let builtin_names = [
             "postdelivery-persona-focus-sync",
+            "postdelivery-secret-vault-scrub",
             "beforeturn-scheduler-policy-context",
             "pretool-turn-skill-gate",
             "prestop-deferred-commitment-guard",
@@ -11609,7 +11610,7 @@ mod tests {
         assert_eq!(
             hooks.len(),
             builtin_names.len(),
-            "fresh DB should contain only the six shipped catalog hooks: {:?}",
+            "fresh DB should contain only the shipped catalog hooks: {:?}",
             hooks.iter().map(|h| &h.name).collect::<Vec<_>>()
         );
         cleanup(&dir);
@@ -11637,7 +11638,7 @@ mod tests {
         let pid = test_persona(&db, chat_id);
         let p = db.get_persona(pid).unwrap().unwrap();
         assert!(!p.dense_delivery_enabled);
-        assert!(p.agent_engine_override.is_none());
+        assert_eq!(p.agent_engine_override.as_deref(), Some("classic"));
 
         db.set_persona_delivery_policy(chat_id, pid, true, Some(1800), None, Some(600))
             .unwrap();

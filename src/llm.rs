@@ -380,6 +380,9 @@ pub struct LlmHandle {
     base_config: std::sync::RwLock<Config>,
     local_delegate_config: std::sync::RwLock<crate::local_delegate::LocalDelegateConfig>,
     local_delegate_runtime: std::sync::RwLock<Option<crate::local_delegate::LocalDelegateRuntime>>,
+    /// Test doubles pin the injected client so classic strategy does not rebuild
+    /// a live provider from persona fields. Production handles leave this false.
+    pin_strategy_client: bool,
 }
 
 /// Resolved classic strategy provider for one agent run (persona override or global default).
@@ -400,6 +403,21 @@ impl LlmHandle {
     }
 
     pub fn from_provider(config: &Config, provider: Arc<dyn LlmProvider>) -> Arc<Self> {
+        Self::from_provider_inner(config, provider, false)
+    }
+
+    /// Like [`Self::from_provider`], but classic strategy uses this client even when
+    /// the persona has no provider or model. For unit tests only.
+    #[cfg(test)]
+    pub fn from_pinned_provider(config: &Config, provider: Arc<dyn LlmProvider>) -> Arc<Self> {
+        Self::from_provider_inner(config, provider, true)
+    }
+
+    fn from_provider_inner(
+        config: &Config,
+        provider: Arc<dyn LlmProvider>,
+        pin_strategy_client: bool,
+    ) -> Arc<Self> {
         Arc::new(Self {
             model: std::sync::RwLock::new(config.model.clone()),
             base_config: std::sync::RwLock::new(config.clone()),
@@ -408,6 +426,7 @@ impl LlmHandle {
                 crate::local_delegate::LocalDelegateConfig::default(),
             ),
             local_delegate_runtime: std::sync::RwLock::new(None),
+            pin_strategy_client,
         })
     }
 
@@ -682,6 +701,26 @@ impl LlmHandle {
         &self,
         persona: Option<&crate::db::Persona>,
     ) -> Result<StrategyLlmSelection, String> {
+        if self.pin_strategy_client {
+            let client = self
+                .provider
+                .read()
+                .map_err(|_| "provider lock poisoned".to_string())?
+                .clone();
+            let model = self
+                .model
+                .read()
+                .map_err(|_| "model lock poisoned".to_string())?
+                .clone();
+            return Ok(StrategyLlmSelection {
+                provider_id: "test".to_string(),
+                model,
+                base_url: None,
+                endpoint: "test".to_string(),
+                client,
+                from_persona: false,
+            });
+        }
         let persona = persona.ok_or_else(|| {
             "This persona has no chat model. Set the provider and model on the Persona page."
                 .to_string()
