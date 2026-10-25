@@ -17,7 +17,7 @@ import {
 
 import type { AgentHistoryDialogProps } from './types'
 
-export function AgentHistoryDialog(props: AgentHistoryDialogProps) {
+export function AgentHistoryDialog(props: AgentHistoryDialogProps & { portalContainer?: HTMLElement | null }) {
 const { appearance, activePersonaId, agentHistory } = props
   const agentHistoryDialogOpen = agentHistory.open
   const setAgentHistoryDialogOpen = agentHistory.onOpenChange
@@ -43,8 +43,9 @@ const { appearance, activePersonaId, agentHistory } = props
     <Dialog
       open={agentHistoryDialogOpen}
       onOpenChange={agentHistory.onOpenChange}
+      modal={props.portalContainer == null}
     >
-      <DialogContent className="max-w-[960px]">
+      <DialogContent className="max-w-[960px]" container={props.portalContainer}>
         <DialogTitle>Agent run debug</DialogTitle>
         <DialogDescription className="mb-3">
           Latest saved run for this persona: tool/iteration trace and the system prompt plus messages

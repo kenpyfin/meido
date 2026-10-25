@@ -178,6 +178,7 @@ type ThreadPaneUiContextValue = {
   hostPersonaId?: number | null
   composerNotice?: ComposerNotice | null
   rewrittenMessages?: Record<string, { original: string; rewritten: string }>
+  autoFocusComposer?: boolean
 }
 
 const ThreadPaneUiContext = React.createContext<ThreadPaneUiContextValue>({
@@ -205,6 +206,7 @@ const ThreadPaneUiContext = React.createContext<ThreadPaneUiContextValue>({
   hostPersonaId: null,
   composerNotice: null,
   rewrittenMessages: undefined,
+  autoFocusComposer: true,
 })
 
 function ComposerQuotePreview() {
@@ -1101,7 +1103,15 @@ function syncMentionMirror(area: HTMLTextAreaElement, mirror: HTMLDivElement) {
   mirror.scrollTop = area.scrollTop
 }
 
-function MentionComposerInput({ text, ranges }: { text: string; ranges: GuestMentionRange[] }) {
+function MentionComposerInput({
+  text,
+  ranges,
+  autoFocus = true,
+}: {
+  text: string
+  ranges: GuestMentionRange[]
+  autoFocus?: boolean
+}) {
   const mirrorRef = React.useRef<HTMLDivElement>(null)
   const areaRef = React.useRef<HTMLTextAreaElement>(null)
 
@@ -1123,7 +1133,7 @@ function MentionComposerInput({ text, ranges }: { text: string; ranges: GuestMen
       </div>
       <Composer.Input
         ref={areaRef}
-        autoFocus
+        autoFocus={autoFocus}
         unstable_focusOnScrollToBottom={false}
         onScroll={(event) => {
           const mirror = mirrorRef.current
@@ -1143,6 +1153,7 @@ function DraftAwareComposer() {
     mentionPersonas,
     hostPersonaId,
     composerNotice,
+    autoFocusComposer,
   } = React.useContext(ThreadPaneUiContext)
   const aui = useAui()
   const composerText = useAuiState(({ composer }) => composer.text)
@@ -1244,7 +1255,7 @@ function DraftAwareComposer() {
       <Composer.Root>
         <Composer.Attachments />
         <Composer.AddAttachment />
-        <MentionComposerInput text={composerText} ranges={parsed.ranges} />
+        <MentionComposerInput text={composerText} ranges={parsed.ranges} autoFocus={autoFocusComposer} />
         <Composer.Action />
       </Composer.Root>
       {uploadHint ? (
@@ -1474,6 +1485,7 @@ export const ThreadPane = React.memo(function ThreadPane({
       hostPersonaId,
       composerNotice,
       rewrittenMessages,
+      autoFocusComposer: !suppressAutoScroll,
     }),
     [
       activeSubthreadMessageId,
@@ -1496,6 +1508,7 @@ export const ThreadPane = React.memo(function ThreadPane({
       hostPersonaId,
       composerNotice,
       rewrittenMessages,
+      suppressAutoScroll,
       onToggleBookmark,
       pendingReply,
       topicStarts,
@@ -1666,12 +1679,18 @@ export const ThreadPane = React.memo(function ThreadPane({
           >
             {focusSlot ? (
               <div className="min-h-0 flex-1 overflow-hidden">{focusSlot}</div>
-            ) : historyLoading ? (
+            ) : null}
+            {historyLoading && !focusSlot ? (
               <ThreadHistorySkeleton />
             ) : (
             <ThreadPrimitive.Viewport
               ref={bindThreadViewport}
-              className="aui-thread-viewport mc-thread-viewport"
+              className={
+                focusSlot
+                  ? 'aui-thread-viewport mc-thread-viewport hidden'
+                  : 'aui-thread-viewport mc-thread-viewport'
+              }
+              style={focusSlot ? { display: 'none' } : undefined}
               autoScroll={suppressScroll ? false : undefined}
               scrollToBottomOnInitialize={false}
               scrollToBottomOnRunStart={suppressScroll ? false : undefined}

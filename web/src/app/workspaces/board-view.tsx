@@ -43,6 +43,8 @@ type Props = {
   onOpenPersona?: (personaId: number, sessionId: string | null) => void
   focusTodoId?: number | null
   onFocusTodoHandled?: () => void
+  /** Static cards for a public example. Skips the board API. */
+  fixtureItems?: PersonaTodo[]
 }
 
 function personaName(personas: Persona[], id: number | null | undefined): string {
@@ -101,6 +103,7 @@ export function BoardView({
   onOpenPersona,
   focusTodoId = null,
   onFocusTodoHandled,
+  fixtureItems,
 }: Props) {
   const [items, setItems] = useState<PersonaTodo[]>([])
   const [proposals, setProposals] = useState<Proposal[]>([])
@@ -118,6 +121,12 @@ export function BoardView({
   const [titleDraft, setTitleDraft] = useState('')
 
   const load = useCallback(async () => {
+    if (fixtureItems) {
+      setItems(fixtureItems)
+      setProposals([])
+      setReady(true)
+      return
+    }
     if (chatId == null) return
     const query = new URLSearchParams({ chat_id: String(chatId), status: 'all' })
     const [board, pending] = await Promise.all([
@@ -127,7 +136,7 @@ export function BoardView({
     setItems(Array.isArray(board.todos) ? board.todos : [])
     setProposals(Array.isArray(pending.proposals) ? pending.proposals : [])
     setReady(true)
-  }, [chatId])
+  }, [chatId, fixtureItems])
 
   useEffect(() => {
     void load().catch((err: unknown) => {
@@ -327,7 +336,7 @@ export function BoardView({
     setSelectedId(null)
   }
 
-  if (chatId == null) {
+  if (chatId == null && fixtureItems == null) {
     return <p className="p-4 text-sm text-[color:var(--mc-text-muted)]">Open a chat to use the board.</p>
   }
 

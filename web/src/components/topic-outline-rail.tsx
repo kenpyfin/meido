@@ -561,8 +561,17 @@ export function TopicOutlineRail({
 
   React.useEffect(() => {
     if (!activeTopicId || !rootRef.current) return
+    const tree = rootRef.current.querySelector('.mc-topic-rail-tree')
     const el = rootRef.current.querySelector(`[data-topic-id="${CSS.escape(activeTopicId)}"]`)
-    if (el instanceof HTMLElement) el.scrollIntoView({ block: 'nearest' })
+    if (tree instanceof HTMLElement && el instanceof HTMLElement) {
+      const treeRect = tree.getBoundingClientRect()
+      const elRect = el.getBoundingClientRect()
+      if (elRect.top < treeRect.top) {
+        tree.scrollTop += elRect.top - treeRect.top
+      } else if (elRect.bottom > treeRect.bottom) {
+        tree.scrollTop += elRect.bottom - treeRect.bottom
+      }
+    }
   }, [activeTopicId])
 
   const toggleCollapsed = () => {

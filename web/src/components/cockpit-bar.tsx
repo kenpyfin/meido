@@ -70,11 +70,13 @@ export type CockpitBarProps = {
   /** Controlled expand state. */
   expanded?: boolean
   onExpandedChange?: (expanded: boolean) => void
+  /** Force desktop inline dropdown layout inside embedded stage frames. */
+  forceDesktop?: boolean
 }
 
 /**
  * Session status panel: queue, background jobs, setup readiness, operator memo, bookmarks.
- * On a phone the service briefing sits at the top of this sheet. Desktop keeps BulletinStrip.
+ * On a phone the service briefing sits at the top of this sheet. Desktop uses BulletinStrip.
  */
 export const CockpitBar = React.memo(function CockpitBar({
   statusText,
@@ -93,6 +95,7 @@ export const CockpitBar = React.memo(function CockpitBar({
   onBulletinStatus,
   expanded: expandedControlled,
   onExpandedChange,
+  forceDesktop = false,
 }: CockpitBarProps) {
   const [expandedInternal, setExpandedInternal] = useState(false)
   const expanded = expandedControlled ?? expandedInternal
@@ -109,7 +112,7 @@ export const CockpitBar = React.memo(function CockpitBar({
   const [clearMemoOpen, setClearMemoOpen] = useState(false)
   const expandedRootRef = useRef<HTMLDivElement | null>(null)
   const panelId = useId()
-  const isMobile = useIsMobile()
+  const isMobile = useIsMobile() && !forceDesktop
   const pending = queueLane?.pending ?? 0
   const oldestWaitMs = queueLane?.oldest_wait_ms ?? 0
   const queueError = queueLane?.last_error

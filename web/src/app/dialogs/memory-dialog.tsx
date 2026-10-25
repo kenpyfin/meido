@@ -6,7 +6,7 @@ import React from 'react'
 
 import type { MemoryDialogProps } from './types'
 
-export function MemoryDialog(props: MemoryDialogProps) {
+export function MemoryDialog(props: MemoryDialogProps & { portalContainer?: HTMLElement | null }) {
 const { appearance, activePersonaId, memory } = props
   const memoryDialogOpen = memory.open
   const setMemoryDialogOpen = memory.onOpenChange
@@ -24,8 +24,9 @@ const { appearance, activePersonaId, memory } = props
     <Dialog
       open={memoryDialogOpen}
       onOpenChange={memory.onOpenChange}
+      modal={props.portalContainer == null}
     >
-      <DialogContent className="max-w-[900px]">
+      <DialogContent className="max-w-[900px]" container={props.portalContainer}>
         <DialogTitle>Persona memory</DialogTitle>
         <DialogDescription className="mb-3">
           Edit this persona’s tiered memory file. Memory is context, not a task queue.

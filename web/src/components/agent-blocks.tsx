@@ -119,6 +119,7 @@ export function AgentToolCallBlock(props: ToolCallMessagePartProps) {
   return (
     <CollapsibleBlock
       title={props.toolName}
+      defaultOpen={result.default_open === true}
       badge={
         <Badge
           variant={state === 'error' ? 'destructive' : state === 'running' ? 'secondary' : 'outline'}
