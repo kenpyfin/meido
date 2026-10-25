@@ -282,6 +282,12 @@ export type ArtifactsDialogProps = {
   chatId: number | null
   activePersonaId: number | null
   artifacts: AppDialogsArtifactsProps
+  /** Static library page for a public example. Skips the artifacts API. */
+  fixturePage?: {
+    artifacts: import('../../types').ArtifactItem[]
+    next_cursor: string | null
+    indexing: boolean
+  }
 }
 
 export type MemoryDialogProps = {

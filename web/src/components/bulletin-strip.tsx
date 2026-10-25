@@ -13,6 +13,8 @@ export type BulletinStripProps = {
   onToggleCockpit?: () => void
   /** When true, hide the strip-side cockpit launcher (mobile header already has one). */
   hideCockpitLauncher?: boolean
+  /** Force desktop layout inside embedded stage frames. */
+  forceDesktop?: boolean
 }
 
 function bulletinFullText(focus: PersonaBulletinFocus | null): string {
@@ -26,14 +28,16 @@ export const BulletinStrip = React.memo(function BulletinStrip({
   cockpitExpanded = false,
   onToggleCockpit,
   hideCockpitLauncher = false,
+  forceDesktop = false,
 }: BulletinStripProps) {
   const [desktopExpanded, setDesktopExpanded] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
-  const [isMobile, setIsMobile] = useState(false)
+  const [isMobileState, setIsMobileState] = useState(false)
+  const isMobile = isMobileState && !forceDesktop
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 767px)')
-    const sync = () => setIsMobile(mq.matches)
+    const sync = () => setIsMobileState(mq.matches)
     sync()
     mq.addEventListener('change', sync)
     return () => mq.removeEventListener('change', sync)

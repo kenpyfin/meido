@@ -9,7 +9,7 @@ import { useIsMobile } from '@/lib/use-is-mobile'
 import type { SchedulesDialogProps } from './types'
 import { ScheduleRunsPanel } from './schedule-runs-panel'
 
-export function SchedulesDialog(props: SchedulesDialogProps) {
+export function SchedulesDialog(props: SchedulesDialogProps & { portalContainer?: HTMLElement | null }) {
   const { appearance, api, chatId, activePersonaId, personas, schedules } = props
   const [view, setView] = React.useState<'tasks' | 'runs'>('tasks')
   const schedulesDialogOpen = schedules.open
@@ -31,7 +31,7 @@ export function SchedulesDialog(props: SchedulesDialogProps) {
   const createSchedule = schedules.createSchedule
   const updateSchedule = schedules.updateSchedule
   const openScheduleDetail = schedules.openDetail
-  const mobile = useIsMobile()
+  const mobile = useIsMobile() && props.portalContainer == null
 
   const borderStyle =
     appearance === 'dark'
@@ -41,8 +41,8 @@ export function SchedulesDialog(props: SchedulesDialogProps) {
     appearance === 'dark' ? { borderColor: 'var(--mc-border-soft)' } : { borderColor: 'var(--gray-6)' }
 
   return (
-    <Dialog open={schedulesDialogOpen} onOpenChange={(open) => setSchedulesDialogOpen(open)}>
-      <DialogContent className="flex w-[min(96vw,920px)] max-w-[920px] flex-col gap-3 overflow-hidden p-4 sm:max-w-[920px]">
+    <Dialog open={schedulesDialogOpen} onOpenChange={(open) => setSchedulesDialogOpen(open)} modal={props.portalContainer == null}>
+      <DialogContent className="flex w-[min(96vw,920px)] max-w-[920px] flex-col gap-3 overflow-hidden p-4 sm:max-w-[920px]" container={props.portalContainer}>
           <DialogTitle>Schedules</DialogTitle>
           <DialogDescription>
             Create and manage scheduled prompts for this chat.

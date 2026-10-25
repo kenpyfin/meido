@@ -152,17 +152,23 @@ function indexEntries(engineMark: 'Missing' | undefined): LedgerIndexEntry[] {
   })
 }
 
-export function PersonaDialog({ api, activePersonaId, personas, persona }: PersonaDialogProps) {
+export function PersonaDialog({
+  api,
+  activePersonaId,
+  personas,
+  persona,
+  portalContainer,
+}: PersonaDialogProps & { portalContainer?: HTMLElement | null }) {
   const personaName = personas.find((item) => item.id === activePersonaId)?.name ?? null
   const onCreatePersona = persona.onCreatePersona
   const onRenamePersona = persona.onRenamePersona
   const onDeletePersona = persona.onDeletePersona
-  const mobile = useIsMobile()
+  const mobile = useIsMobile() && portalContainer == null
   const page = persona.page
 
   return (
-    <Dialog open={persona.open} onOpenChange={persona.onOpenChange}>
-      <DialogContent className="mc-ledger-dialog max-w-[1040px]">
+    <Dialog open={persona.open} onOpenChange={persona.onOpenChange} modal={portalContainer == null}>
+      <DialogContent className="mc-ledger-dialog max-w-[1040px]" container={portalContainer}>
         <LedgerDialogHeader
           eyebrow="Attendant dossier"
           title={personaName ?? 'Persona'}

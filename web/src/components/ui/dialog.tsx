@@ -51,15 +51,40 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  container,
+  onOpenAutoFocus,
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
+  /** Mount the dialog inside this element. Omit to portal to document.body. */
+  container?: HTMLElement | null
 }) {
+  // An embedded example passes `container` so the dialog stays in its frame.
+  // DialogOverlay always mounts RemoveScroll, which sets overflow:hidden !important
+  // on the document after page CSS and freezes the marketing page.
+  const embedded = container != null
   return (
-    <DialogPortal>
-      <DialogOverlay />
+    <DialogPortal container={container ?? undefined}>
+      {embedded ? (
+        <div
+          data-slot="dialog-overlay"
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 z-40 bg-black/60 backdrop-blur-[2px]"
+        />
+      ) : (
+        <DialogOverlay />
+      )}
       <DialogPrimitive.Content
         data-slot="dialog-content"
+        onOpenAutoFocus={(e) => {
+          if (embedded) e.preventDefault()
+          onOpenAutoFocus?.(e)
+        }}
+        onCloseAutoFocus={(e) => {
+          if (embedded) e.preventDefault()
+          onCloseAutoFocus?.(e)
+        }}
         className={cn(
           "fixed top-1/2 left-1/2 z-50 grid w-full max-h-[min(90dvh,900px)] max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 overflow-y-auto overscroll-contain rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className

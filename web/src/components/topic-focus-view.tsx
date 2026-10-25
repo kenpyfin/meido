@@ -59,7 +59,11 @@ export function TopicFocusView({
     if (highlightMessageId && messageSelector(highlightMessageId)) {
       const node = root.querySelector(messageSelector(highlightMessageId) as string)
       if (node instanceof HTMLElement) {
-        node.scrollIntoView({ block: 'center' })
+        const rootRect = root.getBoundingClientRect()
+        const nodeRect = node.getBoundingClientRect()
+        const target =
+          root.scrollTop + (nodeRect.top - rootRect.top) - root.clientHeight / 2 + nodeRect.height / 2
+        root.scrollTop = Math.max(0, target)
         return
       }
     }

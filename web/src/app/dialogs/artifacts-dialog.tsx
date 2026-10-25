@@ -21,15 +21,15 @@ function trashNote(item: ArtifactItem): string | null {
 type Review = { artifact: ArtifactItem; managed_reclaimable_bytes: number; original_deletable: boolean; original_reclaimable_bytes: number }
 const empty: Page = { artifacts: [], next_cursor: null, indexing: false }
 
-export function ArtifactsDialog({ chatId, activePersonaId, artifacts }: ArtifactsDialogProps) {
-  const [page, setPage] = useState<Page>(empty)
+export function ArtifactsDialog({ chatId, activePersonaId, artifacts, fixturePage, portalContainer }: ArtifactsDialogProps & { portalContainer?: HTMLElement | null }) {
+  const [page, setPage] = useState<Page>(fixturePage ?? empty)
   const [q, setQ] = useState('')
   const [kind, setKind] = useState('all')
   const [status, setStatus] = useState('active')
   const [before, setBefore] = useState('')
   const [job, setJob] = useState('')
   const [cursors, setCursors] = useState<string[]>([''])
-  const [selected, setSelected] = useState<ArtifactItem | null>(null)
+  const [selected, setSelected] = useState<ArtifactItem | null>(fixturePage?.artifacts[0] ?? null)
   const [checked, setChecked] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -38,17 +38,18 @@ export function ArtifactsDialog({ chatId, activePersonaId, artifacts }: Artifact
   const [deleteOriginal, setDeleteOriginal] = useState<Set<string>>(new Set())
   const [mutation, setMutation] = useState(false)
   const [mobileDetail, setMobileDetail] = useState(false)
-  const mobile = useIsMobile()
+  const mobile = useIsMobile() && portalContainer == null
   const cursor = cursors[cursors.length - 1]
   const refresh = () => setRevision(v => v + 1)
   useEffect(() => {
-    setCursors(['']); setSelected(null); setChecked(new Set()); setPage(empty); setReviews(null); setMobileDetail(false)
-  }, [chatId, activePersonaId, q, kind, status, before, job])
+    setCursors(['']); setSelected(fixturePage?.artifacts[0] ?? null); setChecked(new Set()); setReviews(null); setMobileDetail(false)
+    setPage(fixturePage ?? empty)
+  }, [chatId, activePersonaId, q, kind, status, before, job, fixturePage])
   useEffect(() => {
     if (!artifacts.open) setMobileDetail(false)
   }, [artifacts.open])
   useEffect(() => {
-    if (!artifacts.open || chatId == null || activePersonaId == null) return
+    if (fixturePage || !artifacts.open || chatId == null || activePersonaId == null) return
     const controller = new AbortController()
     const timer = setTimeout(async () => {
       setBusy(true); setError('')
@@ -68,7 +69,7 @@ export function ArtifactsDialog({ chatId, activePersonaId, artifacts }: Artifact
     return () => { clearTimeout(timer); controller.abort() }
   }, [artifacts.open, chatId, activePersonaId, q, kind, status, before, job, cursor, revision])
   useEffect(() => {
-    if (!artifacts.open || reviews || mutation) return
+    if (fixturePage || !artifacts.open || reviews || mutation) return
     const timer = setInterval(refresh, page.indexing ? 2500 : 15000)
     return () => clearInterval(timer)
   }, [artifacts.open, page.indexing, reviews, mutation])
@@ -119,8 +120,8 @@ export function ArtifactsDialog({ chatId, activePersonaId, artifacts }: Artifact
       <ArtifactPreview key={`${selected.id}:${selected.status}`} item={selected} />
     </>
   ) : <p className="text-muted-foreground">Select a file to preview.</p>
-  return <Dialog open={artifacts.open} onOpenChange={artifacts.onOpenChange}>
-    <DialogContent className="w-[96vw] max-w-[1400px] h-[90vh] flex flex-col overflow-hidden">
+  return <Dialog open={artifacts.open} onOpenChange={artifacts.onOpenChange} modal={portalContainer == null}>
+    <DialogContent className="w-[96vw] max-w-[1400px] h-[90vh] flex flex-col overflow-hidden" container={portalContainer}>
       <DialogTitle>{phoneDetail ? (selected?.name ?? 'File') : 'Artifact library'}</DialogTitle>
       {phoneDetail ? (
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto">

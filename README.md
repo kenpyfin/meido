@@ -4,7 +4,7 @@
 
 <h1 align="center">Meido</h1>
 
-<p align="center"><strong>A personal agent operating system built beyond single-thread chatbots.</strong></p>
+<p align="center"><strong>The chat never starts over.</strong></p>
 
 <p align="center">
   <a href="README.md">English</a> ·
@@ -12,58 +12,184 @@
   <a href="README.ja.md">日本語</a>
 </p>
 
-Meido gives personal agents continuity: what matters now, what happened before, what your
-knowledge base knows, and which operating procedures must govern the next action. Instead of
-isolated prompt-and-response sessions, it combines multi-dimensional context management,
-durable execution, and one operator-controlled runtime.
+One conversation, kept alive by multi-dimensional context: three-tier memory, MemPalace recall,
+a service briefing, and an Obsidian vault. One Rust runtime carries that conversation across the
+web and chat, through scheduled jobs, with SOP guardrails and a history you can trace.
 
-One Rust runtime orchestrates **40+ modular skills**, **35+ MCP tools**, scheduled jobs, and
-multiple agent engines across the web and chat. Every channel enters the same agent path, so
-memory, permissions, safety policy, and traceability stay consistent.
+[Keep the chat going →](#quick-start)
 
-## Why Meido
+<p align="center">
+  <img src="assets/meido-desk.jpg" alt="The Meido desk: one transcript, topics beside it, and the service briefing above the thread" width="920">
+</p>
 
-Most assistants reset at the edge of a chat window. Meido maintains a working context system:
+<p align="center"><em>One desk, one transcript. Topics title stretches of that log. The service briefing sits above the thread. Focus and Transcript are two views of the same chat.</em></p>
 
-- **Three-tier session memory** — durable identity and principles, active projects, and recent
-  focus are stored separately so short-term noise does not overwrite long-term context.
-- **MemPalace recall** — semantic retrieval brings back relevant knowledge without stuffing the
-  entire archive into every prompt.
-- **Bulletin focus** — each persona carries a concise, visible statement of what matters now.
-- **Obsidian knowledge vault** — Markdown remains human-readable, portable, and directly
-  editable; Meido can search, index, and work with it.
-- **Traceable agent history** — append-only memory events and run artifacts make agent behavior
-  inspectable instead of opaque.
+## Stop opening a new chat
 
-## One runtime, many surfaces
+A cloud chatbot is a stack of finished sessions. The window fills, the thread dies, and the
+next message starts from zero. You lose the work that was in motion, then spend the new chat
+reconstructing it.
 
-- **Shared agent path** — web, Telegram, Discord, WhatsApp, WeCom, and scheduled jobs resolve to
-  the same orchestration entry point.
-- **Multiple agent engines** — run Classic, Cursor, or Gemini ADK per persona while preserving
-  the same surrounding context and controls.
-- **Modular capability layer** — activate skills only when needed and connect MCP servers without
-  building a separate bot for every workflow.
-- **Scheduled and background work** — recurring jobs and long-running tasks use the same personas,
-  memory, tools, and delivery paths as live conversations.
-- **Web operator cockpit** — manage personas, models, channels, hooks, skills, schedules, memory,
-  and system status from one interface.
+Meido has no session boundary. Context is managed on every turn, so the same conversation
+continues. You do not open a fresh thread to keep going.
 
-## Safety is part of the operating system
+## How the conversation stays alive
 
-Meido does not treat safety as a prompt suffix. Vault SOPs are injected into agent context,
-tool access is authorized server-side, secrets stay masked and redacted, paths are scoped per
-persona, and consequential work remains reviewable through agent history and artifacts.
+**One thread.** Web, Telegram, Discord, WhatsApp, WeCom, and scheduled jobs enter the same
+conversation. There is no new session to resume, and no second brain per channel.
 
-## Core capabilities
+**Context in layers.** Durable facts, active work, and recent focus stay separate. A long chat
+does not collapse into the last few messages, and a burst of recent detail does not overwrite
+what the work still depends on.
 
-- Local workspace access for files, shell commands, browser work, and repository-aware editing
-- Obsidian vault search, semantic recall, self-indexing, and Markdown-native knowledge
-- Persona-specific memory, models, hooks, skills, permissions, and external paths
-- Multi-persona collaboration, guest turns, a shared board, and background handoffs
-- Provider support for Anthropic, OpenAI, Gemini, local models, and other configured connectors
-- Cross-channel delivery through Web, Telegram, Discord, WhatsApp, and WeCom
-- Cron-style scheduling, background jobs, status tracking, and result delivery
-- Extensible skills and MCP tooling with SOP-enforced operational guardrails
+**Recall on demand.** MemPalace and the Obsidian vault bring back what this turn needs. The
+archive is not pasted into the prompt, and it is not abandoned inside a dead session.
+
+**Focus that moves.** The service briefing and the topic list say what the conversation is doing
+now. Older turns remain part of the history.
+
+## New chat vs. the same chat
+
+**Where a turn begins**
+
+- A typical cloud chatbot opens a session. When you come back, you start another one.
+- Meido continues the conversation you already have.
+
+**When the window fills**
+
+- A typical cloud chatbot ends the thread. The next prompt has no past.
+- Meido trims history to a budget and keeps the rest of the context: tiers, recall, the service briefing, and the vault.
+
+**Where context lives**
+
+- A typical cloud chatbot keeps context inside that session, on someone else's service.
+- Meido keeps it on your machine: persona memory, MemPalace, and a Markdown vault you can read.
+
+**Where you can speak**
+
+- A typical cloud chatbot is one window.
+- Meido is the same chat on the web, Telegram, Discord, WhatsApp, and WeCom.
+
+**Work that outlasts the window**
+
+- A typical cloud chatbot waits until you open it again.
+- Scheduled jobs and background work re-enter the same conversation, with the same persona and
+  tools.
+
+**What you can check later**
+
+- A typical cloud chatbot leaves you the transcript of a closed session.
+- Meido leaves agent history, append-only memory events, and artifacts tied to the run.
+  Tool access is authorized on the server, secrets stay masked, and vault SOPs stay in context.
+
+## Keep the chat going
+
+Install the binary, start Meido, and finish setup in the web UI. [Quick Start](#quick-start).
+
+## How Meido thinks
+
+A turn is assembled, not dumped. Identity, principles, layered memory, the skills you enabled,
+vault operating procedures, and the current task are composed into context. Older history is
+trimmed to a budget. Images are capped. The transcript stays one conversation.
+
+Every surface uses that same path. The web UI, Telegram, Discord, WhatsApp, WeCom, and the
+scheduler each resolve a chat and hand it to one runtime. A channel does not grow its own
+agent.
+
+The engine is a choice. The context is not. Each persona can run the Classic tool loop, Cursor,
+or Gemini ADK. Memory, permissions, hooks, and delivery stay wrapped around that choice.
+
+The chat model is not the background model. A system LLM does quiet work such as topic titles
+and the service briefing. If that pair is missing, the job is skipped. It does not silently borrow the
+persona's chat model.
+
+Work has a procedure. Vault SOPs are part of context. Tools are authorized on the server.
+Secrets stay masked. Paths are scoped per persona. A finished turn leaves history and artifacts
+you can inspect.
+
+## What you work with
+
+### Operator desk
+
+The web cockpit is the place you run Meido. A setup wizard opens until the workspace, vault,
+a model, the system LLM, MemPalace, and the managed browser are in place. Settings and the
+Persona page edit the rest. `.env` in the working directory is the bootstrap file. Workspace,
+bind address, and vault path changes need a restart. API keys and runtime toggles apply when
+you save them. On macOS and Linux, an optional login service starts Meido at login.
+
+### Personas
+
+A persona has a name, an engine, a model, its own memory, a service briefing, hooks, skills, and
+external paths. Several personas can share a chat. Each one answers with its own context.
+
+### The ongoing chat
+
+The desk is the conversation. Personas, groups, and the board sit in the sidebar. The open
+persona keeps one transcript. A topic list beside it titles stretches of that same log, and
+filtering titles does not open a new session. Above the thread, the service briefing states
+what this chat is doing now. Focus and Transcript are two views of it. Hide scheduled keeps
+scheduled runs out of the way without removing them. Side chats stay attached to this thread.
+Bookmarks jump back to a message in it.
+
+### Context that keeps it going
+
+Three tiers hold the conversation's context: durable facts, active work, and recent focus.
+MemPalace recalls what is relevant. The service briefing states the current focus above the
+thread. The
+Obsidian vault is Markdown you can read, search, and index. Field-by-field layout of persona
+memory is in [Memory File Spec](#memory-file-spec).
+
+### Collaboration
+
+Type `@Name` to invite another persona. Guests answer as themselves, in the order you tagged
+them, on the host transcript. A group is a separate conversation, with its own transcript.
+The board is four stages: TODO, PLAN, BUILD, and VERIFY. Deploy and Complete sit on every
+card. Today, above the columns, is the live overview of cards, runs, and upcoming work.
+
+### Work that continues
+
+Cron schedules and background jobs use the same personas and tools as a live turn. A long
+shell command can run in the background. A finished run can be attached back into the chat.
+Files published from a run become artifacts tied to that run, not loose paths dropped into a
+reply.
+
+### Engines and models
+
+Classic is the built-in tool loop. Cursor and Gemini ADK are the other engines, chosen per
+persona. Connect Anthropic, OpenAI, Gemini, or another configured provider, or point a persona
+at a local server (`ollama`, `llama`, or `llamacpp`). A persona can keep a local route for
+work that does not need the cloud model.
+
+### What you add
+
+Skills and MCP servers are yours to install on this machine. Meido activates the skills a
+persona is allowed to use, and connects the MCP servers you configured. There is no fixed
+catalog you have to accept.
+
+### Hooks
+
+Checks run around a turn: before it starts, around tool use, before the reply is delivered,
+and after delivery. The built-in set syncs focus, applies scheduler policy, gates skills,
+stops a stuck tool loop, handles a reply that is too dense to drop into chat, and scrubs
+secrets. You can add your own.
+
+### The machine it can touch
+
+Meido works in your workspace: files, a shell, and repository-aware edits. A managed browser
+(Steel) is installed from the setup wizard when you want pages, not just APIs. A new
+workspace receives operating principles from [`defaults/AGENTS.md`](defaults/AGENTS.md). An
+existing principles file is left as it is.
+
+### Channels
+
+The web UI is enough. Telegram, Discord, WhatsApp, and WeCom are optional ways to reach the
+same chat.
+
+### Safety and trace
+
+Tool use is authorized on the server. Each persona has its own path scope. Secrets stay
+masked, and output is redacted. Vault SOPs stay in context. Memory changes are appended to
+an event log. Agent history records how a turn actually ran.
 
 ## Quick Start
 
