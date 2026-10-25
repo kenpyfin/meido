@@ -10,10 +10,8 @@
  *   CURSOR_RUN_CONCURRENCY          default 4
  *   CURSOR_BRIDGE_IDLE_TTL_SECS     idle agent-handle TTL, default 600
  *   CURSOR_BRIDGE_POOL_MAX          max warm agent handles, default 16
- *   CURSOR_SIDECAR_MAX_UPTIME_SECS  idle self-recycle, default 86400
- *   CURSOR_RUN_WAIT_TIMEOUT_MS      hang watchdog for run.wait() AFTER stream ends, default 120000 (not a turn budget)
- *   CURSOR_STREAM_IDLE_TIMEOUT_MS   cancel SDK stream when no events for this long, default 900000 (15 min)
- *   CURSOR_MAX_RUN_WALL_SECS        cancel only /run sessions older than this; keep younger ones, default 1200
+ *   CURSOR_SIDECAR_MAX_UPTIME_SECS  idle process recycle, default 86400 (not a turn budget)
+ *   CURSOR_MAX_RUN_WALL_SECS        fallback turn budget when /run omits timeout_secs, default 3600
  *   CURSOR_RUN_INTERACTIVE_RESERVE  slots reserved for interactive chat (scheduled waits), default 1
  *   CURSOR_SDK_NODE_PREFIX          runtime dir with sdk-shim.mjs + node_modules
  *
@@ -68,9 +66,7 @@ const DEFAULT_RUN_CONCURRENCY = 4;
 const DEFAULT_AGENT_IDLE_TTL_SECS = 600;
 const DEFAULT_AGENT_POOL_MAX = 16;
 const DEFAULT_SIDECAR_MAX_UPTIME_SECS = 86400;
-const DEFAULT_RUN_WAIT_TIMEOUT_MS = 120_000;
-const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 900_000;
-const DEFAULT_MAX_RUN_WALL_SECS = 1200;
+const DEFAULT_MAX_RUN_WALL_SECS = 3600;
 const DEFAULT_RUN_INTERACTIVE_RESERVE = 1;
 const DEFAULT_REAPER_INTERVAL_SECS = 60;
 const UUID_RE =
@@ -80,7 +76,7 @@ const STARTED_AT_MONOTONIC = process.hrtime.bigint();
 const STARTED_AT_UNIX = Date.now() / 1000;
 
 let sdkModule = null;
-/** @type {Map<string, { runKind: string, startedMonotonic: number, lastEventMonotonic: number, cancelFn: (() => Promise<void>)|null }>} */
+/** @type {Map<string, { runKind: string, startedMonotonic: number, wallLimitSecs: number, cancelReason: string|null, cancelFn: (() => Promise<void>)|null }>} */
 const activeRuns = new Map();
 let nextRunSeq = 1;
 let recycleRequested = false;
@@ -144,18 +140,6 @@ function sidecarMaxUptimeSecs() {
   );
 }
 
-function runWaitTimeoutMs() {
-  return envInt("CURSOR_RUN_WAIT_TIMEOUT_MS", DEFAULT_RUN_WAIT_TIMEOUT_MS, 3000);
-}
-
-function streamIdleTimeoutMs() {
-  return envInt(
-    "CURSOR_STREAM_IDLE_TIMEOUT_MS",
-    DEFAULT_STREAM_IDLE_TIMEOUT_MS,
-    60_000,
-  );
-}
-
 function maxRunWallAgeSecs() {
   return envInt("CURSOR_MAX_RUN_WALL_SECS", DEFAULT_MAX_RUN_WALL_SECS, 60);
 }
@@ -186,21 +170,31 @@ function oldestRunAgeSecs() {
   return Math.floor(oldest);
 }
 
-function beginTrackedRun(runKind) {
+function runWallLimitSecs(body) {
+  const raw = Number(body?.timeout_secs);
+  if (Number.isFinite(raw) && raw >= 60) return Math.min(86_400, Math.floor(raw));
+  return maxRunWallAgeSecs();
+}
+
+function beginTrackedRun(runKind, wallLimitSecs) {
   const id = String(nextRunSeq++);
   const now = monotonicNow();
   activeRuns.set(id, {
     runKind,
     startedMonotonic: now,
-    lastEventMonotonic: now,
+    wallLimitSecs: wallLimitSecs || maxRunWallAgeSecs(),
+    cancelReason: null,
     cancelFn: null,
   });
   return id;
 }
 
-function touchRunActivity(runId) {
+function remainingWallMs(runId) {
   const rec = activeRuns.get(runId);
-  if (rec) rec.lastEventMonotonic = monotonicNow();
+  const limit = rec?.wallLimitSecs || maxRunWallAgeSecs();
+  const started = rec?.startedMonotonic ?? monotonicNow();
+  const leftMs = (limit - (monotonicNow() - started)) * 1000;
+  return Math.max(1000, Math.floor(leftMs));
 }
 
 function endTrackedRun(runId) {
@@ -423,9 +417,9 @@ async function waitForRunResult(run, timeoutMs) {
       }),
     ]);
     if (raced.timedOut) {
-      logErr(`run.wait timed out after ${timeoutMs}ms; cancelling`);
+      logErr(`run.wait reached the turn timeout after ${timeoutMs}ms; cancelling`);
       await cancelRun(run);
-      return { status: "finished", result: "", timedOut: true };
+      return { status: "turn_timeout", result: "", timedOut: true };
     }
     const value = raced.value || {};
     return {
@@ -517,23 +511,42 @@ function writeNdjson(res, obj) {
   return res.write(ndjson(obj));
 }
 
-async function nextStreamEventWithIdleTimeout(iter, idleMs) {
-  let timer;
-  try {
-    return await Promise.race([
-      iter.next(),
-      new Promise((_, reject) => {
-        timer = setTimeout(() => {
-          const err = new Error("STREAM_IDLE_TIMEOUT");
-          err.code = "STREAM_IDLE_TIMEOUT";
-          reject(err);
-        }, idleMs);
-        if (typeof timer.unref === "function") timer.unref();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
+function finishIfCancelled(active, textParts) {
+  if (active.cancelReason === "turn_timeout") {
+    return {
+      cancelled: false,
+      status: "turn_timeout",
+      text: joinCursorUtterances(textParts),
+      evict: true,
+    };
   }
+  return { cancelled: true, status: "cancelled", text: "", evict: true };
+}
+
+/** Wake a blocked stream read so a turn-timeout cancel is noticed. Not a second budget. */
+async function nextStreamEvent(iter, active) {
+  while (!active.cancelRequested) {
+    let timer;
+    try {
+      return await Promise.race([
+        iter.next(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            const err = new Error("poll");
+            err.code = "STREAM_POLL";
+            reject(err);
+          }, 5000);
+          if (typeof timer.unref === "function") timer.unref();
+        }),
+      ]);
+    } catch (err) {
+      if (err?.code === "STREAM_POLL") continue;
+      throw err;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  return { done: true };
 }
 
 async function streamAgentTurn(agent, prompt, mcpServers, active, runId) {
@@ -543,43 +556,29 @@ async function streamAgentTurn(agent, prompt, mcpServers, active, runId) {
   if (rec) {
     rec.cancelFn = async () => {
       active.cancelRequested = true;
+      active.cancelReason = rec.cancelReason || active.cancelReason || "cancelled";
       await cancelRun(run);
     };
   }
   try {
     if (active.cancelRequested) {
       await cancelRun(run);
-      return { cancelled: true, status: "cancelled", text: "", evict: true };
+      return finishIfCancelled(active, []);
     }
 
     const textParts = [];
     const stream = typeof run.stream === "function" ? run.stream() : run.messages();
     const streamIter = stream[Symbol.asyncIterator]();
-    const idleMs = streamIdleTimeoutMs();
 
     while (true) {
       if (active.cancelRequested) {
         await cancelRun(run);
-        return { cancelled: true, status: "cancelled", text: "", evict: true };
+        return finishIfCancelled(active, textParts);
       }
-      let result;
-      try {
-        result = await nextStreamEventWithIdleTimeout(streamIter, idleMs);
-        touchRunActivity(runId);
-      } catch (err) {
-        if (err?.code === "STREAM_IDLE_TIMEOUT") {
-          logErr(
-            `stream idle timeout after ${idleMs}ms (runId=${runId}); cancelling`,
-          );
-          await cancelRun(run);
-          return {
-            cancelled: false,
-            status: "idle_timeout",
-            text: joinCursorUtterances(textParts),
-            evict: true,
-          };
-        }
-        throw err;
+      const result = await nextStreamEvent(streamIter, active);
+      if (active.cancelRequested) {
+        await cancelRun(run);
+        return finishIfCancelled(active, textParts);
       }
       if (result.done) break;
       emitStreamEvent(result.value, textParts, active);
@@ -587,13 +586,21 @@ async function streamAgentTurn(agent, prompt, mcpServers, active, runId) {
 
     if (active.cancelRequested) {
       await cancelRun(run);
-      return { cancelled: true, status: "cancelled", text: "", evict: true };
+      return finishIfCancelled(active, textParts);
     }
 
-    const result = await waitForRunResult(run, runWaitTimeoutMs());
+    const result = await waitForRunResult(run, remainingWallMs(runId));
+    if (result.status === "turn_timeout" || result.timedOut) {
+      return {
+        cancelled: false,
+        status: "turn_timeout",
+        text: joinCursorUtterances(textParts),
+        evict: true,
+      };
+    }
     if (active.cancelRequested) {
       await cancelRun(run);
-      return { cancelled: true, status: "cancelled", text: "", evict: true };
+      return finishIfCancelled(active, textParts);
     }
     const status = result.status || "finished";
     const resultText = typeof result.result === "string" ? result.result.trim() : "";
@@ -914,16 +921,13 @@ async function cancelRunsOlderThan(maxAgeSecs) {
 
 async function cancelStuckRuns() {
   const now = monotonicNow();
-  const idleLimitSec = streamIdleTimeoutMs() / 1000;
-  const wallLimitSec = maxRunWallAgeSecs();
   for (const [id, rec] of [...activeRuns.entries()]) {
-    const idleAge = now - rec.lastEventMonotonic;
     const wallAge = now - rec.startedMonotonic;
-    if (idleAge <= idleLimitSec * 1.05 && wallAge < wallLimitSec) {
-      continue;
-    }
+    const limit = rec.wallLimitSecs || maxRunWallAgeSecs();
+    if (wallAge < limit) continue;
+    rec.cancelReason = "turn_timeout";
     logErr(
-      `reaper cancelling stuck run id=${id} kind=${rec.runKind} idle=${idleAge.toFixed(0)}s wall=${wallAge.toFixed(0)}s`,
+      `reaper cancelling run id=${id} kind=${rec.runKind} wall=${wallAge.toFixed(0)}s limit=${limit}s`,
     );
     try {
       if (rec.cancelFn) await rec.cancelFn();
@@ -959,7 +963,10 @@ function tryBeginRun(body) {
   if (scheduled && inFlight >= scheduledCap) {
     return null;
   }
-  return beginTrackedRun(scheduled ? "scheduled" : "interactive");
+  return beginTrackedRun(
+    scheduled ? "scheduled" : "interactive",
+    runWallLimitSecs(body),
+  );
 }
 
 function endRun(runId) {
@@ -1141,6 +1148,7 @@ async function handleRun(req, res) {
 
   const active = {
     cancelRequested: false,
+    cancelReason: null,
     run: null,
     res,
     runId,
@@ -1149,6 +1157,7 @@ async function handleRun(req, res) {
   if (rec) {
     rec.cancelFn = async () => {
       active.cancelRequested = true;
+      active.cancelReason = rec.cancelReason || active.cancelReason || "cancelled";
       await cancelRun(active.run);
     };
   }
@@ -1260,6 +1269,10 @@ async function streamRun(body, active) {
           }
         });
 
+        if (outcome.status === "turn_timeout") {
+          writeNdjson(active.res, { type: "error", message: "Turn timed out" });
+          return;
+        }
         if (outcome.cancelled) {
           writeNdjson(active.res, { type: "error", message: "Run cancelled" });
           return;
@@ -1418,6 +1431,34 @@ async function runSelfTests() {
     if (!activeRuns.has(young)) throw new Error("younger session should remain in flight");
     if (activeRuns.has(old)) throw new Error("old session should be dropped from tracking");
     endTrackedRun(young);
+  }
+  {
+    const shortRun = tryBeginRun({ run_kind: "interactive", timeout_secs: 100 });
+    const longRun = tryBeginRun({ run_kind: "interactive", timeout_secs: 7200 });
+    if (!shortRun || !longRun) throw new Error("per-run turn timeout needs two slots");
+    const shortRec = activeRuns.get(shortRun);
+    const longRec = activeRuns.get(longRun);
+    if (shortRec.wallLimitSecs !== 100 || longRec.wallLimitSecs !== 7200) {
+      throw new Error("timeout_secs should be stored on the run");
+    }
+    shortRec.startedMonotonic -= 150;
+    longRec.startedMonotonic -= 150;
+    let shortCancelled = false;
+    let longCancelled = false;
+    shortRec.cancelFn = async () => {
+      shortCancelled = true;
+    };
+    longRec.cancelFn = async () => {
+      longCancelled = true;
+    };
+    await cancelStuckRuns();
+    if (!shortCancelled || shortRec.cancelReason !== "turn_timeout") {
+      throw new Error("run past its own timeout should be cancelled");
+    }
+    if (longCancelled) throw new Error("longer budget must keep the younger wall age");
+    if (activeRuns.has(shortRun)) throw new Error("expired run should leave the map");
+    if (!activeRuns.has(longRun)) throw new Error("in-budget run should stay");
+    endTrackedRun(longRun);
   }
   const sendOpts = buildSendOptions(null);
   if (!sendOpts.local?.force) {

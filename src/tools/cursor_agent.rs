@@ -51,6 +51,7 @@ impl CursorAgentTool {
         workdir_str: &str,
         model: &str,
         detach: bool,
+        timeout_secs: u64,
         auth: Option<&crate::tools::ToolAuthContext>,
     ) -> ToolResult {
         #[derive(Serialize)]
@@ -75,7 +76,7 @@ impl CursorAgentTool {
         };
         let client = match reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(
-                self.config.cursor_agent_timeout_secs + 10,
+                timeout_secs.saturating_add(10),
             ))
             .build()
         {
@@ -390,6 +391,7 @@ impl Tool for CursorAgentTool {
                     &workdir_str_storage,
                     model,
                     detach,
+                    timeout_secs,
                     auth.as_ref(),
                 )
                 .await;

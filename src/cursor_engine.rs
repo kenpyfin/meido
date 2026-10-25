@@ -45,6 +45,8 @@ struct SidecarRunRequest<'a> {
     mcp_servers: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     run_kind: Option<&'a str>,
+    /// Same budget as `cursor_turn_timeout_secs`. The sidecar stops the run at this age.
+    timeout_secs: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1065,6 +1067,7 @@ async fn invoke_sidecar_turn(
     model_params: Option<&[crate::cursor_engine_config::CursorModelParam]>,
     session_scope: &str,
     run_kind: &str,
+    timeout_secs: u64,
     event_tx: Option<&UnboundedSender<AgentEvent>>,
     cancel: Option<&Arc<AtomicBool>>,
     mcp_servers: Option<serde_json::Value>,
@@ -1079,6 +1082,7 @@ async fn invoke_sidecar_turn(
         model_params,
         mcp_servers: mcp_servers.clone(),
         run_kind: Some(run_kind),
+        timeout_secs,
     };
 
     let response = client
@@ -1309,6 +1313,7 @@ pub async fn run_cursor_engine(
             model_params,
             &session_scope,
             run_kind,
+            timeout_secs,
             event_tx,
             cancel.as_ref(),
             mcp_servers.clone(),

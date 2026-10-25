@@ -10374,10 +10374,10 @@ async fn api_cursor_engine_patch(
     }
     if let Some(secs) = body.timeout_secs {
         cfg.timeout_secs = secs.clamp(60, 86_400);
+    } else if let Some(secs) = body.interactive_timeout_secs {
+        cfg.timeout_secs = secs.clamp(60, 86_400);
     }
-    if let Some(secs) = body.interactive_timeout_secs {
-        cfg.interactive_timeout_secs = secs.clamp(60, 86_400);
-    }
+    cfg.interactive_timeout_secs = cfg.timeout_secs;
     if let Some(enabled) = body.tmux_enabled {
         cfg.tmux_enabled = enabled;
     }

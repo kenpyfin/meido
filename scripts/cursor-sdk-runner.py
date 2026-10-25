@@ -12,7 +12,7 @@ Environment:
   CURSOR_RUN_CONCURRENCY  Max concurrent /run turns (default 4)
   CURSOR_BRIDGE_*  Idle TTL, pool max, orphan grace, launch timeout
   CURSOR_SIDECAR_MAX_UPTIME_SECS  Soft self-recycle when idle (default 86400)
-  CURSOR_RUN_WAIT_TIMEOUT_MS      Hang watchdog for run.wait() after stream (default 120000; not a turn budget)
+  CURSOR_RUN_WAIT_TIMEOUT_MS      Fallback for run.wait() when /run omits timeout_secs (default 120000)
 
 API:
   GET  /health
@@ -131,7 +131,20 @@ def _sidecar_max_uptime_secs() -> int:
         return DEFAULT_SIDECAR_MAX_UPTIME_SECS
 
 
-def _run_wait_timeout_secs() -> float:
+def _body_turn_timeout_secs(body: dict[str, Any]) -> float | None:
+    """Turn budget from Meido. The Node runner enforces the same number on the stream."""
+    try:
+        n = int(body.get("timeout_secs"))
+    except (TypeError, ValueError):
+        return None
+    if n < 60:
+        return None
+    return float(min(n, 86_400))
+
+
+def _run_wait_timeout_secs(turn_secs: float | None = None) -> float:
+    if turn_secs is not None and turn_secs >= 60:
+        return turn_secs
     raw = os.environ.get("CURSOR_RUN_WAIT_TIMEOUT_MS", "").strip()
     if not raw:
         n = DEFAULT_RUN_WAIT_TIMEOUT_MS
@@ -931,7 +944,12 @@ async def _stream_run(
                 if active_turn_slot is not None:
                     active_turn_slot[0] = active_turn
                 async for line in _stream_agent_turn_async(
-                    agent, prompt, resume_id, mcp_servers, active_turn
+                    agent,
+                    prompt,
+                    resume_id,
+                    mcp_servers,
+                    active_turn,
+                    _body_turn_timeout_secs(body),
                 ):
                     yield line
                 return
@@ -1030,6 +1048,7 @@ async def _stream_agent_turn_async(
     resume_id: str | None,
     mcp_servers: dict[str, Any] | None,
     active: _ActiveTurn,
+    turn_timeout_secs: float | None = None,
 ) -> AsyncIterator[str]:
     """Run sync `_stream_agent_turn` in a worker thread; yield NDJSON on the loop."""
     queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
@@ -1038,7 +1057,7 @@ async def _stream_agent_turn_async(
     def producer() -> None:
         try:
             for line in _stream_agent_turn(
-                agent, prompt, resume_id, mcp_servers, active
+                agent, prompt, resume_id, mcp_servers, active, turn_timeout_secs
             ):
                 asyncio.run_coroutine_threadsafe(queue.put(("line", line)), loop).result()
             asyncio.run_coroutine_threadsafe(queue.put(("end", None)), loop).result()
@@ -1072,6 +1091,7 @@ def _stream_agent_turn(
     resume_id: str | None,
     mcp_servers: dict[str, Any] | None,
     active: _ActiveTurn | None = None,
+    turn_timeout_secs: float | None = None,
 ):
     final_text_parts: list[str] = []
     status = "error"
@@ -1177,7 +1197,7 @@ def _stream_agent_turn(
             ) + "\n"
             return
 
-    result = _wait_sdk_run(run, _run_wait_timeout_secs())
+    result = _wait_sdk_run(run, _run_wait_timeout_secs(turn_timeout_secs))
     if active is not None:
         with active.lock:
             if active.cancel_requested:

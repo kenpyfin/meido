@@ -74,7 +74,8 @@ pub struct CursorEngineSettings {
     pub cli_model: String,
     pub cli_runner_url: String,
     pub timeout_secs: u64,
-    /// Wall-clock budget for interactive Cursor turns (scheduled/background use `timeout_secs`).
+    /// Stored equal to `timeout_secs`. Older rows may still hold a separate chat budget;
+    /// `load_from_db` folds the two into one number.
     pub interactive_timeout_secs: u64,
     pub tmux_enabled: bool,
     /// Expose bot ToolRegistry to Cursor via loopback MCP (default on).
@@ -98,7 +99,7 @@ impl Default for CursorEngineSettings {
             cli_model: String::new(),
             cli_runner_url: String::new(),
             timeout_secs: 3600,
-            interactive_timeout_secs: 900,
+            interactive_timeout_secs: 3600,
             tmux_enabled: true,
             mcp_tools_enabled: true,
             mcp_expose_send_message: false,
@@ -108,8 +109,15 @@ impl Default for CursorEngineSettings {
     }
 }
 
-fn default_interactive_timeout_secs() -> u64 {
-    900
+/// One Cursor turn budget. A legacy interactive value that is longer than
+/// `timeout_secs` is kept, then both fields store that single number.
+pub fn fold_turn_timeout(settings: &mut CursorEngineSettings) {
+    let turn = settings
+        .timeout_secs
+        .max(settings.interactive_timeout_secs)
+        .clamp(60, 86_400);
+    settings.timeout_secs = turn;
+    settings.interactive_timeout_secs = turn;
 }
 
 impl CursorEngineSettings {
@@ -136,7 +144,7 @@ impl CursorEngineSettings {
                 .trim()
                 .to_string(),
             timeout_secs: config.cursor_agent_timeout_secs,
-            interactive_timeout_secs: default_interactive_timeout_secs(),
+            interactive_timeout_secs: config.cursor_agent_timeout_secs,
             tmux_enabled: config.cursor_agent_tmux_enabled,
             mcp_tools_enabled: true,
             mcp_expose_send_message: false,
@@ -268,6 +276,7 @@ pub fn load_from_db(
         cfg.sdk_runner_url =
             crate::cursor_sdk_sidecar::default_local_runner_url(env.cursor_sdk_runner_port);
     }
+    fold_turn_timeout(&mut cfg);
 
     Ok(cfg)
 }
@@ -355,18 +364,14 @@ pub fn persist_to_db(
     Ok(())
 }
 
-/// Effective HTTP wall-clock for a Cursor sidecar turn.
+/// Turn budget for every Cursor run: chat, scheduled, background, and the CLI tool.
+/// The sidecar reaper uses the same number (`timeout_secs` on `POST /run`).
 pub fn cursor_turn_timeout_secs(
     settings: &CursorEngineSettings,
-    is_scheduled_task: bool,
-    is_background_job: bool,
+    _is_scheduled_task: bool,
+    _is_background_job: bool,
 ) -> u64 {
-    let max = settings.timeout_secs.max(60);
-    if is_scheduled_task || is_background_job {
-        max
-    } else {
-        settings.interactive_timeout_secs.max(60).min(max)
-    }
+    settings.timeout_secs.max(60)
 }
 
 pub fn cursor_turn_timeout_notice(timeout_secs: u64) -> String {
@@ -646,15 +651,18 @@ mod tests {
     }
 
     #[test]
-    fn cursor_turn_timeout_secs_prefers_interactive_budget() {
-        let cfg = CursorEngineSettings {
-            timeout_secs: 3600,
-            interactive_timeout_secs: 900,
+    fn cursor_turn_timeout_secs_is_one_budget() {
+        let mut cfg = CursorEngineSettings {
+            timeout_secs: 14400,
+            interactive_timeout_secs: 15200,
             ..Default::default()
         };
-        assert_eq!(cursor_turn_timeout_secs(&cfg, false, false), 900);
-        assert_eq!(cursor_turn_timeout_secs(&cfg, true, false), 3600);
-        assert_eq!(cursor_turn_timeout_secs(&cfg, false, true), 3600);
+        fold_turn_timeout(&mut cfg);
+        assert_eq!(cfg.timeout_secs, 15200);
+        assert_eq!(cfg.interactive_timeout_secs, 15200);
+        assert_eq!(cursor_turn_timeout_secs(&cfg, false, false), 15200);
+        assert_eq!(cursor_turn_timeout_secs(&cfg, true, false), 15200);
+        assert_eq!(cursor_turn_timeout_secs(&cfg, false, true), 15200);
     }
 
     #[test]
