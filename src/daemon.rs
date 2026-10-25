@@ -432,6 +432,7 @@ fn candidate_web_ports(web_port: u16) -> Vec<u16> {
 }
 
 /// Inodes of TCP listeners on `ports`, from a `/proc/net/tcp` table.
+#[cfg(any(unix, test))]
 fn listen_inodes_in_proc_net(text: &str, ports: &[u16]) -> Vec<u64> {
     let mut inodes = Vec::new();
     for line in text.lines().skip(1) {
@@ -757,10 +758,9 @@ fn taskkill(pid: u32, force: bool) -> std::io::Result<()> {
     if status.success() {
         Ok(())
     } else {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("taskkill exited with {status}"),
-        ))
+        Err(std::io::Error::other(format!(
+            "taskkill exited with {status}",
+        )))
     }
 }
 

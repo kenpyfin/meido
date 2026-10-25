@@ -377,24 +377,30 @@ pub fn shannon_entropy(value: &str) -> f64 {
 fn redact_known_key_formats(text: &str) -> String {
     use std::sync::OnceLock;
     static RES: OnceLock<Vec<regex::Regex>> = OnceLock::new();
+    // `regex` 1.12 dropped look-around. A leading capture keeps the boundary
+    // character; patterns that fail to compile must not be skipped silently.
     let res = RES.get_or_init(|| {
         [
-            r"(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{20,}",
-            r"(?<![A-Za-z0-9_-])sk-[A-Za-z0-9]{20,}",
-            r"(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{30,}",
-            r"(?<![A-Za-z0-9_-])ghp_[A-Za-z0-9]{20,}",
-            r"(?<![A-Za-z0-9_-])github_pat_[A-Za-z0-9_]{20,}",
-            r"(?<![A-Za-z0-9_-])xox[baprs]-[A-Za-z0-9-]{10,}",
-            r"(?<![A-Za-z0-9_-])crsr_[A-Za-z0-9]{16,}",
-            r"(?<![A-Za-z0-9])[0-9]{8,10}:[A-Za-z0-9_-]{30,}",
+            r"(^|[^A-Za-z0-9_-])(sk-ant-[A-Za-z0-9_-]{20,})",
+            r"(^|[^A-Za-z0-9_-])(sk-[A-Za-z0-9]{20,})",
+            r"(^|[^A-Za-z0-9_-])(AIza[0-9A-Za-z_-]{30,})",
+            r"(^|[^A-Za-z0-9_-])(ghp_[A-Za-z0-9]{20,})",
+            r"(^|[^A-Za-z0-9_-])(github_pat_[A-Za-z0-9_]{20,})",
+            r"(^|[^A-Za-z0-9_-])(xox[baprs]-[A-Za-z0-9-]{10,})",
+            r"(^|[^A-Za-z0-9_-])(crsr_[A-Za-z0-9]{16,})",
+            r"(^|[^A-Za-z0-9])([0-9]{8,10}:[A-Za-z0-9_-]{30,})",
         ]
         .into_iter()
-        .filter_map(|pat| regex::Regex::new(pat).ok())
+        .map(|pat| {
+            regex::Regex::new(pat)
+                .unwrap_or_else(|err| panic!("secret pattern failed to compile: {pat}: {err}"))
+        })
         .collect()
     });
+    let replacement = format!("$1{REDACTED}");
     let mut out = text.to_string();
     for re in res {
-        out = re.replace_all(&out, REDACTED).into_owned();
+        out = re.replace_all(&out, replacement.as_str()).into_owned();
     }
     out
 }

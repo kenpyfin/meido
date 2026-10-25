@@ -180,15 +180,46 @@ fn cursor_fragment_join_needs_space(left: &str, right: &str) -> bool {
     if left.ends_with(char::is_whitespace) {
         return false;
     }
-    // Token continuation such as "hot" + "ify" → "hotify".
-    if left.ends_with(|c: char| c.is_ascii_alphanumeric())
-        && right.chars().next().is_some_and(|c| c.is_ascii_lowercase())
-        && right.chars().count() <= 24
-        && !right.contains('\n')
-    {
+    // Subword continuation such as "hot" + "ify" → "hotify".
+    // A following whole word ("production", "of", "on") keeps its space.
+    if cursor_fragment_is_suffix(left, right) {
         return false;
     }
     true
+}
+
+fn cursor_fragment_is_suffix(left: &str, right: &str) -> bool {
+    if right.contains('\n') || !right.chars().all(|c| c.is_ascii_lowercase()) {
+        return false;
+    }
+    let right_len = right.chars().count();
+    if right_len == 0 || right_len > 4 {
+        return false;
+    }
+    if matches!(
+        right,
+        "a" | "an"
+            | "as"
+            | "at"
+            | "be"
+            | "by"
+            | "if"
+            | "in"
+            | "is"
+            | "it"
+            | "of"
+            | "on"
+            | "or"
+            | "to"
+            | "we"
+    ) {
+        return false;
+    }
+    let last = left
+        .rsplit(|c: char| c.is_whitespace() || matches!(c, '-' | '/' | '(' | '[' | '"' | '\''))
+        .next()
+        .unwrap_or(left);
+    (1..=4).contains(&last.chars().count()) && last.chars().all(|c| c.is_ascii_lowercase())
 }
 
 fn join_cursor_stream_fragments(parts: &[String]) -> String {
@@ -216,7 +247,7 @@ fn cursor_parts_look_like_fragment_stream(parts: &[String]) -> bool {
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
-    if trimmed.len() < 12 {
+    if trimmed.len() < 8 {
         return false;
     }
     let short = trimmed
@@ -235,7 +266,7 @@ fn cursor_text_looks_like_per_word_newlines(text: &str) -> bool {
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .collect();
-    if lines.len() < 12 {
+    if lines.len() < 8 {
         return false;
     }
     let short = lines.iter().filter(|l| l.chars().count() <= 72).count();

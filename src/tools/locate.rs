@@ -91,7 +91,8 @@ fn extract_absolute_path(s: &str) -> Option<PathBuf> {
         return None;
     }
     let path = PathBuf::from(candidate);
-    if path.is_absolute() {
+    // `Path::is_absolute` rejects `/home/...` on Windows. Tier-1 repo lines still use that form.
+    if path.is_absolute() || candidate.starts_with('/') || candidate.starts_with('\\') {
         Some(path)
     } else {
         None

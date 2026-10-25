@@ -275,27 +275,26 @@ fn find_root_is_allowed(raw: &str, allowed_roots: &[PathBuf]) -> bool {
         return false;
     }
     // Relative paths are cwd-scoped (persona tool cwd) — allowed.
-    let path = Path::new(trimmed);
-    if !path.is_absolute()
-        && !trimmed.starts_with('~')
-        && !trimmed.eq_ignore_ascii_case("$home")
-        && !trimmed.to_ascii_lowercase().starts_with("$home/")
-        && !trimmed.to_ascii_lowercase().starts_with("${home}")
-    {
+    // A leading `/` is absolute in the command text even when `Path::is_absolute`
+    // is false on Windows.
+    let rooted = Path::new(trimmed).is_absolute()
+        || trimmed.starts_with('/')
+        || trimmed.starts_with('\\')
+        || trimmed.starts_with('~')
+        || trimmed.eq_ignore_ascii_case("$home")
+        || trimmed.to_ascii_lowercase().starts_with("$home/")
+        || trimmed.to_ascii_lowercase().starts_with("${home}");
+    if !rooted {
         return true;
     }
     if allowed_roots.is_empty() {
         // No registry: keep legacy behavior — only block broad home roots.
         return !is_broad_search_root(trimmed);
     }
-    let abs = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        return true;
-    };
+    let abs = Path::new(trimmed);
     allowed_roots.iter().any(|root| {
         // Find target must be the allowed root or a descendant — not a parent of it.
-        crate::tools::path_under_root(&abs, root)
+        crate::tools::path_under_root(abs, root)
     })
 }
 

@@ -95,6 +95,10 @@ fn set_owner_only_dir(path: &Path) {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
     }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }
 
 fn set_owner_only_file(path: &Path) {
@@ -102,6 +106,10 @@ fn set_owner_only_file(path: &Path) {
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
     }
 }
 

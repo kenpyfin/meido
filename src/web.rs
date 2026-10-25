@@ -1739,15 +1739,19 @@ async fn api_send_stream(
                 }
             });
 
-            match send_and_store_response_with_events(
+            let send_result = send_and_store_response_with_events(
                 state_for_task.clone(),
                 body,
                 Some(&evt_tx),
                 Some(&run_id_for_task),
                 Some(cancel),
             )
-            .await
-            {
+            .await;
+            // Tool events sit on this channel until `forward` drains them.
+            // Publish `done` only after that, or the stream closes first and drops them.
+            drop(evt_tx);
+            let _ = forward.await;
+            match send_result {
                 Ok(resp) => {
                     let v = resp.0;
                     if let Some(err) = v.get("guest_error") {
@@ -1827,8 +1831,6 @@ async fn api_send_stream(
                         .await;
                 }
             }
-            drop(evt_tx);
-            let _ = forward.await;
             info!(
                 target: "web",
                 endpoint = "/api/send_stream",
@@ -2343,6 +2345,8 @@ async fn api_subthread_stream(
                 }
             }
 
+            drop(evt_tx);
+            let _ = forward.await;
             state_for_task
                 .run_hub
                 .publish(
@@ -2356,9 +2360,6 @@ async fn api_subthread_stream(
                     limits.run_history_limit,
                 )
                 .await;
-
-            drop(evt_tx);
-            let _ = forward.await;
             info!(
                 target: "web",
                 endpoint = "/api/subthread_stream",
@@ -12297,7 +12298,7 @@ mod tests {
 
     fn test_llm_from_provider(provider: Arc<dyn LlmProvider>) -> Arc<crate::llm::LlmHandle> {
         let cfg = crate::config::test_config();
-        crate::llm::LlmHandle::from_provider(&cfg, provider)
+        crate::llm::LlmHandle::from_pinned_provider(&cfg, provider)
     }
 
     fn test_state(llm: Arc<crate::llm::LlmHandle>) -> Arc<AppState> {

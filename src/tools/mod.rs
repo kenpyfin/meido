@@ -390,19 +390,65 @@ fn has_persona_scope(auth: Option<&ToolAuthContext>) -> bool {
 
 /// Absolutize a path for prefix checks without requiring the path to exist.
 ///
-/// `canonicalize` fails for missing files and leaves relative paths relative, which
-/// falsely fails `starts_with` against a canonicalized (absolute) allowed root and
-/// surfaces as "Permission denied" instead of not-found.
+/// `canonicalize` fails for missing files. On macOS `/tmp` and `/var` are
+/// symlinks, and on Windows the canonical form adds a `\\?\` prefix, so a
+/// missing file and its existing parent would disagree and `starts_with` would
+/// fail closed. A leading `/` stays a root even where `Path::is_absolute` is
+/// false (Windows).
 pub fn absolutize_for_compare(path: &Path) -> PathBuf {
-    if let Ok(c) = std::fs::canonicalize(path) {
-        return c;
+    if let Some(canonical) = canonicalize_existing_ancestor(path) {
+        return strip_verbatim_path_prefix(canonical);
     }
-    if path.is_absolute() {
+    if path_text_is_rooted(path) {
         return path.to_path_buf();
     }
     std::env::current_dir()
         .map(|cwd| cwd.join(path))
         .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn path_text_is_rooted(path: &Path) -> bool {
+    path.is_absolute()
+        || path.starts_with("/")
+        || path.components().next().is_some_and(|component| {
+            matches!(
+                component,
+                std::path::Component::RootDir | std::path::Component::Prefix(_)
+            )
+        })
+}
+
+fn strip_verbatim_path_prefix(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    let Some(rest) = text.strip_prefix(r"\\?\") else {
+        return path;
+    };
+    if let Some(unc) = rest.strip_prefix(r"UNC\") {
+        return PathBuf::from(format!(r"\\{unc}"));
+    }
+    PathBuf::from(rest.to_string())
+}
+
+fn canonicalize_existing_ancestor(path: &Path) -> Option<PathBuf> {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return Some(canonical);
+    }
+    let mut tail = Vec::new();
+    let mut cursor = path.to_path_buf();
+    while let Some(name) = cursor.file_name().map(|name| name.to_os_string()) {
+        tail.push(name);
+        if !cursor.pop() || cursor.as_os_str().is_empty() {
+            break;
+        }
+        if let Ok(canonical) = std::fs::canonicalize(&cursor) {
+            let mut out = canonical;
+            for part in tail.iter().rev() {
+                out.push(part);
+            }
+            return Some(out);
+        }
+    }
+    None
 }
 
 /// True when `path` is under `root` (both sides absolutized; existence not required).
@@ -613,6 +659,38 @@ pub fn resolve_tool_working_dir_for_auth(
     resolve_tool_working_dir(base_working_dir)
 }
 
+fn same_compare_path(left: &Path, right: &Path) -> bool {
+    absolutize_for_compare(left) == absolutize_for_compare(right)
+}
+
+fn foreign_persona_scope(workspace_root: &Path, auth: &ToolAuthContext, path: &Path) -> bool {
+    let personas = workspace_shared_root(workspace_root).join("personas");
+    if !path_under_root(path, &personas) {
+        return false;
+    }
+    let own = persona_shared_dir(workspace_root, auth.caller_chat_id, auth.caller_persona_id);
+    !path_under_root(path, &own)
+}
+
+fn superseded_local_origin(shared_root: &Path, origin_vault: &Path, path: &Path) -> bool {
+    let local = shared_root.join("ORIGIN");
+    if same_compare_path(&local, origin_vault) {
+        return false;
+    }
+    path_under_root(path, &local)
+}
+
+fn superseded_local_vector_db(shared_root: &Path, auth: &ToolAuthContext, path: &Path) -> bool {
+    let Some(configured) = auth.vector_db_root.as_deref() else {
+        return false;
+    };
+    let local = shared_root.join("vault_db");
+    if same_compare_path(&local, configured) {
+        return false;
+    }
+    path_under_root(path, &local)
+}
+
 pub fn assert_persona_tool_path_allowed(
     workspace_root: &Path,
     resolved_path: &Path,
@@ -692,8 +770,12 @@ pub fn assert_persona_tool_path_allowed_with_memory(
     }
 
     // A data workspace that does not overlap the app checkout is editable by every persona.
+    // Persona folders, a superseded local ORIGIN, and a superseded local vault_db stay isolated.
     if crate::self_repo::workspace_disjoint_from_app(workspace_root)
         && crate::self_repo::is_under_workspace_data(workspace_root, resolved_path)
+        && !foreign_persona_scope(workspace_root, auth, resolved_path)
+        && !superseded_local_origin(&shared_root, origin_vault, resolved_path)
+        && !superseded_local_vector_db(&shared_root, auth, resolved_path)
     {
         return Ok(());
     }

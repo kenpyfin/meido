@@ -154,8 +154,11 @@ pub fn next_backoff_secs(failures: u32) -> u64 {
 
 pub fn sanitize_fts_query(raw: &str) -> String {
     let mut tokens = Vec::new();
-    for raw_token in raw.split_whitespace() {
-        let token = raw_token.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
+    // Split on whitespace and on FTS operators (`:`, `*`) so `bar:baz*` cannot
+    // become a column filter.
+    for token in
+        raw.split(|c: char| c.is_whitespace() || !(c.is_alphanumeric() || c == '_' || c == '-'))
+    {
         if token.is_empty() {
             continue;
         }
