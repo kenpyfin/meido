@@ -1,6 +1,6 @@
 [package]
 name = "meido"
-version = "1.6.2"
+version = "1.6.3"
 edition = "2021"
 description = "Meido - finally a helpful one. Web-first agentic assistant with multi-channel support."
 repository = "https://github.com/kenpyfin/meido"

@@ -3,23 +3,10 @@ import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import type { SidebarMode } from '../app/sidebar-mode'
 import { IconMeidoCrest, IconRibbonBow } from './icons'
 import type { Persona } from '../types'
-
-const PRIMARY_THEME_KEYS = new Set([
-  'meido',
-  'sakura',
-  'matcha',
-  'royal',
-  'lit',
-  'lit-sakura',
-  'lit-matcha',
-  'lit-salon',
-  'lit-amber',
-  'lit-wisteria',
-])
 
 function IconPalette({ className }: { className?: string }) {
   return (
@@ -136,21 +123,8 @@ export const SessionSidebar = React.memo(function SessionSidebar({
 }: SessionSidebarProps) {
   const isDark = appearance === 'dark'
   const [themeMenuOpen, setThemeMenuOpen] = useState(false)
-  const [moreThemesOpen, setMoreThemesOpen] = useState(false)
   const themeMenuRef = useRef<HTMLDivElement | null>(null)
   const themeButtonRef = useRef<HTMLButtonElement | null>(null)
-
-  const { primaryThemes, moreThemes } = useMemo(() => {
-    const primary = uiThemeOptions.filter((t) => PRIMARY_THEME_KEYS.has(t.key))
-    const more = uiThemeOptions.filter((t) => !PRIMARY_THEME_KEYS.has(t.key))
-    return { primaryThemes: primary, moreThemes: more }
-  }, [uiThemeOptions])
-
-  useEffect(() => {
-    if (moreThemes.some((t) => t.key === uiTheme)) {
-      setMoreThemesOpen(true)
-    }
-  }, [uiTheme, moreThemes])
 
   useEffect(() => {
     const onPointerDown = (event: PointerEvent) => {
@@ -229,7 +203,7 @@ export const SessionSidebar = React.memo(function SessionSidebar({
             >
               <span className="px-0.5 text-[11px] font-medium uppercase tracking-wide text-[color:var(--mc-text-muted)]">Theme</span>
               <div className="mt-2 grid grid-cols-2 gap-1">
-                {primaryThemes.map((theme) => (
+                {uiThemeOptions.map((theme) => (
                   <ThemeSwatchButton
                     key={theme.key}
                     theme={theme}
@@ -241,35 +215,6 @@ export const SessionSidebar = React.memo(function SessionSidebar({
                   />
                 ))}
               </div>
-              {moreThemes.length > 0 ? (
-                <div className="mt-2">
-                  <button
-                    type="button"
-                    className="w-full rounded-md px-1 py-1 text-left text-[11px] text-[color:var(--mc-text-muted)] hover:text-[color:var(--mc-text-primary)]"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      setMoreThemesOpen((v) => !v)
-                    }}
-                  >
-                    {moreThemesOpen ? 'Fewer colors' : 'More colors'}
-                  </button>
-                  {moreThemesOpen ? (
-                    <div className="mt-1 grid grid-cols-2 gap-1">
-                      {moreThemes.map((theme) => (
-                        <ThemeSwatchButton
-                          key={theme.key}
-                          theme={theme}
-                          selected={uiTheme === theme.key}
-                          onSelect={() => {
-                            onUiThemeChange(theme.key)
-                            setThemeMenuOpen(false)
-                          }}
-                        />
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
             </div>
           ) : null}
         </div>

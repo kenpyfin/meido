@@ -96,51 +96,20 @@ type Appearance = 'dark' | 'light'
 
 type PendingRun = { runId: string; personaId: number }
 type UiTheme =
-  | 'meido'
-  | 'sakura'
-  | 'matcha'
-  | 'royal'
   | 'lit'
   | 'lit-sakura'
   | 'lit-matcha'
   | 'lit-salon'
   | 'lit-amber'
   | 'lit-wisteria'
-  | 'linear'
-  | 'green'
-  | 'blue'
-  | 'slate'
-  | 'amber'
-  | 'violet'
-  | 'rose'
-  | 'cyan'
-  | 'teal'
-  | 'orange'
-  | 'indigo'
-
 
 const UI_THEME_OPTIONS: { key: UiTheme; label: string; color: string; canvas: string }[] = [
-  { key: 'meido', label: 'Kuro-Meido', color: '#d94f70', canvas: '#060508' },
-  { key: 'sakura', label: 'Sakura Cafe', color: '#f472b6', canvas: '#140b10' },
-  { key: 'matcha', label: 'Matcha Parlor', color: '#4ade80', canvas: '#07120c' },
-  { key: 'royal', label: 'Victorian Parlour', color: '#7aa2f7', canvas: '#070b14' },
   { key: 'lit', label: 'Lit Parlor', color: '#e25b78', canvas: '#0c0a10' },
   { key: 'lit-sakura', label: 'Sakura Gaslight', color: '#f472b6', canvas: '#120a0f' },
   { key: 'lit-matcha', label: 'Matcha Tea Room', color: '#4ade80', canvas: '#08100c' },
   { key: 'lit-salon', label: 'Velvet Salon', color: '#7aa2f7', canvas: '#080b12' },
   { key: 'lit-amber', label: 'Amber Hearth', color: '#f59e42', canvas: '#110c08' },
   { key: 'lit-wisteria', label: 'Wisteria Room', color: '#b48ef7', canvas: '#0d0914' },
-  { key: 'linear', label: 'Linear', color: '#5e6ad2', canvas: '#010102' },
-  { key: 'green', label: 'Green', color: '#34d399', canvas: '#02110d' },
-  { key: 'blue', label: 'Blue', color: '#60a5fa', canvas: '#030b14' },
-  { key: 'slate', label: 'Slate', color: '#94a3b8', canvas: '#0a0f16' },
-  { key: 'amber', label: 'Amber', color: '#fbbf24', canvas: '#140f04' },
-  { key: 'violet', label: 'Violet', color: '#a78bfa', canvas: '#0f0618' },
-  { key: 'rose', label: 'Rose', color: '#fb7185', canvas: '#16080f' },
-  { key: 'cyan', label: 'Cyan', color: '#22d3ee', canvas: '#051317' },
-  { key: 'teal', label: 'Teal', color: '#2dd4bf', canvas: '#041411' },
-  { key: 'orange', label: 'Orange', color: '#fb923c', canvas: '#171006' },
-  { key: 'indigo', label: 'Indigo', color: '#818cf8', canvas: '#080b19' },
 ]
 
 function readAppearance(): Appearance {
@@ -154,7 +123,7 @@ function saveAppearance(value: Appearance): void {
 
 function readUiTheme(): UiTheme {
   const saved = localStorage.getItem('meido_ui_theme') as UiTheme | null
-  return UI_THEME_OPTIONS.some((t) => t.key === saved) ? (saved as UiTheme) : 'meido'
+  return UI_THEME_OPTIONS.some((t) => t.key === saved) ? (saved as UiTheme) : 'lit'
 }
 
 function saveUiTheme(value: UiTheme): void {
