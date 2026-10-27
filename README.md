@@ -6,6 +6,8 @@
 
 <p align="center"><strong>The chat never starts over.</strong></p>
 
+<p align="center">Official site: <a href="https://meido.app">https://meido.app</a></p>
+
 <p align="center">
   <a href="README.md">English</a> ·
   <a href="README.zh-CN.md">简体中文</a> ·

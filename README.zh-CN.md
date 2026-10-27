@@ -6,6 +6,8 @@
 
 <p align="center"><strong>对话不必从头再来。</strong></p>
 
+<p align="center">官方网站：<a href="https://meido.app">https://meido.app</a></p>
+
 <p align="center">
   <a href="README.md">English</a> ·
   <a href="README.zh-CN.md">简体中文</a> ·

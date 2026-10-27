@@ -6,6 +6,8 @@
 
 <p align="center"><strong>チャットは、最初からやり直さない。</strong></p>
 
+<p align="center">公式サイト：<a href="https://meido.app">https://meido.app</a></p>
+
 <p align="center">
   <a href="README.md">English</a> ·
   <a href="README.zh-CN.md">简体中文</a> ·
