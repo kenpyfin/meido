@@ -100,7 +100,6 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
   const [cliModel, setCliModel] = useState('')
   const [cliRunnerUrl, setCliRunnerUrl] = useState('')
   const [timeoutSecs, setTimeoutSecs] = useState('3600')
-  const [interactiveTimeoutSecs, setInteractiveTimeoutSecs] = useState('900')
   const [tmuxEnabled, setTmuxEnabled] = useState(true)
   const [mcpToolsEnabled, setMcpToolsEnabled] = useState(true)
   const [mcpExposeSendMessage, setMcpExposeSendMessage] = useState(false)
@@ -122,7 +121,6 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
       setCliModel(data.cli_model ?? '')
       setCliRunnerUrl(data.cli_runner_url ?? '')
       setTimeoutSecs(String(data.timeout_secs ?? 3600))
-      setInteractiveTimeoutSecs(String(data.interactive_timeout_secs ?? 900))
       setTmuxEnabled(data.tmux_enabled ?? true)
       setMcpToolsEnabled(data.mcp_tools_enabled ?? true)
       setMcpExposeSendMessage(data.mcp_expose_send_message ?? false)
@@ -242,7 +240,6 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
     setSaveNotice(null)
     try {
       const secs = Number.parseInt(timeoutSecs, 10)
-      const interactiveSecs = Number.parseInt(interactiveTimeoutSecs, 10)
       const personaModel = scope !== 'shared'
       const sharedFields = scope !== 'model'
       if (personaModel && activePersonaId == null) {
@@ -274,7 +271,6 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
                 cli_model: cliModel,
                 cli_runner_url: cliRunnerUrl,
                 timeout_secs: Number.isFinite(secs) ? secs : 3600,
-                interactive_timeout_secs: Number.isFinite(interactiveSecs) ? interactiveSecs : 900,
                 tmux_enabled: tmuxEnabled,
                 mcp_tools_enabled: mcpToolsEnabled,
                 mcp_expose_send_message: mcpExposeSendMessage,
@@ -460,17 +456,21 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
               onCheckedChange={setDelegationSlimPrompt}
             />
           </div>
-          <span>
-            Interactive chat turns use the shorter timeout below; scheduled/background jobs use the
-            CLI timeout field.
-          </span>
-          <span>Interactive turn timeout (seconds)</span>
-          <Input
-            placeholder="900"
-            value={interactiveTimeoutSecs}
-            onChange={(e) => setInteractiveTimeoutSecs(e.target.value)}
-          />
         </div>
+      </div>
+
+      <div className="rounded-md border p-3" style={{ borderColor: 'var(--gray-6)' }}>
+        <span className="font-semibold mb-1 block">Turn timeout</span>
+        <span className="mb-2 block">
+          Chat, schedules, background jobs, and the Cursor CLI tool stop at this time.
+          The sidecar uses the same limit. A new value applies on the next turn.
+        </span>
+        <span>Turn timeout (seconds)</span>
+        <Input
+          placeholder="3600"
+          value={timeoutSecs}
+          onChange={(e) => setTimeoutSecs(e.target.value)}
+        />
       </div>
 
       <div className="rounded-md border p-3" style={{ borderColor: 'var(--gray-6)' }}>
@@ -513,11 +513,6 @@ export function SettingsCursorPanel({ api, onError, activePersonaId = null, scop
             placeholder="CLI runner URL (Docker host, optional)"
             value={cliRunnerUrl}
             onChange={(e) => setCliRunnerUrl(e.target.value)}
-          />
-          <Input
-            placeholder="3600"
-            value={timeoutSecs}
-            onChange={(e) => setTimeoutSecs(e.target.value)}
           />
           <div className="flex items-center justify-between gap-3">
             <span>Tmux detach mode</span>

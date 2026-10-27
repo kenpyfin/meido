@@ -22,8 +22,6 @@ use crate::error::FinallyAValueBotError;
 const HEALTH_POLL_INTERVAL_MS: u64 = 250;
 const HEALTH_WAIT_MAX_SECS: u64 = 45;
 const SUPERVISOR_INTERVAL_SECS: u64 = 30;
-/// Cancel individual /run sessions older than this; do not kill the sidecar process.
-const STUCK_RUN_CANCEL_SECS: u64 = 1200;
 const SUPERVISOR_HEALTH_TIMEOUT_MS: u64 = 2_500;
 const SOFT_RECYCLE_WAIT_SECS: u64 = 120;
 const SIDECAR_VENV_DIR_NAME: &str = "cursor-sdk-venv";
@@ -517,36 +515,6 @@ async fn request_soft_recycle(runner_url: &str) -> Result<bool, String> {
     }
 }
 
-/// Cancel sidecar `/run` sessions older than `max_age_secs`. Younger sessions stay.
-/// Never force-kills the Node process.
-async fn request_cancel_old_runs(runner_url: &str, max_age_secs: u64) -> Result<u64, String> {
-    let trimmed = runner_url.trim().trim_end_matches('/');
-    let url = format!("{trimmed}/admin/cancel_old_runs");
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(8))
-        .build()
-        .map_err(|e| e.to_string())?;
-    let resp = client
-        .post(&url)
-        .json(&serde_json::json!({ "max_age_secs": max_age_secs }))
-        .send()
-        .await
-        .map_err(|e| format!("cancel_old_runs request failed: {e}"))?;
-    let status = resp.status();
-    if status.as_u16() == 404 {
-        return Err("cancel_old_runs_unsupported".into());
-    }
-    if !status.is_success() {
-        return Err(format!("cancel_old_runs HTTP {status}"));
-    }
-    let body = resp
-        .json::<serde_json::Value>()
-        .await
-        .unwrap_or_else(|_| serde_json::json!({}));
-    let cancelled = body.get("cancelled").and_then(|v| v.as_u64()).unwrap_or(0);
-    Ok(cancelled)
-}
-
 async fn wait_for_sidecar_gone(runner_url: &str, wait_secs: u64) -> bool {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(wait_secs);
     while tokio::time::Instant::now() < deadline {
@@ -608,20 +576,6 @@ impl SidecarHandle {
                 self.runner_url
             ),
             Err(e) => warn!("Cursor SDK sidecar respawn failed after force recycle: {e}"),
-        }
-    }
-
-    async fn cancel_old_runs(self: &Arc<Self>, max_age_secs: u64) {
-        match request_cancel_old_runs(&self.runner_url, max_age_secs).await {
-            Ok(cancelled) => info!(
-                cancelled,
-                max_age_secs, "Cursor sidecar cancelled old runs; younger sessions kept"
-            ),
-            Err(e) => warn!(
-                error = %e,
-                max_age_secs,
-                "Cursor sidecar cancel-old-runs failed; not force-recycling (would kill younger sessions)"
-            ),
         }
     }
 
@@ -733,7 +687,6 @@ impl SidecarHandle {
 
 async fn supervise_sidecar(handle: Arc<SidecarHandle>) {
     let mut wedged_streak: u8 = 0;
-    let mut stuck_runs_streak: u8 = 0;
     loop {
         tokio::time::sleep(Duration::from_secs(SUPERVISOR_INTERVAL_SECS)).await;
         let health = cursor_engine_config::probe_sidecar_health_with_timeout(
@@ -744,7 +697,6 @@ async fn supervise_sidecar(handle: Arc<SidecarHandle>) {
 
         if !health.reachable {
             wedged_streak = wedged_streak.saturating_add(1);
-            stuck_runs_streak = 0;
             if wedged_streak >= 2 {
                 wedged_streak = 0;
                 handle.force_recycle_and_respawn("wedged_health").await;
@@ -753,22 +705,8 @@ async fn supervise_sidecar(handle: Arc<SidecarHandle>) {
         }
         wedged_streak = 0;
 
-        if health.runs_in_flight > 0 && health.oldest_run_age_secs >= STUCK_RUN_CANCEL_SECS {
-            stuck_runs_streak = stuck_runs_streak.saturating_add(1);
-            if stuck_runs_streak >= 3 {
-                stuck_runs_streak = 0;
-                warn!(
-                    runs_in_flight = health.runs_in_flight,
-                    oldest_run_age_secs = health.oldest_run_age_secs,
-                    max_age_secs = STUCK_RUN_CANCEL_SECS,
-                    "Cursor sidecar stuck runs detected; cancelling old sessions only"
-                );
-                handle.cancel_old_runs(STUCK_RUN_CANCEL_SECS).await;
-                continue;
-            }
-        } else {
-            stuck_runs_streak = 0;
-        }
+        // Turn length is the run's own `timeout_secs`, enforced by the sidecar reaper.
+        // This loop only recycles a wedged or idle process.
 
         let mut soft_reason: Option<&'static str> = None;
         if health.uptime_secs >= handle.ctx.max_uptime_secs && health.runs_in_flight == 0 {
