@@ -1,31 +1,31 @@
-# Kuro-Meido — parlor and service ledger
+# Lit Parlor — parlor and service ledger
 
-Operator cockpit for Meido. Adapted from the Linear-derived canvas (deep surface ladder, hairline borders, one scarce accent) into a Japanese maid parlor: obsidian dress wool, porcelain lace, a claret ribbon, and an antique-brass brooch. This is an application UI, not a marketing page.
+Operator cockpit for Meido. Adapted from the Linear-derived canvas (deep surface ladder, hairline borders, one scarce accent) into a Japanese maid parlor: wool lamp light, porcelain lace, a claret ribbon, and an antique-brass brooch. This is an application UI, not a marketing page.
 
 ---
 version: alpha
-name: Kuro-Meido
-description: "A near-black parlor canvas (#060508) with a warm plum-charcoal surface ladder, porcelain-ivory ink (#f9f6f0), and a single claret ribbon accent (#d94f70). Antique brass (#d4a359) is reserved for active-work highlights. Display type is Cormorant Garamond; body stays Inter. Depth comes from hairline borders and a katyusha lace rule, not drop shadows."
+name: Lit Parlor
+description: "A wool parlor canvas (#0c0a10) with a warm plum-charcoal surface ladder, porcelain-ivory ink (#fbf7f2), and a single claret ribbon accent (#e25b78). Antique brass (#e0b56a) is reserved for active-work highlights. Display type is Cormorant Garamond; body stays Inter. Depth comes from lamp glow, warm shadows, and a katyusha lace rule."
 
 colors:
-  primary: "#d94f70"
+  primary: "#e25b78"
   on-primary: "#1c1619"
   primary-hover: "#e86886"
   primary-focus: "#c23d5e"
-  brass: "#d4a359"
-  ink: "#f9f6f0"
-  ink-muted: "#a89f9e"
+  brass: "#e0b56a"
+  ink: "#fbf7f2"
+  ink-muted: "#b7aea8"
   ink-subtle: "#8f867d"
-  ink-tertiary: "#6e6468"
-  canvas: "#060508"
-  surface-1: "#120f17"
-  surface-2: "#15121b"
+  ink-tertiary: "#8a817c"
+  canvas: "#0c0a10"
+  surface-1: "#16131c"
+  surface-2: "#1e1926"
   surface-3: "#1c1824"
   surface-4: "#241e2e"
-  sidebar: "#0b090f"
-  hairline: "#282130"
-  hairline-strong: "#3d3149"
-  lace: "#3a2a38"
+  sidebar: "#100e15"
+  hairline: "#3a3144"
+  hairline-strong: "#4a4054"
+  lace: "#5a3d4e"
   inverse-canvas: "#fdfbf7"
   inverse-surface-1: "#f5f0e8"
   inverse-surface-2: "#faf6f0"
@@ -250,24 +250,18 @@ Empty thread. Centered crest, display greeting, one line of instruction, then th
 
 ## Theme presets
 
-`data-ui-theme` on `<html>`:
+`data-ui-theme` on `<html>`. The palette menu lists only these six rooms:
 
 | Key | Name | Accent | Dark canvas |
 | --- | --- | --- | --- |
-| `meido` | Kuro-Meido | `#d94f70` | `#060508` (default) |
-| `sakura` | Sakura Cafe | `#f472b6` | `#140b10` |
-| `matcha` | Matcha Parlor | `#4ade80` | `#07120c` |
-| `royal` | Victorian Parlour | `#7aa2f7` | `#070b14` |
-| `lit` | Lit Parlor | `#e25b78` | `#0c0a10` |
+| `lit` | Lit Parlor | `#e25b78` | `#0c0a10` (default) |
 | `lit-sakura` | Sakura Gaslight | `#f472b6` | `#120a0f` |
 | `lit-matcha` | Matcha Tea Room | `#4ade80` | `#08100c` |
 | `lit-salon` | Velvet Salon | `#7aa2f7` | `#080b12` |
 | `lit-amber` | Amber Hearth | `#f59e42` | `#110c08` |
 | `lit-wisteria` | Wisteria Room | `#b48ef7` | `#0d0914` |
 
-`lit` and the five `lit-*` rooms share one dark parlor structure. The crest sits on the sidebar with a transparent background. The composer field is a dark recessed well (`color-mix` of wool and panel) inside a ribbon-tinted tray. Porcelain (`--mc-porcelain`) is only the schedule run-sheet header. Each room sets its own wool, lamp glow, scallop, ribbon, brass, and warm shadow. The assistant apron is `22px 22px 22px 8px`. Warm shadows stay on the apron, the composer tray, and the desktop run sheet. Light mode keeps the shared linen surfaces and retints `--mc-accent` and `--mc-accent-brass`. Kuro-Meido stays the default.
-
-Older presets (`linear`, `green`, `blue`, and the rest) stay available under "More colors". They change accent and, in dark mode, the surface tint. Lace, apron cards, and display type stay.
+All six share one dark parlor structure under `html.dark[data-ui-theme^="lit"]`. The crest sits on the sidebar with a transparent background. The composer field is a dark recessed well (`color-mix` of wool and panel) inside a ribbon-tinted tray. Porcelain (`--mc-porcelain`) is only the schedule run-sheet header. Each room sets its own wool, lamp glow, scallop, ribbon, brass, and warm shadow. The assistant apron is `22px 22px 22px 8px`. Warm shadows stay on the apron, the composer tray, and the desktop run sheet. Light mode keeps the shared linen surfaces and retints `--mc-accent` and `--mc-accent-brass`. Lit Parlor is the default; a saved key that is no longer listed falls back to `lit`.
 
 ## Service principles
 
