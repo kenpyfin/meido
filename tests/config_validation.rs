@@ -32,7 +32,7 @@ fn test_yaml_parse_minimal() {
     // post_deserialize (web-first defaults / local fallback), so the raw
     // parsed value is "" rather than a hardcoded "anthropic".
     assert_eq!(config.llm_provider, "");
-    assert_eq!(config.max_tokens, 8192);
+    assert_eq!(config.max_tokens, 32768);
     assert_eq!(config.max_tool_iterations, 100);
     assert_eq!(config.max_document_size_mb, 100);
     assert_eq!(config.max_history_messages, 50);

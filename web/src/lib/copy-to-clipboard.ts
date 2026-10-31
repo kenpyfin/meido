@@ -1,6 +1,12 @@
-/** Copy text with Clipboard API fallback for non-secure contexts or denied permission. */
-export async function copyTextToClipboard(text: string): Promise<boolean> {
-  const value = text.trim()
+/**
+ * Copy text with Clipboard API fallback for non-secure contexts or denied permission.
+ * Pass `trim: false` for code, where leading indentation matters.
+ */
+export async function copyTextToClipboard(
+  text: string,
+  { trim = true }: { trim?: boolean } = {},
+): Promise<boolean> {
+  const value = trim ? text.trim() : text
   if (!value) return false
 
   if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {

@@ -435,7 +435,7 @@ fn default_config() -> Config {
         api_key: String::new(),
         model: "claude-sonnet-4-5-20250929".into(),
         llm_base_url: None,
-        max_tokens: 8192,
+        max_tokens: crate::config::DEFAULT_MAX_TOKENS,
         max_tool_iterations: 100,
         max_history_messages: 50,
         recent_history_min_user_messages: 2,

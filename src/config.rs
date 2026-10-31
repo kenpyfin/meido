@@ -68,8 +68,13 @@ fn default_api_key() -> String {
 fn default_model() -> String {
     String::new()
 }
+pub const DEFAULT_MAX_TOKENS: u32 = 32768;
+/// Bounds for a saved max-tokens limit (output tokens per model reply, thinking included).
+pub const MAX_TOKENS_MIN: u32 = 1024;
+pub const MAX_TOKENS_MAX: u32 = 131072;
+
 fn default_max_tokens() -> u32 {
-    8192
+    DEFAULT_MAX_TOKENS
 }
 fn default_max_tool_iterations() -> usize {
     100
@@ -2103,7 +2108,7 @@ pub fn test_config() -> Config {
         api_key: "key".into(),
         model: "claude-sonnet-4-5-20250929".into(),
         llm_base_url: None,
-        max_tokens: 8192,
+        max_tokens: DEFAULT_MAX_TOKENS,
         max_tool_iterations: 100,
         max_history_messages: 50,
         recent_history_min_user_messages: 2,
@@ -2267,7 +2272,7 @@ mod tests {
         let config = test_config();
         let cloned = config.clone();
         assert_eq!(cloned.telegram_bot_token, "tok");
-        assert_eq!(cloned.max_tokens, 8192);
+        assert_eq!(cloned.max_tokens, DEFAULT_MAX_TOKENS);
         assert_eq!(cloned.max_tool_iterations, 100);
         assert_eq!(cloned.max_history_messages, 50);
         assert_eq!(cloned.max_document_size_mb, 100);
@@ -2310,7 +2315,7 @@ mod tests {
         let yaml = serde_yaml::to_string(&config).unwrap();
         let parsed: Config = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed.telegram_bot_token, "tok");
-        assert_eq!(parsed.max_tokens, 8192);
+        assert_eq!(parsed.max_tokens, DEFAULT_MAX_TOKENS);
         assert_eq!(parsed.llm_provider, "anthropic");
     }
 
@@ -2321,7 +2326,7 @@ mod tests {
         // Provider now defaults to empty (set via Web UI / env); post_deserialize
         // leaves it unset when not provided.
         assert_eq!(config.llm_provider, "");
-        assert_eq!(config.max_tokens, 8192);
+        assert_eq!(config.max_tokens, 32768);
         assert_eq!(config.max_tool_iterations, 100);
         assert_eq!(config.workspace_dir, "./workspace");
         assert_eq!(config.max_document_size_mb, 100);

@@ -17,7 +17,8 @@ use crate::config::Config;
 use crate::error::FinallyAValueBotError;
 
 const LLM_HTTP_CONNECT_TIMEOUT_SECS: u64 = 5;
-const LLM_HTTP_REQUEST_TIMEOUT_SECS: u64 = 120;
+/// Total request budget, response body included. Large `MAX_TOKENS` replies can run for minutes.
+const LLM_HTTP_REQUEST_TIMEOUT_SECS: u64 = 600;
 /// Settings / persona connection probes (not full agent turns).
 const LLM_PROBE_TIMEOUT_SECS: u64 = 15;
 const LLM_TEST_MAX_TOKENS: u32 = 8;
@@ -866,6 +867,35 @@ impl LlmHandle {
             .write()
             .map_err(|_| "provider lock poisoned".to_string())? = new_provider;
         Ok(())
+    }
+
+    /// Output-token limit used for new LLM clients.
+    pub fn max_tokens(&self) -> u32 {
+        self.base_config
+            .read()
+            .map(|cfg| cfg.max_tokens)
+            .unwrap_or(crate::config::DEFAULT_MAX_TOKENS)
+    }
+
+    /// Update the output-token limit and rebuild the default client. Per-run strategy
+    /// clients read `base_config`, so the next turn uses the new limit.
+    pub fn apply_max_tokens(&self, max_tokens: u32) -> Result<(), String> {
+        let cfg = {
+            let mut cfg = self
+                .base_config
+                .write()
+                .map_err(|_| "config lock poisoned".to_string())?;
+            cfg.max_tokens = max_tokens;
+            cfg.clone()
+        };
+        let new_provider = Arc::from(create_provider(&cfg));
+        *self
+            .provider
+            .write()
+            .map_err(|_| "provider lock poisoned".to_string())? = new_provider;
+        // The local delegate runtime copies base_config limits; rebuild it too.
+        let mm_cfg = self.local_delegate_config();
+        self.apply_local_delegate_config(mm_cfg)
     }
 
     /// Update active provider and model, rebuild LLM client, return `(provider_id, model)`.
@@ -4865,5 +4895,16 @@ mod tests {
         config.model = "gemini-2.5-flash".into();
         // Should not panic
         let _provider = create_provider(&config);
+    }
+
+    #[test]
+    fn apply_max_tokens_updates_the_limit_for_new_clients() {
+        let mut config = crate::config::test_config();
+        config.workspace_dir = "/tmp".into();
+        let handle = LlmHandle::new(&config);
+        assert_eq!(handle.max_tokens(), crate::config::DEFAULT_MAX_TOKENS);
+        handle.apply_max_tokens(16384).unwrap();
+        assert_eq!(handle.max_tokens(), 16384);
+        assert_eq!(handle.base_config.read().unwrap().max_tokens, 16384);
     }
 }

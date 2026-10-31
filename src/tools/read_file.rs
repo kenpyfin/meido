@@ -166,7 +166,15 @@ impl Tool for ReadFileTool {
             (offset, limit.max(1))
         };
 
-        let end = (offset + limit).min(lines.len());
+        if offset >= lines.len() && !lines.is_empty() {
+            return ToolResult::error(format!(
+                "Requested start line {} is past the end of the file ({} lines).",
+                offset + 1,
+                lines.len()
+            ));
+        }
+        let offset = offset.min(lines.len());
+        let end = offset.saturating_add(limit).min(lines.len());
         let selected: Vec<String> = lines[offset..end]
             .iter()
             .enumerate()
@@ -271,6 +279,33 @@ mod tests {
         assert!(result.content.contains("4"));
         assert!(result.content.contains("6"));
         assert!(!result.content.contains("\t1"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_read_file_center_line_past_eof_does_not_panic() {
+        let dir = std::env::temp_dir().join(format!("meido_rf_eof_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("test.txt");
+        std::fs::write(&file, "1\n2\n3").unwrap();
+
+        let tool = ReadFileTool::new(".");
+        let result = tool
+            .execute(json!({
+                "path": file.to_str().unwrap(),
+                "center_line": 260,
+                "context_before": 20,
+                "context_after": 50
+            }))
+            .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("past the end"));
+
+        let result = tool
+            .execute(json!({ "path": file.to_str().unwrap(), "offset": 99 }))
+            .await;
+        assert!(result.is_error);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

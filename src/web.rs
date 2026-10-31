@@ -8450,6 +8450,9 @@ struct RuntimePatchRequest {
     /// Process-wide Classic tool-loop cap. `None` leaves the current limit.
     #[serde(default)]
     max_tool_iterations: Option<usize>,
+    /// Output tokens per model reply (`MAX_TOKENS`). `None` leaves the current limit.
+    #[serde(default)]
+    max_tokens: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -9012,6 +9015,9 @@ async fn api_runtime_get(
         "max_tool_iterations": toggles.max_tool_iterations(),
         "max_tool_iterations_floor": max_turn_bounds.0,
         "max_tool_iterations_ceiling": max_turn_bounds.1,
+        "max_tokens": state.app_state.llm.max_tokens(),
+        "max_tokens_min": crate::config::MAX_TOKENS_MIN,
+        "max_tokens_max": crate::config::MAX_TOKENS_MAX,
         "description": "When enabled, verbose shell output is shown in chat (including background-job completion). When off, full logs are agent-only.",
     })))
 }
@@ -9033,9 +9039,22 @@ async fn api_runtime_patch(
             ));
         }
     }
+    if let Some(requested) = body.max_tokens {
+        if !(crate::config::MAX_TOKENS_MIN..=crate::config::MAX_TOKENS_MAX).contains(&requested) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Max tokens must be from {} to {}.",
+                    crate::config::MAX_TOKENS_MIN,
+                    crate::config::MAX_TOKENS_MAX
+                ),
+            ));
+        }
+    }
     let toggles = &state.app_state.runtime_toggles;
     let mut messages: Vec<&str> = Vec::new();
     let mut max_turns_message: Option<String> = None;
+    let mut max_tokens_message: Option<String> = None;
 
     if let Some(enabled) = body.tool_output_debug {
         toggles.set_tool_output_debug(enabled);
@@ -9137,6 +9156,16 @@ async fn api_runtime_patch(
             )
         });
     }
+    if let Some(requested) = body.max_tokens {
+        state
+            .app_state
+            .llm
+            .apply_max_tokens(requested)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        max_tokens_message = Some(format!(
+            "Max tokens set to {requested}. The next turn uses this limit."
+        ));
+    }
 
     let mm_cfg = state.app_state.llm.local_delegate_config();
     let engine = toggles.agent_engine();
@@ -9155,7 +9184,7 @@ async fn api_runtime_patch(
         }
     }
 
-    if messages.is_empty() && max_turns_message.is_none() {
+    if messages.is_empty() && max_turns_message.is_none() && max_tokens_message.is_none() {
         return Err((
             StatusCode::BAD_REQUEST,
             "No runtime toggle fields provided".to_string(),
@@ -9178,12 +9207,14 @@ async fn api_runtime_patch(
         "false"
     };
     let max_turns_value = toggles.max_tool_iterations().to_string();
+    let max_tokens_value = state.app_state.llm.max_tokens().to_string();
     if let Err(err) = env_config::persist_pairs(&[
         ("TOOL_OUTPUT_DEBUG", Some(debug_value)),
         ("POST_TOOL_EVALUATOR_ENABLED", Some(pte_value)),
         ("RESPONSE_QUALITY_EVALUATOR_ENABLED", Some(pdqe_value)),
         ("AGENT_ENGINE", Some(engine_name)),
         ("MAX_TOOL_ITERATIONS", Some(max_turns_value.as_str())),
+        ("MAX_TOKENS", Some(max_tokens_value.as_str())),
     ]) {
         warnings.push(format!("Saved in the app. Could not update .env: {err}"));
     }
@@ -9191,7 +9222,10 @@ async fn api_runtime_patch(
         &state.app_state.config.runtime_reliability_profile,
     );
     let mut message = messages.join(" ");
-    if let Some(extra) = max_turns_message.as_deref() {
+    for extra in [max_turns_message.as_deref(), max_tokens_message.as_deref()]
+        .into_iter()
+        .flatten()
+    {
         if !message.is_empty() {
             message.push(' ');
         }
@@ -9211,6 +9245,9 @@ async fn api_runtime_patch(
         "max_tool_iterations": toggles.max_tool_iterations(),
         "max_tool_iterations_floor": max_turn_bounds.0,
         "max_tool_iterations_ceiling": max_turn_bounds.1,
+        "max_tokens": state.app_state.llm.max_tokens(),
+        "max_tokens_min": crate::config::MAX_TOKENS_MIN,
+        "max_tokens_max": crate::config::MAX_TOKENS_MAX,
         "warnings": warnings,
         "source": "app_settings",
         "message": message,

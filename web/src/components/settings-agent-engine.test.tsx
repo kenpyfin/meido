@@ -92,4 +92,53 @@ describe('agent engine ledger', () => {
     expect(container.textContent).toContain('Model fields')
     expect(onError).not.toHaveBeenCalled()
   })
+
+  it('saves only a changed max tokens from Advanced', async () => {
+    const onError = vi.fn()
+    const spy = vi.fn((path: string, init?: RequestInit) => {
+      if (path === '/api/runtime' && init?.method === 'PATCH') {
+        return Promise.resolve({ max_tool_iterations: 100, max_tokens: 65536, message: 'ok' })
+      }
+      if (path === '/api/runtime') {
+        return Promise.resolve({
+          agent_engine: 'classic',
+          max_tool_iterations: 100,
+          max_tokens: 32768,
+          max_tokens_min: 1024,
+          max_tokens_max: 131072,
+        })
+      }
+      return api(path, init)
+    })
+    await act(async () => {
+      root.render(
+        <SettingsAgentEnginePanel
+          api={spy as <T>(path: string, init?: RequestInit) => Promise<T>}
+          onError={onError}
+          activePersonaId={2}
+          personas={[{ id: 2, name: 'Kuro', is_active: true }]}
+        />,
+      )
+    })
+    const advanced = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Advanced')
+    await act(async () => advanced?.click())
+    await act(async () => {
+      await Promise.resolve()
+    })
+    const field = [...container.querySelectorAll('label')].find((l) =>
+      l.textContent?.includes('Max tokens'),
+    )
+    const input = field?.querySelector('input') as HTMLInputElement
+    expect(input.value).toBe('32768')
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      setter?.call(input, '65536')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const save = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Save')
+    await act(async () => save?.click())
+    const patch = spy.mock.calls.find(([p, i]) => p === '/api/runtime' && i?.method === 'PATCH')
+    expect(JSON.parse(String(patch?.[1]?.body))).toEqual({ max_tokens: 65536 })
+    expect(onError).not.toHaveBeenCalled()
+  })
 })

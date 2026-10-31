@@ -16,3 +16,15 @@ describe('copyTextToClipboard', () => {
     vi.unstubAllGlobals()
   })
 })
+
+describe('copyTextToClipboard trim option', () => {
+  it('keeps leading indentation when trim is false', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    await expect(copyTextToClipboard('    indented()\n', { trim: false })).resolves.toBe(true)
+    expect(writeText).toHaveBeenCalledWith('    indented()\n')
+
+    vi.unstubAllGlobals()
+  })
+})

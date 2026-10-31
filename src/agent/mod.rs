@@ -1878,7 +1878,7 @@ pub(crate) async fn process_classic_agent_with_events(
                     let input_str =
                         serde_json::to_string(&log_input).unwrap_or_else(|_| "{}".into());
                     let input_preview = if input_str.len() > 10000 {
-                        format!("{}...", &input_str[..10000])
+                        format!("{}...", &input_str[..input_str.floor_char_boundary(10000)])
                     } else {
                         input_str
                     };

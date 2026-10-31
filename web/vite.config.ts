@@ -18,6 +18,10 @@ export default defineConfig({
         manualChunks(id) {
           if (!id.includes('node_modules')) return
           if (id.includes('@assistant-ui')) return 'vendor-assistant-ui'
+          // Math rendering is only reached through the lazy Streamdown runtime; keep it out of eager chunks.
+          if (/katex|remark-math|micromark-extension-math|mdast-util-math|@streamdown\/math/.test(id)) {
+            return 'vendor-katex'
+          }
           if (id.includes('streamdown') || id.includes('shiki')) return 'vendor-streamdown'
           if (id.includes('@radix-ui')) return 'vendor-radix'
           if (id.includes('@xterm') || id.includes('/xterm/')) return 'vendor-xterm'

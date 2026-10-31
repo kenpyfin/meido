@@ -208,7 +208,7 @@ function CodeHeader({ language, code }: { language?: string; code?: string }) {
   const [copied, setCopied] = useState(false)
   const onCopy = () => {
     if (!code || copied) return
-    void copyTextToClipboard(code).then((ok) => {
+    void copyTextToClipboard(code, { trim: false }).then((ok) => {
       if (!ok) return
       setCopied(true)
       window.setTimeout(() => setCopied(false), 2000)
