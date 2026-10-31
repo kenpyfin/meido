@@ -72,7 +72,7 @@ CONFIG FILE (.env):
     Runtime:
       WORKSPACE_DIR          Workspace root. Layout: runtime/, skills/, shared/ under this path. Copy to migrate.
                              When unset, the process can still boot and the web UI opens the setup wizard.
-      max_tokens             Max tokens per response (default: 8192)
+      max_tokens             Max tokens per response (default: 32768)
       max_tool_iterations    Max tool loop iterations (default: 100)
       max_history_messages   Chat history context size (default: 50)
       openai_api_key         OpenAI key for voice transcription (optional)

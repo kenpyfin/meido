@@ -3,16 +3,15 @@ import React, { Suspense, lazy, memo, useMemo } from 'react'
 import { useMessagePartText, INTERNAL } from '@assistant-ui/react'
 import remarkGfm from 'remark-gfm'
 import { MarkdownTable } from '@/components/markdown-table'
+import { normalizeMathDelimiters } from '@/lib/math-delimiters'
 import { cn } from '@/lib/utils'
 
 import 'streamdown/styles.css'
 
 const { withSmoothContextProvider, useSmoothStatus } = INTERNAL
 
-/** Defer the Streamdown runtime (~370KB) until a message actually renders. */
-const Streamdown = lazy(() =>
-  import('streamdown').then((m) => ({ default: m.Streamdown })),
-)
+/** Defer the Streamdown + KaTeX runtime until a message actually renders. */
+const Streamdown = lazy(() => import('./markdown-stream-runtime'))
 
 export type MarkdownStreamProps = {
   children?: string
@@ -37,6 +36,7 @@ export function MarkdownStream({
   streaming = false,
   deferMedia = false,
 }: MarkdownStreamProps) {
+  const markdown = useMemo(() => normalizeMathDelimiters(children), [children])
   return (
     <div className={cn('aui-md-root text-sm leading-relaxed', className)}>
       <Suspense fallback={<MarkdownFallback className={className}>{children}</MarkdownFallback>}>
@@ -70,7 +70,7 @@ export function MarkdownStream({
             table: MarkdownTable,
           }}
         >
-          {children}
+          {markdown}
         </Streamdown>
       </Suspense>
     </div>

@@ -52,7 +52,8 @@ describe('ArtifactLink', () => {
     expect(document.body.textContent).toContain('Open raw')
     expect(document.body.querySelector('.aui-md-root')).not.toBeNull()
     vi.unstubAllGlobals()
-  })
+  // Lazy dialog + markdown chunks load slowly when the suite runs in parallel.
+  }, 20_000)
 
   it('keeps other files as a new-tab link', async () => {
     apiMock.mockResolvedValue(item('image', 'shot.png'))

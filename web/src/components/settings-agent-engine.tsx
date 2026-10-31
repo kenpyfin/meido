@@ -579,6 +579,10 @@ function AdvancedSingleTurnDialog({
   const [saved, setSaved] = useState<number | null>(null)
   const [floor, setFloor] = useState(1)
   const [ceiling, setCeiling] = useState(500)
+  const [tokensDraft, setTokensDraft] = useState('')
+  const [tokensSaved, setTokensSaved] = useState<number | null>(null)
+  const [tokensMin, setTokensMin] = useState(1024)
+  const [tokensMax, setTokensMax] = useState(131072)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -591,6 +595,11 @@ function AdvancedSingleTurnDialog({
     setDraft(String(current))
     setFloor(nextFloor)
     setCeiling(nextCeiling)
+    const tokens = data.max_tokens ?? 32768
+    setTokensSaved(tokens)
+    setTokensDraft(String(tokens))
+    setTokensMin(data.max_tokens_min ?? 1024)
+    setTokensMax(data.max_tokens_max ?? 131072)
   }, [api])
 
   useEffect(() => {
@@ -603,7 +612,12 @@ function AdvancedSingleTurnDialog({
 
   const parsed = Number.parseInt(draft, 10)
   const valid = Number.isFinite(parsed) && parsed >= floor && parsed <= ceiling
-  const dirty = saved != null && parsed !== saved
+  const turnsDirty = saved != null && parsed !== saved
+  const parsedTokens = Number.parseInt(tokensDraft, 10)
+  const tokensValid =
+    Number.isFinite(parsedTokens) && parsedTokens >= tokensMin && parsedTokens <= tokensMax
+  const tokensDirty = tokensSaved != null && parsedTokens !== tokensSaved
+  const dirty = turnsDirty || tokensDirty
 
   function requestClose(next: boolean) {
     if (next) {
@@ -622,21 +636,31 @@ function AdvancedSingleTurnDialog({
       onError(`Max turns must be from ${floor} to ${ceiling}.`)
       return
     }
+    if (!tokensValid) {
+      onError(`Max tokens must be from ${tokensMin} to ${tokensMax}.`)
+      return
+    }
     setBusy(true)
     setNotice(null)
     try {
+      const patch: { max_tool_iterations?: number; max_tokens?: number } = {}
+      if (turnsDirty) patch.max_tool_iterations = parsed
+      if (tokensDirty) patch.max_tokens = parsedTokens
       const res = await api<RuntimeConfigResponse>('/api/runtime', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ max_tool_iterations: parsed }),
+        body: JSON.stringify(patch),
       })
       const current = res.max_tool_iterations ?? parsed
       setSaved(current)
       setDraft(String(current))
       if (res.max_tool_iterations_floor != null) setFloor(res.max_tool_iterations_floor)
       if (res.max_tool_iterations_ceiling != null) setCeiling(res.max_tool_iterations_ceiling)
+      const tokens = res.max_tokens ?? parsedTokens
+      setTokensSaved(tokens)
+      setTokensDraft(String(tokens))
       if (res.warnings?.length) onError(res.warnings.join(' '))
-      setNotice(res.message ?? 'Max turns saved.')
+      setNotice(res.message ?? 'Saved.')
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -660,8 +684,8 @@ function AdvancedSingleTurnDialog({
         <DialogContent className="max-w-[420px]">
           <DialogTitle>Advanced</DialogTitle>
           <DialogDescription>
-            Max turns is shared by every persona, including Cost routing. The next turn uses the
-            saved limit. Close does not save.
+            Max turns and max tokens are shared by every persona, including Cost routing. The next
+            turn uses the saved limits. Close does not save.
           </DialogDescription>
           <label className="mc-pipeline-field">
             <span>Max turns</span>
@@ -678,8 +702,30 @@ function AdvancedSingleTurnDialog({
           <span className="text-xs text-muted-foreground">
             Tool rounds one turn may take. {boundNote}
           </span>
-          <Button type="button" size="sm" disabled={busy || !dirty || !valid} onClick={() => void save()}>
-            {busy ? 'Saving…' : 'Save max turns'}
+          <label className="mc-pipeline-field">
+            <span>Max tokens</span>
+            <Input
+              type="number"
+              min={tokensMin}
+              max={tokensMax}
+              inputMode="numeric"
+              value={tokensDraft}
+              disabled={busy || tokensSaved == null}
+              onChange={(e) => setTokensDraft(e.target.value)}
+            />
+          </label>
+          <span className="text-xs text-muted-foreground">
+            Output limit for one model reply, thinking included. From{' '}
+            {tokensMin.toLocaleString('en-US')} to {tokensMax.toLocaleString('en-US')}. The default
+            is 32,768.
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            disabled={busy || !dirty || !valid || !tokensValid}
+            onClick={() => void save()}
+          >
+            {busy ? 'Saving…' : 'Save'}
           </Button>
           {notice ? (
             <span className="text-xs text-muted-foreground" role="status">
@@ -691,8 +737,8 @@ function AdvancedSingleTurnDialog({
       <ConfirmDialog
         open={discardOpen}
         onOpenChange={setDiscardOpen}
-        title="Discard max turns?"
-        description="The unsaved max turns will be lost."
+        title="Discard changes?"
+        description="The unsaved limits will be lost."
         confirmLabel="Discard draft"
         onConfirm={() => {
           setDiscardOpen(false)

@@ -388,7 +388,7 @@ fn format_process_output(stdout: &str, stderr: &str, exit_code: i32) -> String {
         result_text = format!("Command completed with exit code {exit_code}");
     }
     if result_text.len() > 30000 {
-        result_text.truncate(30000);
+        result_text.truncate(result_text.floor_char_boundary(30000));
         result_text.push_str("\n... (output truncated)");
     }
     result_text

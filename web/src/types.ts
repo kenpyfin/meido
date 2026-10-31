@@ -194,6 +194,9 @@ export type RuntimeConfigResponse = {
   max_tool_iterations?: number
   max_tool_iterations_floor?: number
   max_tool_iterations_ceiling?: number
+  max_tokens?: number
+  max_tokens_min?: number
+  max_tokens_max?: number
   description?: string
   message?: string
 }
