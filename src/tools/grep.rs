@@ -37,7 +37,7 @@ impl Tool for GrepTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::new(
             "grep",
-            "Search file contents using a regex pattern. Returns matching lines with file paths and line numbers. Prefer a narrow `path` and `glob` filter (e.g. path `shared/`, glob `*.md`) — avoid searching all of `shared/` without a glob.",
+            "Search file contents using a regex pattern. Returns matching lines with file paths and line numbers. Prefer a narrow `path` and `glob` filter (e.g. path `shared/`, glob `*.md`) — avoid searching all of `shared/` without a glob. Brace globs like `*.{rs,toml}` are supported.",
             schema_object(
                 json!({
                     "pattern": {
@@ -50,7 +50,11 @@ impl Tool for GrepTool {
                     },
                     "glob": {
                         "type": "string",
-                        "description": "Glob pattern to filter files (e.g., '*.rs')"
+                        "description": "Glob pattern to filter files (e.g., '*.rs' or '*.{rs,toml}')"
+                    },
+                    "head_limit": {
+                        "type": "integer",
+                        "description": "Maximum number of matching lines to return (optional)"
                     }
                 }),
                 &["pattern"],
@@ -87,22 +91,24 @@ impl Tool for GrepTool {
             vector_db,
             external_roots,
         ) {
-            let outside = match vector_db {
-                Some(db) => format!(
-                    "Path '{}' is outside the workspace root '{}', the ORIGIN vault '{}', and the vector db '{}'.",
-                    resolved_path.display(),
-                    workspace_root.display(),
-                    self.origin_vault.display(),
-                    db.display()
-                ),
-                None => format!(
-                    "Path '{}' is outside the workspace root '{}' and the ORIGIN vault '{}'.",
-                    resolved_path.display(),
-                    workspace_root.display(),
-                    self.origin_vault.display()
-                ),
-            };
-            return ToolResult::error(outside);
+            // Prefer the persona-scope message (lists declared roots including external paths)
+            // so the model retries on an allowed root instead of falling back to bash grep -r.
+            if let Err(msg) = super::assert_persona_tool_path_allowed_with_origin(
+                workspace_root,
+                &resolved_path,
+                auth.as_ref(),
+                false,
+                &self.origin_vault,
+            ) {
+                return ToolResult::error(msg);
+            }
+            return ToolResult::error(outside_workspace_grep_error(
+                &resolved_path,
+                workspace_root,
+                &self.origin_vault,
+                vector_db,
+                external_roots,
+            ));
         }
         let resolved_path_str = resolved_path.to_string_lossy().to_string();
         if let Err(msg) = crate::tools::path_guard::check_path(&resolved_path_str) {
@@ -118,6 +124,11 @@ impl Tool for GrepTool {
             return ToolResult::error(msg);
         }
         let file_glob = input.get("glob").and_then(|v| v.as_str());
+        let head_limit = input
+            .get("head_limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+            .filter(|n| *n > 0);
 
         info!("Grep: {} in {}", pattern, resolved_path.display());
 
@@ -142,7 +153,7 @@ impl Tool for GrepTool {
         if results.is_empty() {
             ToolResult::success("No matches found.".into())
         } else {
-            truncate_grep_results(&mut results);
+            truncate_grep_results(&mut results, head_limit);
             ToolResult::success(results.join("\n"))
         }
     }
@@ -167,9 +178,93 @@ fn path_allowed_for_grep(
             .any(|root| super::path_under_root(path, root))
 }
 
-fn truncate_grep_results(results: &mut Vec<String>) {
-    if results.len() > MAX_GREP_MATCH_LINES {
-        results.truncate(MAX_GREP_MATCH_LINES);
+fn outside_workspace_grep_error(
+    path: &Path,
+    workspace_root: &Path,
+    origin_vault: &Path,
+    vector_db: Option<&Path>,
+    external_roots: &[PathBuf],
+) -> String {
+    let mut msg = match vector_db {
+        Some(db) => format!(
+            "Path '{}' is outside the workspace root '{}', the ORIGIN vault '{}', and the vector db '{}'.",
+            path.display(),
+            workspace_root.display(),
+            origin_vault.display(),
+            db.display()
+        ),
+        None => format!(
+            "Path '{}' is outside the workspace root '{}' and the ORIGIN vault '{}'.",
+            path.display(),
+            workspace_root.display(),
+            origin_vault.display()
+        ),
+    };
+    if !external_roots.is_empty() {
+        let roots = external_roots
+            .iter()
+            .map(|r| format!("`{}`", r.display()))
+            .collect::<Vec<_>>()
+            .join("; ");
+        msg.push_str(&format!(
+            " Declared external paths: {roots}. Prefer one of those roots (or locate_file), not a parent directory."
+        ));
+    }
+    msg
+}
+
+/// Expand a single top-level brace group (`*.{rs,toml}` → `*.rs`, `*.toml`).
+/// Nested braces and escaped braces are left unchanged.
+fn expand_brace_glob(pattern: &str) -> Vec<String> {
+    let Some(open) = pattern.find('{') else {
+        return vec![pattern.to_string()];
+    };
+    let Some(close_rel) = pattern[open + 1..].find('}') else {
+        return vec![pattern.to_string()];
+    };
+    let close = open + 1 + close_rel;
+    let prefix = &pattern[..open];
+    let suffix = &pattern[close + 1..];
+    let inner = &pattern[open + 1..close];
+    if inner.is_empty() || inner.contains('{') || inner.contains('}') {
+        return vec![pattern.to_string()];
+    }
+    let alts: Vec<&str> = inner.split(',').collect();
+    if alts.len() < 2 || alts.iter().any(|a| a.is_empty()) {
+        return vec![pattern.to_string()];
+    }
+    alts.into_iter()
+        .map(|alt| format!("{prefix}{alt}{suffix}"))
+        .collect()
+}
+
+fn compile_glob_patterns(file_glob: Option<&str>) -> Option<Vec<glob::Pattern>> {
+    let raw = file_glob?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let expanded = expand_brace_glob(raw);
+    let mut patterns = Vec::with_capacity(expanded.len());
+    for pat in expanded {
+        match glob::Pattern::new(&pat) {
+            Ok(p) => patterns.push(p),
+            Err(_) => return None,
+        }
+    }
+    if patterns.is_empty() {
+        None
+    } else {
+        Some(patterns)
+    }
+}
+
+fn truncate_grep_results(results: &mut Vec<String>, head_limit: Option<usize>) {
+    let line_cap = head_limit
+        .unwrap_or(MAX_GREP_MATCH_LINES)
+        .min(MAX_GREP_MATCH_LINES)
+        .max(1);
+    if results.len() > line_cap {
+        results.truncate(line_cap);
         results.push("... (line matches truncated)".into());
     }
     let mut total = 0usize;
@@ -237,7 +332,7 @@ fn grep_recursive(
             grep_file(path, re, results)?;
         }
     } else if metadata.is_dir() {
-        let glob_pattern = file_glob.and_then(|g| glob::Pattern::new(g).ok());
+        let glob_patterns = compile_glob_patterns(file_glob);
 
         for entry in std::fs::read_dir(path)? {
             let entry = entry?;
@@ -257,8 +352,8 @@ fn grep_recursive(
                 if should_skip_grep_file(&name) {
                     continue;
                 }
-                if let Some(ref pat) = glob_pattern {
-                    if !pat.matches(&name) {
+                if let Some(ref pats) = glob_patterns {
+                    if !pats.iter().any(|pat| pat.matches(&name)) {
                         continue;
                     }
                 }
@@ -366,6 +461,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_grep_with_brace_glob() {
+        let root = std::env::temp_dir().join(format!("meido_grep_brace_{}", uuid::Uuid::new_v4()));
+        let shared = root.join("shared");
+        std::fs::create_dir_all(&shared).unwrap();
+        let dir = setup_grep_dir();
+        std::fs::rename(&dir, shared.join("sample")).unwrap();
+        let tool = GrepTool::new(root.to_str().unwrap());
+        let result = tool
+            .execute(json!({
+                "pattern": "hello",
+                "path": "sample",
+                "glob": "*.{txt,rs}"
+            }))
+            .await;
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("world.txt"));
+        assert!(result.content.contains("hello.rs"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn test_grep_head_limit() {
+        let root = std::env::temp_dir().join(format!("meido_grep_head_{}", uuid::Uuid::new_v4()));
+        let shared = root.join("shared");
+        std::fs::create_dir_all(&shared).unwrap();
+        std::fs::write(shared.join("a.txt"), "hello 1\nhello 2\nhello 3\n").unwrap();
+        let tool = GrepTool::new(root.to_str().unwrap());
+        let result = tool
+            .execute(json!({
+                "pattern": "hello",
+                "path": ".",
+                "head_limit": 2
+            }))
+            .await;
+        assert!(!result.is_error, "{}", result.content);
+        let match_lines = result
+            .content
+            .lines()
+            .filter(|l| l.contains("hello") && !l.contains("truncated"))
+            .count();
+        assert_eq!(match_lines, 2);
+        assert!(result.content.contains("truncated"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_expand_brace_glob() {
+        assert_eq!(
+            expand_brace_glob("*.{py,md,yml}"),
+            vec!["*.py".to_string(), "*.md".to_string(), "*.yml".to_string()]
+        );
+        assert_eq!(expand_brace_glob("*.rs"), vec!["*.rs".to_string()]);
+        assert_eq!(expand_brace_glob("*.{rs}"), vec!["*.{rs}".to_string()]);
+    }
+
+    #[tokio::test]
     async fn test_grep_invalid_regex() {
         let tool = GrepTool::new(".");
         let result = tool
@@ -454,7 +605,39 @@ mod tests {
             }))
             .await;
         assert!(result.is_error);
-        assert!(result.content.contains("outside the workspace root"));
+        assert!(
+            result.content.contains("outside the workspace root")
+                || result.content.contains("outside the allowed persona scope"),
+            "{}",
+            result.content
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside_dir);
+    }
+
+    #[tokio::test]
+    async fn test_grep_outside_lists_external_roots_without_auth() {
+        let root =
+            std::env::temp_dir().join(format!("meido_grep_extlist_{}", uuid::Uuid::new_v4()));
+        let shared = root.join("shared");
+        std::fs::create_dir_all(&shared).unwrap();
+        let outside_dir =
+            std::env::temp_dir().join(format!("meido_grep_extroot_{}", uuid::Uuid::new_v4()));
+        let allowed = outside_dir.join("allowed");
+        std::fs::create_dir_all(&allowed).unwrap();
+        let parent = outside_dir.clone();
+        std::fs::write(allowed.join("a.txt"), "needle").unwrap();
+
+        let msg = outside_workspace_grep_error(
+            &parent,
+            &root,
+            &root.join("shared").join("ORIGIN"),
+            None,
+            &[allowed.clone()],
+        );
+        assert!(msg.contains("Declared external paths"));
+        assert!(msg.contains(allowed.to_string_lossy().as_ref()));
 
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside_dir);

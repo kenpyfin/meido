@@ -2404,10 +2404,10 @@ Use the strategy model for mutations or delegate_local_subjob for discovery."
 
             let iteration_had_progress = executed_tool_names
                 .iter()
-                .any(|name| is_progress_tool_use(name));
+                .any(|name| crate::tool_loop_signals::is_progress_tool_use(name));
             let iteration_had_discovery = executed_tool_inputs
                 .iter()
-                .any(|(name, input)| is_discovery_tool_use(name, input));
+                .any(|(name, input)| crate::tool_loop_signals::is_discovery_tool_use(name, input));
             if iteration_had_progress {
                 discovery_streak_count = 0;
             } else if iteration_had_discovery {
@@ -4112,23 +4112,6 @@ fn should_apply_generic_loop_guard(tool_name: &str) -> bool {
     )
 }
 
-fn is_progress_tool_use(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "spawn_background_command"
-            | "write_file"
-            | "edit_file"
-            | "apply_search_replace"
-            | "symbol_edit"
-            | "read_tiered_memory"
-            | "read_memory"
-            | "write_tiered_memory"
-            | "write_memory_state"
-            | "schedule_task"
-            | "register_tracked_job"
-    )
-}
-
 /// True when assistant text claims actions (uploads, writes, publishes) not backed by tool use
 /// in the same turn — used to avoid strategy fallback on legitimate bash summaries.
 fn assistant_text_claims_unbacked_actions(text: &str) -> bool {
@@ -4210,38 +4193,6 @@ fn should_fallback_local_tier_to_strategy(
         return true;
     }
     assistant_text_claims_unbacked_actions(assistant_text)
-}
-
-fn is_discovery_tool_use(tool_name: &str, input: &serde_json::Value) -> bool {
-    match tool_name {
-        "list_scheduled_tasks" | "list_cursor_agent_runs" => true,
-        "grep" => {
-            let path = input
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".")
-                .trim();
-            let has_glob = input
-                .get("glob")
-                .and_then(|v| v.as_str())
-                .is_some_and(|g| !g.trim().is_empty());
-            !has_glob || path == "." || path.ends_with("shared") || path.ends_with("shared/")
-        }
-        "glob" => {
-            let path = input
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".")
-                .trim();
-            path == "." || path.ends_with("shared") || path.ends_with("shared/")
-        }
-        "bash" => {
-            let cmd = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
-            crate::tools::bash_safety::is_expensive_shell_search(cmd)
-                || cmd.to_ascii_lowercase().contains("find ")
-        }
-        _ => false,
-    }
 }
 
 fn is_memory_write_tool(tool_name: &str) -> bool {
@@ -7303,20 +7254,35 @@ mod tests {
 
     #[test]
     fn test_is_discovery_tool_use_detects_status_archaeology() {
-        assert!(is_discovery_tool_use(
+        assert!(crate::tool_loop_signals::is_discovery_tool_use(
             "list_cursor_agent_runs",
             &serde_json::json!({})
         ));
         let grep = serde_json::json!({"pattern":"LoRA","path":"./workspace/shared/."});
-        assert!(is_discovery_tool_use("grep", &grep));
+        assert!(crate::tool_loop_signals::is_discovery_tool_use(
+            "grep", &grep
+        ));
         let bash = serde_json::json!({"command":"grep -r PZ ./shared/ | head"});
-        assert!(is_discovery_tool_use("bash", &bash));
+        assert!(crate::tool_loop_signals::is_discovery_tool_use(
+            "bash", &bash
+        ));
+        let narrow = serde_json::json!({"pattern":"finviz","path":"skills/rh-main-book-risk"});
+        assert!(!crate::tool_loop_signals::is_discovery_tool_use(
+            "grep", &narrow
+        ));
     }
 
     #[test]
     fn test_is_progress_tool_use_includes_tiered_memory() {
-        assert!(is_progress_tool_use("read_tiered_memory"));
-        assert!(!is_progress_tool_use("list_scheduled_tasks"));
+        assert!(crate::tool_loop_signals::is_progress_tool_use(
+            "read_tiered_memory"
+        ));
+        assert!(crate::tool_loop_signals::is_progress_tool_use(
+            "finish_pipeline_stage"
+        ));
+        assert!(!crate::tool_loop_signals::is_progress_tool_use(
+            "list_scheduled_tasks"
+        ));
     }
 
     #[test]

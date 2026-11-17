@@ -10,7 +10,7 @@ pub const EXPENSIVE_SHELL_SEARCH_TIMEOUT_SECS: u64 = 120;
 const EXPENSIVE_SEARCH_BLOCK_MESSAGE: &str = "Blocked expensive shell search. Recursive `grep -r` / unbounded `find` over large trees can run for many minutes and block the chat. \
 Prefer: `locate_file` (declared persona/ORIGIN/Repo roots), `glob` (file names), the `grep` tool (contents; skips binaries and huge dirs), `read_tiered_memory` / `list_cursor_agent_runs` (job status), or `read_file` on a known path. \
 On a locate miss, ask the user — do not widen the search. \
-To run this exact shell command anyway, prefix: CONFIRM_EXECUTE <command>";
+Do not retry with CONFIRM_EXECUTE — unscoped recursive shell searches stay blocked. Call the `grep` tool (or `locate_file`) on one declared root instead.";
 
 pub fn parse_confirmation_prefix(command: &str) -> (bool, String) {
     const PREFIX: &str = "CONFIRM_EXECUTE ";
@@ -145,13 +145,16 @@ pub fn is_expensive_shell_search_scoped(command: &str, allowed_roots: &[PathBuf]
     if cmd.is_empty() {
         return false;
     }
-    is_recursive_grep_command(cmd)
+    is_recursive_grep_command_scoped(cmd, allowed_roots)
         || is_unbounded_find_command(cmd, allowed_roots)
         || is_unbounded_ripgrep_command(cmd)
 }
 
 /// Returns `None` when execution may proceed, or a blocked `ToolResult`.
 /// `spawn_background_command` does not call this — long scans may be intentional in background.
+///
+/// Unscoped recursive shell searches (`grep -r` / broad `find`) stay blocked even when the
+/// command is prefixed with `CONFIRM_EXECUTE`. Confirmation only applies to other safety categories.
 pub fn check_expensive_shell_search(command: &str, confirmed: bool) -> Option<ToolResult> {
     check_expensive_shell_search_scoped(command, confirmed, &[], &[])
 }
@@ -160,16 +163,18 @@ pub fn check_expensive_shell_search(command: &str, confirmed: bool) -> Option<To
 /// shown in the block message (from the locate registry).
 pub fn check_expensive_shell_search_scoped(
     command: &str,
-    confirmed: bool,
+    _confirmed: bool,
     allowed_roots: &[PathBuf],
     root_hints: &[String],
 ) -> Option<ToolResult> {
-    if confirmed || !is_expensive_shell_search_scoped(command, allowed_roots) {
+    // Unscoped recursive searches are never confirmable — models treated CONFIRM_EXECUTE as the
+    // default retry and burned multi-minute timeouts on /home tree walks.
+    if !is_expensive_shell_search_scoped(command, allowed_roots) {
         return None;
     }
     let mut msg = EXPENSIVE_SEARCH_BLOCK_MESSAGE.to_string();
     if !root_hints.is_empty() {
-        msg.push_str("\n\nDeclared roots to try with locate_file / read_file:\n");
+        msg.push_str("\n\nDeclared roots to try with locate_file / the grep tool:\n");
         for h in root_hints.iter().take(12) {
             msg.push_str("- ");
             msg.push_str(h);
@@ -181,7 +186,7 @@ pub fn check_expensive_shell_search_scoped(
             ));
         } else {
             msg.push_str(
-                "Suggested: locate_file with the basename or ORIGIN-relative path you expected.\n",
+                "Suggested: call the grep tool with path set to one declared root (and an optional glob), or locate_file with the basename you expected.\n",
             );
         }
     }
@@ -220,12 +225,15 @@ pub fn check_self_repo_git(
     )
 }
 
-fn is_recursive_grep_command(command: &str) -> bool {
+/// Recursive `grep -r` / `grep -rn` is expensive unless every search root is under a declared
+/// allowed root (or is a relative cwd-scoped path). Narrow greps like
+/// `grep -rn pattern /allowed/root/*.py` stay allowed.
+fn is_recursive_grep_command_scoped(command: &str, allowed_roots: &[PathBuf]) -> bool {
     let lower = command.to_ascii_lowercase();
     if !lower.contains("grep") {
         return false;
     }
-    lower.contains(" -r")
+    let recursive = lower.contains(" -r")
         || lower.contains(" -rn")
         || lower.contains(" -r ")
         || lower.contains(" -rn ")
@@ -233,6 +241,91 @@ fn is_recursive_grep_command(command: &str) -> bool {
         || lower.starts_with("grep -r")
         || lower.starts_with("grep -rn")
         || lower.starts_with("grep -R")
+        || lower.contains("grep -r")
+        || lower.contains("grep -rn")
+        || lower.contains("grep -R");
+    if !recursive {
+        return false;
+    }
+    let tokens = grep_path_tokens(command);
+    if tokens.is_empty() {
+        // `grep -rn pattern` with implicit `.` — relative/cwd scoped when allowed_roots empty
+        // still counts as expensive (shared/ workspace walks). With allowed roots, cwd is
+        // persona-scoped and relative `.` is treated as allowed.
+        return allowed_roots.is_empty();
+    }
+    for token in tokens {
+        if is_broad_search_root(&token) {
+            return true;
+        }
+        if !find_root_is_allowed(&token, allowed_roots) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Extract path-like arguments after the pattern in a grep invocation.
+fn grep_path_tokens(command: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut parts = command.split_whitespace().peekable();
+    while let Some(part) = parts.next() {
+        let base = part.rsplit('/').next().unwrap_or(part);
+        if base != "grep" && base != "egrep" && base != "fgrep" && !base.ends_with("grep") {
+            continue;
+        }
+        // Skip options until we reach the pattern, then collect paths.
+        let mut seen_pattern = false;
+        while let Some(arg) = parts.peek().copied() {
+            if !seen_pattern {
+                if arg.starts_with('-') {
+                    let opt = parts.next().unwrap_or(arg);
+                    if grep_option_takes_value(opt) {
+                        let _ = parts.next();
+                    }
+                    continue;
+                }
+                // Pattern token.
+                let _ = parts.next();
+                seen_pattern = true;
+                continue;
+            }
+            let path = parts.next().unwrap_or(arg);
+            if path == "|" || path.starts_with('|') {
+                break;
+            }
+            // Strip simple shell redirections glued to the token.
+            let cleaned = path.trim_matches('"').trim_matches('\'');
+            if cleaned.is_empty() {
+                continue;
+            }
+            tokens.push(cleaned.to_string());
+        }
+    }
+    tokens
+}
+
+fn grep_option_takes_value(opt: &str) -> bool {
+    matches!(
+        opt,
+        "-e" | "-f"
+            | "-m"
+            | "--regexp"
+            | "--file"
+            | "--max-count"
+            | "--include"
+            | "--exclude"
+            | "--exclude-dir"
+            | "--exclude-from"
+            | "-A"
+            | "-B"
+            | "-C"
+            | "--after-context"
+            | "--before-context"
+            | "--context"
+    ) || opt.starts_with("--include=")
+        || opt.starts_with("--exclude=")
+        || opt.starts_with("--exclude-dir=")
 }
 
 fn is_unbounded_find_command(command: &str, allowed_roots: &[PathBuf]) -> bool {
@@ -491,10 +584,30 @@ mod tests {
     }
 
     #[test]
-    fn check_expensive_shell_search_requires_confirm_prefix() {
+    fn check_expensive_shell_search_blocks_even_when_confirmed() {
         let cmd = "grep -r foo ./shared/";
         assert!(check_expensive_shell_search(cmd, false).is_some());
-        assert!(check_expensive_shell_search(cmd, true).is_none());
+        // CONFIRM_EXECUTE must not unlock unscoped recursive greps.
+        assert!(check_expensive_shell_search(cmd, true).is_some());
+        let blocked = check_expensive_shell_search(cmd, true).expect("blocked");
+        assert!(blocked
+            .content
+            .contains("Do not retry with CONFIRM_EXECUTE"));
+    }
+
+    #[test]
+    fn expensive_shell_search_allows_scoped_recursive_grep() {
+        let allowed = vec![PathBuf::from(
+            "/home/ken/big_storage/airflowProd/notebook/My_Trader2.0",
+        )];
+        assert!(!is_expensive_shell_search_scoped(
+            "grep -rn \"screener\" /home/ken/big_storage/airflowProd/notebook/My_Trader2.0/*.py",
+            &allowed,
+        ));
+        assert!(is_expensive_shell_search_scoped(
+            "grep -rn \"finviz\" /home/ken/big_storage/airflowProd 2>/dev/null",
+            &allowed,
+        ));
     }
 
     #[test]
@@ -509,5 +622,8 @@ mod tests {
         assert!(blocked.content.contains("locate_file"));
         assert!(blocked.content.contains("persona ORIGIN"));
         assert!(blocked.content.contains("foo.md"));
+        assert!(blocked
+            .content
+            .contains("Do not retry with CONFIRM_EXECUTE"));
     }
 }
