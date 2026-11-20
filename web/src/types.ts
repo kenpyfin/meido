@@ -476,6 +476,7 @@ export type PersonaTodo = {
   stage_run_id?: string | null
   stage_outcome?: string | null
   deploy_prompt?: string | null
+  stage_notes?: Partial<Record<'todo' | 'plan' | 'build' | 'verify', string>> | null
 }
 
 export type MessageItem = {

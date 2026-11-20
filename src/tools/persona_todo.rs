@@ -350,6 +350,7 @@ mod tests {
                     auto_advance: None,
                     completed: Some(true),
                     deploy_prompt: Some("Check the hinge.".into()),
+                    stage_notes: None,
                 },
             )
             .unwrap()

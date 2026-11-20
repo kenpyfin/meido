@@ -1223,7 +1223,7 @@ async fn enqueue_persona_turn(
                     limits.run_history_limit,
                 )
                 .await;
-            let turn_error = match send_and_store_response_with_events(
+            let turn_result = match send_and_store_response_with_events(
                 state_for_task.clone(),
                 body,
                 None,
@@ -1271,7 +1271,7 @@ async fn enqueue_persona_turn(
                             limits.run_history_limit,
                         )
                         .await;
-                    None
+                    Ok(response_text)
                 }
                 Err((_, err_msg)) => {
                     state_for_task
@@ -1283,11 +1283,15 @@ async fn enqueue_persona_turn(
                             limits.run_history_limit,
                         )
                         .await;
-                    Some(err_msg)
+                    Err(err_msg)
                 }
             };
             if let Some(follow) = stage_follow_up {
-                settle_board_stage(state_for_task.clone(), follow, turn_error).await;
+                let (turn_error, response_text) = match turn_result {
+                    Ok(text) => (None, text),
+                    Err(err) => (Some(err), String::new()),
+                };
+                settle_board_stage(state_for_task.clone(), follow, turn_error, response_text).await;
             }
             state_for_task
                 .run_hub
@@ -1342,10 +1346,23 @@ async fn enqueue_persona_turn(
     }))
 }
 
+fn usable_stage_response(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Loop-guard stalls are not a successful stage result.
+    if trimmed.starts_with("I stopped because") {
+        return None;
+    }
+    Some(trimmed)
+}
+
 async fn settle_board_stage(
     state: WebState,
     follow: BoardStageFollowUp,
     turn_error: Option<String>,
+    response_text: String,
 ) {
     let item_id = follow.item_id;
     if let Some(err) = turn_error {
@@ -1357,19 +1374,73 @@ async fn settle_board_stage(
         db.get_persona_todo(item_id)
     })
     .await;
-    let Ok(Some(todo)) = loaded else {
+    let Ok(Some(mut todo)) = loaded else {
         return;
     };
-    let outcome = todo.stage_outcome.clone().unwrap_or_default();
+    let mut outcome = todo.stage_outcome.clone().unwrap_or_default();
+    let response_note = usable_stage_response(&response_text).map(str::to_string);
+
+    // Turns that never called finish_pipeline_stage but produced a usable reply
+    // (e.g. Cursor engine) count as a pass with the reply as the stage note.
     if outcome.is_empty() || outcome == "running" {
-        let db = state.app_state.db.clone();
-        let _ = call_blocking(db, move |db| {
-            db.mark_board_stage_failed(item_id, "Stage ended without finish_pipeline_stage")
-        })
-        .await;
-        return;
+        if let Some(note) = response_note.clone() {
+            let chat_id = todo.chat_id;
+            let note_for_db = note.clone();
+            let marked = call_blocking(state.app_state.db.clone(), move |db| {
+                db.mark_board_stage_outcome(
+                    chat_id,
+                    item_id,
+                    "passed",
+                    None,
+                    Some(note_for_db.as_str()),
+                )
+            })
+            .await;
+            let Ok(Some(updated)) = marked else {
+                return;
+            };
+            todo = updated;
+            outcome = "passed".into();
+        } else {
+            let db = state.app_state.db.clone();
+            let _ = call_blocking(db, move |db| {
+                db.mark_board_stage_failed(item_id, "Stage ended without finish_pipeline_stage")
+            })
+            .await;
+            return;
+        }
+    } else if matches!(outcome.as_str(), "passed" | "blocked") {
+        // fill missing note from the turn reply when finish_pipeline_stage omitted note
+        let stage = todo.status.clone();
+        let has_stage_note = crate::db_collab::parse_stage_notes(todo.stage_notes.as_deref())
+            .get(&stage)
+            .and_then(|v| v.as_str())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        if !has_stage_note {
+            if let Some(note) = response_note {
+                let chat_id = todo.chat_id;
+                let blocked = todo.blocked_reason.clone();
+                let note_for_db = note;
+                let outcome_for_db = outcome.clone();
+                let marked = call_blocking(state.app_state.db.clone(), move |db| {
+                    db.mark_board_stage_outcome(
+                        chat_id,
+                        item_id,
+                        outcome_for_db.as_str(),
+                        blocked.as_deref(),
+                        Some(note_for_db.as_str()),
+                    )
+                })
+                .await;
+                if let Ok(Some(updated)) = marked {
+                    todo = updated;
+                }
+            }
+        }
     }
-    if outcome == "passed" && todo.auto_advance != 0 && follow.chain_remaining > 0 {
+
+    if outcome == "passed" {
         if let Some(next) = crate::board_pipeline::next_stage(&todo.status) {
             if next != todo.status {
                 let chat_id = todo.chat_id;
@@ -1394,6 +1465,7 @@ async fn settle_board_stage(
                     auto_advance: None,
                     completed: None,
                     deploy_prompt: None,
+                    stage_notes: None,
                 };
                 let moved = call_blocking(state.app_state.db.clone(), move |db| {
                     db.apply_board_patch(chat_id, item_id, &patch)
@@ -1402,16 +1474,20 @@ async fn settle_board_stage(
                 if moved.ok().flatten().is_none() {
                     return;
                 }
-                let remaining = follow.chain_remaining.saturating_sub(1);
-                if let Err((_, message)) =
-                    start_board_stage(state.clone(), &advanced, remaining).await
-                {
-                    let db = state.app_state.db.clone();
-                    let _ =
-                        call_blocking(db, move |db| db.mark_board_stage_failed(item_id, &message))
-                            .await;
+                // Auto chains the next stage run; without Auto the card just moves.
+                if todo.auto_advance != 0 && follow.chain_remaining > 0 {
+                    let remaining = follow.chain_remaining.saturating_sub(1);
+                    if let Err((_, message)) =
+                        start_board_stage(state.clone(), &advanced, remaining).await
+                    {
+                        let db = state.app_state.db.clone();
+                        let _ = call_blocking(db, move |db| {
+                            db.mark_board_stage_failed(item_id, &message)
+                        })
+                        .await;
+                    }
+                    return;
                 }
-                return;
             }
         }
     }
@@ -7667,6 +7743,11 @@ fn persona_todo_to_json(t: &crate::db::PersonaTodo) -> serde_json::Value {
         "stage_run_id": t.stage_run_id,
         "stage_outcome": t.stage_outcome,
         "deploy_prompt": t.deploy_prompt,
+        "stage_notes": t
+            .stage_notes
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .unwrap_or(serde_json::Value::Object(serde_json::Map::new())),
     })
 }
 
@@ -7739,6 +7820,7 @@ async fn api_todos_patch(
         auto_advance: body.auto_advance,
         completed: body.completed,
         deploy_prompt: body.deploy_prompt,
+        stage_notes: None,
     };
     let updated = call_blocking(state.app_state.db.clone(), move |db| {
         db.apply_board_patch(chat_id, todo_id, &patch)
@@ -7806,6 +7888,7 @@ async fn api_todos_create(
             auto_advance: None,
             completed: None,
             deploy_prompt: None,
+            stage_notes: None,
         };
         call_blocking(state.app_state.db.clone(), move |db| {
             db.apply_board_patch(chat_id, todo_id, &patch)
@@ -7893,6 +7976,7 @@ async fn api_todos_run(
             auto_advance: None,
             completed: None,
             deploy_prompt: Some(prompt),
+            stage_notes: None,
         };
         let updated = call_blocking(state.app_state.db.clone(), move |db| {
             db.apply_board_patch(chat_id, todo_id, &patch)

@@ -1,7 +1,7 @@
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { MarkdownStream } from '@/components/markdown-stream'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../api/client'
 import type { Persona, PersonaTodo } from '../../types'
 
@@ -43,6 +43,8 @@ type Props = {
   onOpenPersona?: (personaId: number, sessionId: string | null) => void
   focusTodoId?: number | null
   onFocusTodoHandled?: () => void
+  /** Refresh inbox when board cards leave TODO. */
+  onBoardChange?: () => void
   /** Static cards for a public example. Skips the board API. */
   fixtureItems?: PersonaTodo[]
 }
@@ -59,7 +61,26 @@ function stageLabel(status: string): string {
 
 function stageBrief(status: string): string {
   if ((COLUMNS as readonly string[]).includes(status)) return STAGE_BRIEF[status as Column]
-  return 'Write the instruction for this deploy.'
+  return 'Write the instruction for this action.'
+}
+
+type StageNoteMap = Partial<Record<Column, string>>
+
+function parseStageNotes(item: PersonaTodo): StageNoteMap {
+  const fromJson: StageNoteMap = {}
+  const raw = item.stage_notes
+  if (raw && typeof raw === 'object') {
+    for (const column of COLUMNS) {
+      const value = raw[column]
+      if (typeof value === 'string' && value.trim()) fromJson[column] = value.trim()
+    }
+  }
+  if (Object.keys(fromJson).length > 0) return fromJson
+
+  // Legacy: description was a flat append of all stage notes.
+  const description = item.description?.trim()
+  if (!description) return {}
+  return { todo: description }
 }
 
 function proposalSummary(changeJson: string): string {
@@ -103,6 +124,7 @@ export function BoardView({
   onOpenPersona,
   focusTodoId = null,
   onFocusTodoHandled,
+  onBoardChange,
   fixtureItems,
 }: Props) {
   const [items, setItems] = useState<PersonaTodo[]>([])
@@ -119,6 +141,8 @@ export function BoardView({
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [deployPromptDraft, setDeployPromptDraft] = useState('')
   const [titleDraft, setTitleDraft] = useState('')
+  const onBoardChangeRef = useRef(onBoardChange)
+  onBoardChangeRef.current = onBoardChange
 
   const load = useCallback(async () => {
     if (fixtureItems) {
@@ -136,6 +160,7 @@ export function BoardView({
     setItems(Array.isArray(board.todos) ? board.todos : [])
     setProposals(Array.isArray(pending.proposals) ? pending.proposals : [])
     setReady(true)
+    onBoardChangeRef.current?.()
   }, [chatId, fixtureItems])
 
   useEffect(() => {
@@ -266,7 +291,7 @@ export function BoardView({
       })
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not deploy this ticket')
+      setError(err instanceof Error ? err.message : 'Could not run this action')
     } finally {
       setBusyId(null)
     }
@@ -327,12 +352,6 @@ export function BoardView({
   }
 
   function closeDetail() {
-    if (selected == null) {
-      setSelectedId(null)
-      return
-    }
-    const dirty = deployPromptDraft !== (selected.deploy_prompt ?? '')
-    if (dirty && !window.confirm('Discard the unsaved deploy prompt?')) return
     setSelectedId(null)
   }
 
@@ -340,9 +359,9 @@ export function BoardView({
     return <p className="p-4 text-sm text-[color:var(--mc-text-muted)]">Open a chat to use the board.</p>
   }
 
-  const promptDirty = selected != null && deployPromptDraft !== (selected.deploy_prompt ?? '')
   const selectedOwner = selected ? (selected.owner_persona_id ?? selected.persona_id) : null
   const selectedRunning = selected != null && (selected.stage_outcome === 'running' || busyId === selected.id)
+  const selectedNotes = selected ? parseStageNotes(selected) : {}
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -506,7 +525,7 @@ export function BoardView({
                         disabled={stageRunning}
                         onClick={() => void runStage(item.id)}
                       >
-                        {stageRunning ? 'Running…' : 'Deploy'}
+                        {stageRunning ? 'Running…' : 'Action'}
                       </Button>
                       <Button
                         size="sm"
@@ -608,11 +627,11 @@ export function BoardView({
                   </label>
                 </div>
                 <label className="flex flex-col gap-1 text-sm">
-                  Deploy prompt
+                  Action prompt
                   <textarea
                     value={deployPromptDraft}
-                    aria-label="Deploy prompt"
-                    rows={5}
+                    aria-label="Action prompt"
+                    rows={2}
                     placeholder={stageBrief(selected.status)}
                     onChange={(event) => setDeployPromptDraft(event.target.value)}
                     className="rounded-md border border-[color:var(--mc-border-soft)] bg-transparent px-2 py-1"
@@ -621,37 +640,32 @@ export function BoardView({
                 <div className="flex flex-wrap gap-2">
                   <Button
                     size="sm"
-                    variant="outline"
-                    type="button"
-                    disabled={!promptDirty}
-                    onClick={() => {
-                      void patchItem(selected.id, { deploy_prompt: deployPromptDraft }).catch((err: unknown) => {
-                        setError(err instanceof Error ? err.message : 'Could not save the deploy prompt')
-                      })
-                    }}
-                  >
-                    Save prompt
-                  </Button>
-                  <Button
-                    size="sm"
                     type="button"
                     disabled={selectedRunning}
-                    onClick={() => void runStage(selected.id, promptDirty ? deployPromptDraft : undefined)}
+                    onClick={() => void runStage(selected.id, deployPromptDraft)}
                   >
-                    {selectedRunning ? 'Running…' : 'Deploy'}
+                    {selectedRunning ? 'Running…' : 'Action'}
                   </Button>
                 </div>
-                <section>
-                  <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-[color:var(--mc-text-muted)]">
+                <section className="flex flex-col gap-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-[color:var(--mc-text-muted)]">
                     Stage notes
                   </h3>
-                  <div className="max-h-60 overflow-y-auto rounded-md border border-[color:var(--mc-border-soft)] p-2">
-                    {selected.description?.trim() ? (
-                      <MarkdownStream>{selected.description}</MarkdownStream>
-                    ) : (
-                      <p className="text-sm text-[color:var(--mc-text-muted)]">No stage output recorded yet.</p>
-                    )}
-                  </div>
+                  {COLUMNS.some((column) => selectedNotes[column]) ? (
+                    COLUMNS.filter((column) => selectedNotes[column]).map((column) => (
+                      <div
+                        key={column}
+                        className="max-h-40 overflow-y-auto rounded-md border border-[color:var(--mc-border-soft)] p-2"
+                      >
+                        <h4 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--mc-text-muted)]">
+                          {COLUMN_LABEL[column]}
+                        </h4>
+                        <MarkdownStream>{selectedNotes[column] ?? ''}</MarkdownStream>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-[color:var(--mc-text-muted)]">No stage output recorded yet.</p>
+                  )}
                 </section>
                 <section>
                   <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-[color:var(--mc-text-muted)]">

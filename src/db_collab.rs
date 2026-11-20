@@ -75,6 +75,10 @@ pub fn migrate(conn: &Connection) -> Result<(), FinallyAValueBotError> {
             "deploy_prompt",
             "ALTER TABLE persona_todos ADD COLUMN deploy_prompt TEXT",
         ),
+        (
+            "stage_notes",
+            "ALTER TABLE persona_todos ADD COLUMN stage_notes TEXT",
+        ),
     ] {
         if !column_exists(conn, "persona_todos", column)? {
             conn.execute(ddl, [])?;
@@ -235,6 +239,27 @@ fn column_exists(
 
 pub fn clip_chars(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
+}
+
+/// Parse `stage_notes` JSON into a map keyed by pipeline column.
+pub fn parse_stage_notes(raw: Option<&str>) -> serde_json::Map<String, serde_json::Value> {
+    raw.and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
+}
+
+/// Write or replace the note for one pipeline column in `stage_notes` JSON.
+pub fn merge_stage_note(existing: Option<&str>, stage: &str, note: &str) -> Option<String> {
+    let trimmed = note.trim();
+    if trimmed.is_empty() {
+        return existing.map(|s| s.to_string());
+    }
+    let mut map = parse_stage_notes(existing);
+    map.insert(
+        stage.to_string(),
+        serde_json::Value::String(clip_chars(trimmed, 4000)),
+    );
+    Some(serde_json::Value::Object(map).to_string())
 }
 
 #[derive(Debug, Clone)]
@@ -490,6 +515,17 @@ impl Database {
             }
             None => existing.deploy_prompt.clone(),
         };
+        let stage_notes = match patch.stage_notes.as_deref() {
+            Some(text) => {
+                let clipped = clip_chars(text, 16_000);
+                if clipped.trim().is_empty() {
+                    None
+                } else {
+                    Some(clipped)
+                }
+            }
+            None => existing.stage_notes.clone(),
+        };
         let owner = patch.owner_persona_id.or(existing.owner_persona_id);
         let priority = patch.priority.unwrap_or(existing.priority);
         let due_at = patch.due_at.clone().or(existing.due_at.clone());
@@ -537,8 +573,8 @@ impl Database {
                 updated_at = ?9, completed_at = ?10, auto_advance = ?11,
                 stage_run_id = CASE WHEN ?12 = 1 THEN NULL ELSE stage_run_id END,
                 stage_outcome = CASE WHEN ?12 = 1 THEN NULL ELSE stage_outcome END,
-                deploy_prompt = ?13
-             WHERE id = ?14",
+                deploy_prompt = ?13, stage_notes = ?14
+             WHERE id = ?15",
             params![
                 title,
                 status,
@@ -553,6 +589,7 @@ impl Database {
                 auto_advance,
                 clear_stage_flag,
                 deploy_prompt,
+                stage_notes,
                 item_id
             ],
         )?;
@@ -669,7 +706,8 @@ impl Database {
             }
             Some(clip_chars(reason, 500))
         };
-        let description = match note.map(str::trim).filter(|text| !text.is_empty()) {
+        let note_text = note.map(str::trim).filter(|text| !text.is_empty());
+        let description = match note_text {
             Some(note) => {
                 let merged = match existing
                     .description
@@ -684,9 +722,13 @@ impl Database {
             }
             None => existing.description.clone(),
         };
+        let stage_notes = match note_text {
+            Some(note) => merge_stage_note(existing.stage_notes.as_deref(), &existing.status, note),
+            None => existing.stage_notes.clone(),
+        };
         let now = Utc::now().to_rfc3339();
         let completed_at = if outcome == "passed" && existing.status == "verify" {
-            Some(now.clone())
+            Some(existing.completed_at.clone().unwrap_or_else(|| now.clone()))
         } else {
             existing.completed_at.clone()
         };
@@ -698,12 +740,13 @@ impl Database {
         conn.execute(
             "UPDATE persona_todos
              SET stage_outcome = ?1, stage_run_id = NULL, blocked_reason = ?2,
-                 description = ?3, completed_at = ?4, updated_at = ?5
-             WHERE id = ?6",
+                 description = ?3, stage_notes = ?4, completed_at = ?5, updated_at = ?6
+             WHERE id = ?7",
             params![
                 stored_outcome,
                 blocked,
                 description,
+                stage_notes,
                 completed_at,
                 now,
                 item_id
@@ -1458,6 +1501,7 @@ pub struct BoardPatch<'a> {
     /// `Some(false)` clears `completed_at`.
     pub completed: Option<bool>,
     pub deploy_prompt: Option<String>,
+    pub stage_notes: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1604,5 +1648,32 @@ fn normalize_turn_mode(mode: &str) -> Result<&str, FinallyAValueBotError> {
         other => Err(FinallyAValueBotError::ToolExecution(format!(
             "turn_mode must be moderator or roundtable (got '{other}')"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod stage_notes_tests {
+    use super::{merge_stage_note, parse_stage_notes};
+
+    #[test]
+    fn merge_stage_note_keeps_other_columns() {
+        let first = merge_stage_note(None, "todo", "Capture the latch.").unwrap();
+        let second = merge_stage_note(Some(&first), "plan", "Replace the strike.").unwrap();
+        let map = parse_stage_notes(Some(&second));
+        assert_eq!(
+            map.get("todo").and_then(|v| v.as_str()),
+            Some("Capture the latch.")
+        );
+        assert_eq!(
+            map.get("plan").and_then(|v| v.as_str()),
+            Some("Replace the strike.")
+        );
+    }
+
+    #[test]
+    fn empty_note_leaves_existing() {
+        let first = merge_stage_note(None, "build", "Filed the edge.").unwrap();
+        let same = merge_stage_note(Some(&first), "build", "   ").unwrap();
+        assert_eq!(first, same);
     }
 }

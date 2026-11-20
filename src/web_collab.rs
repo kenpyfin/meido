@@ -761,6 +761,7 @@ async fn decide_proposal(
                 auto_advance: None,
                 completed: None,
                 deploy_prompt: None,
+                stage_notes: None,
             };
             let _ = call_blocking(state.app_state.db.clone(), move |db| {
                 db.apply_board_patch(chat_id, item_id, &patch)

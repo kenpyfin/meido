@@ -1635,9 +1635,10 @@ export function App({
     }
     setInboxLoading(true)
     try {
-      const query = new URLSearchParams({ chat_id: String(cid), status: 'open' })
+      const query = new URLSearchParams({ chat_id: String(cid), status: 'todo' })
       const data = await api<{ todos?: PersonaTodo[] }>(`/api/todos?${query.toString()}`)
-      setInboxTodos(Array.isArray(data.todos) ? data.todos : [])
+      const items = Array.isArray(data.todos) ? data.todos : []
+      setInboxTodos(items.filter((t) => t.status === 'todo' && !t.completed_at))
     } catch {
       setInboxTodos([])
     } finally {
@@ -2775,6 +2776,9 @@ export function App({
                       personas={personas}
                       focusTodoId={boardFocusTodoId}
                       onFocusTodoHandled={() => setBoardFocusTodoId(null)}
+                      onBoardChange={() => {
+                        void loadInboxTodos(chatId)
+                      }}
                       onOpenPersona={(personaId, sessionId) => {
                         const persona = personas.find((item) => item.id === personaId)
                         if (persona) {
