@@ -12,8 +12,8 @@ export function pickQueueLaneForPersona(
   personaId: number | null,
 ): QueueLane | null {
   if (personaId != null && personaId > 0) {
-    const match = lanes.find((l) => l.persona_id === personaId)
-    if (match) return match
+    // Do not fall back to another persona's lane when this one is idle.
+    return lanes.find((l) => l.persona_id === personaId) ?? null
   }
   return lanes[0] ?? null
 }

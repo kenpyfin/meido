@@ -44,9 +44,12 @@ import { useVisualViewportFrame } from '../hooks/use-visual-viewport-frame'
 import { useKeyboardShortcuts } from '../hooks/use-keyboard-shortcuts'
 import { useOperatorOps } from '../hooks/use-operator-ops'
 import { useOpsPoll } from '../hooks/use-ops-poll'
+import { useQueryClient } from '@tanstack/react-query'
 import { useConversationTopics } from '../hooks/use-conversation-topics'
 import { useTopicDossier } from '../hooks/use-topic-dossier'
 import { usePersonaSession } from '../hooks/use-persona-session'
+import { conversationTopicsKey } from '../lib/conversation-topics'
+import { watchRunStream, type StreamWatchOutcome } from '../lib/run-stream'
 import {
   dataUrlToFile,
   splitDataUrl,
@@ -94,7 +97,8 @@ const CoordinatorWorkspace = lazy(() =>
 
 type Appearance = 'dark' | 'light'
 
-type PendingRun = { runId: string; personaId: number }
+/** `attached` is true while the mounted ThreadPane adapter is yielding live SSE deltas. */
+type PendingRun = { runId: string; personaId: number; attached: boolean }
 type UiTheme =
   | 'lit'
   | 'lit-sakura'
@@ -337,6 +341,7 @@ export function App({
   onAuthErrorRef?: React.MutableRefObject<(message: string) => void>
 }) {
   const { requestConfirm, confirmDialog } = useConfirmDialog()
+  const queryClient = useQueryClient()
   useVisualViewportFrame()
   const [appearance, setAppearance] = useState<Appearance>(readAppearance())
   const [uiTheme, setUiTheme] = useState<UiTheme>(readUiTheme())
@@ -345,6 +350,8 @@ export function App({
   const [statusText, setStatusText] = useState<string>('Idle')
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>(readSidebarMode)
   const [hideScheduled, setHideScheduled] = useState(false)
+  /** In-flight `/api/stream` AbortControllers keyed by run_id (live or background). */
+  const watchedRunsRef = useRef<Map<string, AbortController>>(new Map())
 
   useEffect(() => {
     if (onAuthErrorRef) onAuthErrorRef.current = setError
@@ -438,6 +445,8 @@ export function App({
   } = persona
   const personasRef = useRef(personas)
   personasRef.current = personas
+  const activePersonaIdRef = useRef(activePersonaId)
+  activePersonaIdRef.current = activePersonaId
 
   const {
     bulletinFocus,
@@ -452,6 +461,7 @@ export function App({
 
   const {
     historySeed,
+    setHistorySeed,
     historyMode,
     historyHasOlder,
     historyHasNewer,
@@ -843,10 +853,22 @@ export function App({
       ),
     [pendingRuns, activePersonaId],
   )
+  const liveStreamingForActivePersona = useMemo(
+    () => pendingRunsForActivePersona.some((r) => r.attached),
+    [pendingRunsForActivePersona],
+  )
+  const { queueLane, queueLanesAll, otherPersonasPending, backgroundActiveCount, backgroundJobs, queueSampledAt, unreadRuns, blockedItems, invalidateOps, clearUnreadRuns } =
+    useOpsPoll({
+      chatId,
+      activePersonaId,
+      docVisible,
+      pendingRunsForActivePersona: pendingRunsForActivePersona.length,
+      setPersonas,
+    })
   const topics = useConversationTopics(
     activePersonaId,
     activeSessionId,
-    pendingRunsForActivePersona.length > 0,
+    pendingRunsForActivePersona.length > 0 || (queueLane?.pending ?? 0) > 0,
   )
   const topicStarts = useMemo(() => {
     const starts: Record<string, { id: string; title: string }> = {}
@@ -973,14 +995,6 @@ export function App({
   const handleOpenTopics = useCallback(() => {
     setTopicsSheetOpen(true)
   }, [])
-  const { queueLane, queueLanesAll, otherPersonasPending, backgroundActiveCount, backgroundJobs, queueSampledAt, unreadRuns, blockedItems, invalidateOps, clearUnreadRuns } =
-    useOpsPoll({
-      chatId,
-      activePersonaId,
-      docVisible,
-      pendingRunsForActivePersona: pendingRunsForActivePersona.length,
-      setPersonas,
-    })
 
   const queueDialogItems = useMemo(() => {
     if (queueShowAllPersonas) {
@@ -1149,6 +1163,98 @@ export function App({
     }
   }
 
+  const reconcileAfterRun = useCallback(
+    async (cid: number | null, personaId: number | null | undefined) => {
+      if (cid == null) return
+      void invalidateOps(cid)
+      const pid = personaId != null && personaId > 0 ? personaId : null
+      if (pid == null || activePersonaIdRef.current !== pid) return
+      try {
+        await loadHistory(cid, pid)
+        await loadPersonaBulletin(pid)
+      } catch {
+        // History/bulletin sync failed; the next poll or Jump to latest still recovers.
+      }
+      void queryClient.invalidateQueries({
+        queryKey: conversationTopicsKey(pid, activeSessionIdRef.current),
+      })
+      void queryClient.invalidateQueries({ queryKey: ['topicDossier', pid] })
+    },
+    [invalidateOps, loadHistory, loadPersonaBulletin, queryClient],
+  )
+
+  const finishStreamWatch = useCallback(
+    (
+      runId: string,
+      chatIdForRun: number | null,
+      personaIdForRun: number,
+      outcome: StreamWatchOutcome,
+      opts?: { guestError?: string },
+    ) => {
+      watchedRunsRef.current.delete(runId)
+      setPendingRuns((prev) => prev.filter((r) => r.runId !== runId))
+      if (opts?.guestError && activePersonaIdRef.current === personaIdForRun) {
+        showComposerAlert(opts.guestError, '')
+      }
+      if (activePersonaIdRef.current === personaIdForRun) {
+        setStatusText(outcome === 'error' ? 'Error' : 'Done')
+      }
+      void reconcileAfterRun(chatIdForRun, personaIdForRun)
+    },
+    [reconcileAfterRun, showComposerAlert],
+  )
+
+  /** Background watcher for runs whose ThreadPane is gone (persona switch / page refresh). */
+  const startBackgroundStreamWatch = useCallback(
+    (runId: string, personaId: number, chatIdForRun: number | null) => {
+      if (!runId || watchedRunsRef.current.has(runId)) return
+      const ctrl = new AbortController()
+      watchedRunsRef.current.set(runId, ctrl)
+      setPendingRuns((prev) =>
+        prev.some((r) => r.runId === runId)
+          ? prev.map((r) => (r.runId === runId ? { ...r, attached: false, personaId } : r))
+          : [...prev, { runId, personaId, attached: false }],
+      )
+      void watchRunStream(runId, {
+        headers: makeHeaders(),
+        signal: ctrl.signal,
+        handlers: {
+          onStatus: (message) => {
+            if (activePersonaIdRef.current === personaId) setStatusText(message)
+          },
+          onDone: () => {
+            finishStreamWatch(runId, chatIdForRun, personaId, 'done')
+          },
+          onError: (errorText, kind) => {
+            finishStreamWatch(runId, chatIdForRun, personaId, 'error', {
+              guestError: kind === 'guest' ? errorText : undefined,
+            })
+          },
+        },
+      })
+        .then((outcome) => {
+          if (outcome === 'aborted') {
+            watchedRunsRef.current.delete(runId)
+            return
+          }
+          // Terminal handlers already finished; only reconcile orphan closed streams.
+          if (watchedRunsRef.current.has(runId)) {
+            finishStreamWatch(runId, chatIdForRun, personaId, outcome)
+          }
+        })
+        .catch(() => {
+          if (ctrl.signal.aborted) {
+            watchedRunsRef.current.delete(runId)
+            return
+          }
+          if (watchedRunsRef.current.has(runId)) {
+            finishStreamWatch(runId, chatIdForRun, personaId, 'closed')
+          }
+        })
+    },
+    [finishStreamWatch],
+  )
+
   const adapter = useMemo<ChatModelAdapter>(
     () => ({
       run: async function* (options): AsyncGenerator<ChatModelRunResult, void> {
@@ -1259,295 +1365,199 @@ export function App({
           })
           pendingReplyRef.current = null
           const pid = activePersonaId != null && activePersonaId > 0 ? activePersonaId : 0
+          const chatIdForRun = chatId
+          const personaIdForRun = pid
+
+          // Own AbortController so ThreadPane unmount does not cancel the SSE subscription.
+          const watchCtrl = new AbortController()
+          watchedRunsRef.current.set(runId, watchCtrl)
           setPendingRuns((prev) =>
             prev.some((r) => r.runId === runId)
-              ? prev
-              : [...prev, { runId, personaId: pid }],
+              ? prev.map((r) =>
+                  r.runId === runId ? { ...r, attached: true, personaId: pid } : r,
+                )
+              : [...prev, { runId, personaId: pid, attached: true }],
           )
           setStatusText('Queued')
           // Create assistant bubble immediately; SSE deltas will append real text.
           yield { content: [{ type: 'text', text: '' }] }
 
-          const chatIdForRun = chatId
-          const personaIdForRun = activePersonaId
-
-          const parseJsonObject = (raw: string): Record<string, unknown> | null => {
-            try {
-              const parsed = JSON.parse(raw) as Record<string, unknown>
-              if (parsed && typeof parsed === 'object') return parsed
-              return null
-            } catch {
-              return null
-            }
-          }
-
-          type SseEvent = { event: string; data: string; id?: string }
-
-          async function* parseSseEvents(resp: Response): AsyncGenerator<SseEvent, void, unknown> {
-            const body = resp.body
-            if (!body) return
-
-            const reader = body.getReader()
-            const decoder = new TextDecoder('utf-8')
-
-            let buffer = ''
-            let eventName: string | undefined
-            let eventId: string | undefined
-            let dataLines: string[] = []
-
-            while (true) {
-              const { value, done } = await reader.read()
-              if (done) break
-              buffer += decoder.decode(value, { stream: true })
-
-              while (true) {
-                const newlineIdx = buffer.indexOf('\n')
-                if (newlineIdx < 0) break
-
-                const line = buffer.slice(0, newlineIdx).replace(/\r$/, '')
-                buffer = buffer.slice(newlineIdx + 1)
-
-                if (line === '') {
-                  if (dataLines.length > 0) {
-                    yield {
-                      event: eventName ?? 'message',
-                      data: dataLines.join('\n'),
-                      id: eventId,
-                    }
-                  }
-                  eventName = undefined
-                  eventId = undefined
-                  dataLines = []
-                  continue
-                }
-
-                if (line.startsWith(':')) continue
-                if (line.startsWith('event:')) {
-                  eventName = line.slice('event:'.length).trim()
-                  continue
-                }
-                if (line.startsWith('id:')) {
-                  eventId = line.slice('id:'.length).trim()
-                  continue
-                }
-                if (line.startsWith('data:')) {
-                  dataLines.push(line.slice('data:'.length).trimStart())
-                }
-              }
-            }
-
-            if (dataLines.length > 0) {
-              yield { event: eventName ?? 'message', data: dataLines.join('\n'), id: eventId }
-            }
-          }
-
-          let completedOrError = false
+          let detached = false
           let seenAnyDelta = false
-
           let pendingDelta = ''
           let lastFlushMs = Date.now()
           const sseSubscribeStartMs = Date.now()
           let firstDeltaLatencyMs: number | null = null
-
-          const sseUrl = `/api/stream?run_id=${encodeURIComponent(runId)}`
-          const sseResp = await fetch(sseUrl, { headers: makeHeaders(), signal: options.abortSignal })
-          if (!sseResp.ok) {
-            throw new Error(`stream subscribe failed (HTTP ${sseResp.status})`)
+          let streamOutcome: StreamWatchOutcome | null = null
+          let guestErrorText: string | undefined
+          let wake: (() => void) | null = null
+          const wakeUp = () => {
+            const w = wake
+            wake = null
+            w?.()
           }
+          const waitWake = () =>
+            new Promise<void>((resolve) => {
+              wake = resolve
+            })
 
-          let storedUserMessageId = ''
+          const onUiAbort = () => {
+            if (detached) return
+            detached = true
+            setPendingRuns((prev) =>
+              prev.map((r) => (r.runId === runId ? { ...r, attached: false } : r)),
+            )
+            wakeUp()
+          }
+          options.abortSignal.addEventListener('abort', onUiAbort)
 
-          try {
-            for await (const evt of parseSseEvents(sseResp)) {
-              if (options.abortSignal.aborted) break
-
-              if (evt.event === 'message_stored') {
-                const obj = parseJsonObject(evt.data)
-                if (typeof obj?.message_id === 'string' && obj.message_id) {
-                  storedUserMessageId = obj.message_id
-                }
+          const watchPromise = watchRunStream(runId, {
+            headers: makeHeaders(),
+            signal: watchCtrl.signal,
+            handlers: {
+              onStatus: (message) => {
+                if (activePersonaIdRef.current === personaIdForRun) setStatusText(message)
+              },
+              onMessageStored: () => {
                 void invalidateOps(chatIdForRun)
-                continue
-              }
-
-              if (evt.event === 'message_rewritten') {
-                const obj = parseJsonObject(evt.data)
-                const msgId =
-                  typeof obj?.message_id === 'string' && obj.message_id
-                    ? obj.message_id
-                    : storedUserMessageId
-                const original = typeof obj?.original === 'string' ? obj.original : ''
-                const rewritten = typeof obj?.rewritten === 'string' ? obj.rewritten : ''
-                if (rewritten) {
-                  const entry = { original: original || messageText, rewritten }
-                  setRewrittenMessages((prev) => {
-                    const next = { ...prev }
-                    if (msgId) next[msgId] = entry
-                    if (localUserMessageId) next[localUserMessageId] = entry
-                    return next
-                  })
-                  if (msgId) {
-                    chat.setHistorySeed((prev) =>
-                      prev.map((m) =>
-                        m.id === msgId
-                          ? { ...m, content: [{ type: 'text' as const, text: rewritten }] }
-                          : m,
-                      ),
-                    )
-                  }
+              },
+              onMessageRewritten: ({ messageId, original, rewritten }) => {
+                const entry = { original: original || messageText, rewritten }
+                setRewrittenMessages((prev) => {
+                  const next = { ...prev }
+                  if (messageId) next[messageId] = entry
+                  if (localUserMessageId) next[localUserMessageId] = entry
+                  return next
+                })
+                if (messageId && !detached) {
+                  setHistorySeed((prev) =>
+                    prev.map((m) =>
+                      m.id === messageId
+                        ? { ...m, content: [{ type: 'text' as const, text: rewritten }] }
+                        : m,
+                    ),
+                  )
+                }
+                if (activePersonaIdRef.current === personaIdForRun) {
                   setStatusText('Message rewritten')
                 }
-                continue
-              }
-
-              if (evt.event === 'status') {
-                const obj = parseJsonObject(evt.data)
-                const message = typeof obj?.message === 'string' ? obj.message : null
-                if (message) setStatusText(message)
-                continue
-              }
-
-              if (evt.event === 'delta') {
-                const obj = parseJsonObject(evt.data)
-                const delta = typeof obj?.delta === 'string' ? obj.delta : ''
-                if (!delta) continue
-
+              },
+              onDelta: (delta) => {
                 seenAnyDelta = true
                 if (firstDeltaLatencyMs == null) {
                   firstDeltaLatencyMs = Date.now() - sseSubscribeStartMs
                 }
-                pendingDelta += delta
-
-                // Throttle yields to avoid token-by-token re-renders.
-                const nowMs = Date.now()
-                if (nowMs - lastFlushMs >= 80) {
-                  yield { content: [{ type: 'text', text: pendingDelta }] }
-                  pendingDelta = ''
-                  lastFlushMs = nowMs
+                if (!detached) {
+                  pendingDelta += delta
+                  wakeUp()
                 }
-                continue
-              }
-
-              if (evt.event === 'done') {
-                const doneObj = parseJsonObject(evt.data)
-                const responseText =
-                  typeof doneObj?.response === 'string' ? doneObj.response : ''
-                if (pendingDelta) {
-                  yield { content: [{ type: 'text', text: pendingDelta }] }
-                  pendingDelta = ''
-                } else if (responseText && !seenAnyDelta) {
-                  // Agent runs do not emit TextDelta today; the final text arrives on `done`.
-                  yield { content: [{ type: 'text', text: responseText }] }
+              },
+              onDone: (responseText) => {
+                if (!detached && responseText && !seenAnyDelta && !pendingDelta) {
+                  pendingDelta = responseText
                   seenAnyDelta = true
                 }
-                completedOrError = true
-                if (chatIdForRun != null) {
-                  try {
-                    await loadHistory(chatIdForRun, personaIdForRun ?? undefined)
-                    if (personaIdForRun != null && personaIdForRun > 0) {
-                      await loadPersonaBulletin(personaIdForRun)
-                    }
-                  } catch {
-                    // History sync failed; streamed `response` text (if any) remains visible.
-                  }
+                wakeUp()
+              },
+              onError: (errorText, kind) => {
+                if (kind === 'guest') guestErrorText = errorText
+                else if (!detached && !seenAnyDelta && !pendingDelta) {
+                  pendingDelta = `Error: ${errorText}`
                 }
-                setPendingRuns((prev) => prev.filter((r) => r.runId !== runId))
-                setStatusText('Done')
-                const doneLatencyMs = Date.now() - sseSubscribeStartMs
-                if (import.meta.env?.DEV && typeof console !== 'undefined' && console.debug) {
-                  console.debug('[web][stream]', {
-                    runId,
-                    chatId: chatIdForRun,
-                    personaId: personaIdForRun,
-                    firstDeltaLatencyMs,
-                    doneLatencyMs,
-                  })
-                }
-                break
+                wakeUp()
+              },
+            },
+          })
+            .then((outcome) => {
+              streamOutcome = outcome
+              wakeUp()
+              return outcome
+            })
+            .catch((e: unknown) => {
+              if (!watchCtrl.signal.aborted && !detached) {
+                const msg = e instanceof Error ? e.message : String(e)
+                pendingDelta = pendingDelta || `Error: ${msg}`
+                streamOutcome = 'error'
+              } else if (!streamOutcome) {
+                streamOutcome = watchCtrl.signal.aborted ? 'aborted' : 'closed'
               }
+              wakeUp()
+              return streamOutcome ?? 'closed'
+            })
 
-              if (evt.event === 'error') {
-                completedOrError = true
-                const obj = parseJsonObject(evt.data)
-                const errorText = typeof obj?.error === 'string' ? obj.error : 'unknown error'
-                if (obj?.kind === 'guest') {
-                  showComposerAlert(errorText, '')
-                  setPendingRuns((prev) => prev.filter((r) => r.runId !== runId))
-                  setStatusText('Error')
-                  if (chatIdForRun != null) {
-                    try {
-                      await loadHistory(chatIdForRun, personaIdForRun ?? undefined)
-                      if (personaIdForRun != null && personaIdForRun > 0) {
-                        await loadPersonaBulletin(personaIdForRun)
-                      }
-                    } catch {
-                      // History sync failed; the composer notice still names the failure.
-                    }
+          try {
+            while (streamOutcome == null) {
+              if (detached) {
+                // ThreadPane unmounted (persona switch). Keep the SSE watch alive in the
+                // background so Done still reconciles history when the operator returns.
+                void watchPromise.then((outcome) => {
+                  if (outcome === 'aborted') {
+                    watchedRunsRef.current.delete(runId)
+                    return
                   }
-                  break
-                }
-                if (pendingDelta) {
-                  yield { content: [{ type: 'text', text: pendingDelta }] }
-                  pendingDelta = ''
-                }
-                if (!seenAnyDelta) {
-                  yield { content: [{ type: 'text', text: `Error: ${errorText}` }] }
-                }
-                setPendingRuns((prev) => prev.filter((r) => r.runId !== runId))
-                setStatusText('Error')
-                if (chatIdForRun != null) {
-                  try {
-                    await loadHistory(chatIdForRun, personaIdForRun ?? undefined)
-                    if (personaIdForRun != null && personaIdForRun > 0) {
-                      await loadPersonaBulletin(personaIdForRun)
-                    }
-                  } catch {
-                    // History sync failed; streamed error text remains visible.
-                  }
-                }
-                const doneLatencyMs = Date.now() - sseSubscribeStartMs
-                if (import.meta.env?.DEV && typeof console !== 'undefined' && console.debug) {
-                  console.debug('[web][stream][error]', {
-                    runId,
-                    chatId: chatIdForRun,
-                    personaId: personaIdForRun,
-                    firstDeltaLatencyMs,
-                    doneLatencyMs,
-                    errorText,
+                  finishStreamWatch(runId, chatIdForRun, personaIdForRun, outcome, {
+                    guestError: guestErrorText,
                   })
-                }
-                break
+                })
+                return
               }
-            }
-          } catch (e) {
-            if (!options.abortSignal.aborted) {
-              const msg = e instanceof Error ? e.message : String(e)
-              if (!seenAnyDelta) {
-                yield { content: [{ type: 'text', text: `Error: ${msg}` }] }
+              if (pendingDelta && Date.now() - lastFlushMs >= 80) {
+                const chunk = pendingDelta
+                pendingDelta = ''
+                lastFlushMs = Date.now()
+                yield { content: [{ type: 'text', text: chunk }] }
+                continue
               }
-              setStatusText('Error')
-              completedOrError = true
+              await waitWake()
             }
+
+            if (pendingDelta) {
+              yield { content: [{ type: 'text', text: pendingDelta }] }
+              pendingDelta = ''
+            }
+
+            const outcome = streamOutcome
+            if (import.meta.env?.DEV && typeof console !== 'undefined' && console.debug) {
+              console.debug('[web][stream]', {
+                runId,
+                chatId: chatIdForRun,
+                personaId: personaIdForRun,
+                firstDeltaLatencyMs,
+                doneLatencyMs: Date.now() - sseSubscribeStartMs,
+                outcome,
+              })
+            }
+            finishStreamWatch(runId, chatIdForRun, personaIdForRun, outcome, {
+              guestError: guestErrorText,
+            })
           } finally {
-            if (!completedOrError && !options.abortSignal.aborted) {
-              // Stream ended without `done`/`error`; reconcile from DB once.
-              setStatusText('Done')
-              if (chatIdForRun != null) {
-                try {
-                  await loadHistory(chatIdForRun, personaIdForRun ?? undefined)
-                } catch {
-                  // ignore
-                }
+            options.abortSignal.removeEventListener('abort', onUiAbort)
+            if (!detached) {
+              // Attached completion path already called finishStreamWatch; ensure map cleanup
+              // if the watch was aborted without a terminal event.
+              if (watchedRunsRef.current.get(runId) === watchCtrl) {
+                watchedRunsRef.current.delete(runId)
               }
             }
-            setPendingRuns((prev) => prev.filter((r) => r.runId !== runId))
           }
         } finally {
           void invalidateOps(chatId)
         }
       },
     }),
-    [chatId, selectedSessionReadOnly, activePersonaId, formatReplyForSend, historyMode, jumpToLatest, loadHistory, loadPersonaBulletin, invalidateOps, setDraftByThreadKey, showComposerAlert],
+    [
+      chatId,
+      selectedSessionReadOnly,
+      activePersonaId,
+      formatReplyForSend,
+      historyMode,
+      jumpToLatest,
+      invalidateOps,
+      setDraftByThreadKey,
+      showComposerAlert,
+      finishStreamWatch,
+      setHistorySeed,
+    ],
   )
 
   const toggleAppearance = useCallback((): void => {
@@ -2021,6 +2031,10 @@ export function App({
 
   useEffect(() => {
     setPendingRuns([])
+    for (const ctrl of watchedRunsRef.current.values()) {
+      ctrl.abort()
+    }
+    watchedRunsRef.current.clear()
   }, [chatId])
 
   useEffect(() => {
@@ -2060,6 +2074,53 @@ export function App({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId, activePersonaId, backgroundJobs])
+
+  // Re-attach to in-flight web runs after a mid-stream page refresh (or if the live
+  // adapter never claimed the run). Queue diagnostics carries source === 'web'.
+  useEffect(() => {
+    if (chatId == null) return
+    for (const lane of queueLanesAll) {
+      for (const item of lane.items ?? []) {
+        if (item.source !== 'web') continue
+        const runId = item.run_id?.trim()
+        if (!runId) continue
+        if (watchedRunsRef.current.has(runId)) continue
+        startBackgroundStreamWatch(runId, item.persona_id, chatId)
+      }
+    }
+  }, [chatId, queueLanesAll, startBackgroundStreamWatch])
+
+  // When a queue item disappears and no SSE watcher owns it, reconcile immediately
+  // (covers run-hub expiry after refresh and non-web sources that still wrote history).
+  const prevQueueRunsRef = useRef<Map<string, number>>(new Map())
+  useEffect(() => {
+    if (chatId == null) {
+      prevQueueRunsRef.current = new Map()
+      return
+    }
+    const next = new Map<string, number>()
+    for (const lane of queueLanesAll) {
+      for (const item of lane.items ?? []) {
+        if (item.run_id) next.set(item.run_id, item.persona_id)
+      }
+    }
+    const prev = prevQueueRunsRef.current
+    const finished: Array<{ runId: string; personaId: number }> = []
+    for (const [runId, personaId] of prev) {
+      if (!next.has(runId)) finished.push({ runId, personaId })
+    }
+    prevQueueRunsRef.current = next
+    for (const { runId, personaId } of finished) {
+      if (watchedRunsRef.current.has(runId)) continue
+      setPendingRuns((current) => current.filter((r) => r.runId !== runId))
+      if (activePersonaIdRef.current === personaId) {
+        setStatusText('Done')
+        void reconcileAfterRun(chatId, personaId)
+      } else {
+        void invalidateOps(chatId)
+      }
+    }
+  }, [chatId, queueLanesAll, reconcileAfterRun, invalidateOps])
 
   // Lightweight refresh for cross-channel / background replies (no SSE for those paths).
   useEffect(() => {
@@ -2622,7 +2683,7 @@ export function App({
                       adapter={adapter}
                       initialMessages={historySeed}
                       runtimeKey={runtimeKey}
-                      isStreaming={pendingRunsForActivePersona.length > 0}
+                      isStreaming={liveStreamingForActivePersona}
                       historyLoading={historyLoading}
                       historyMode={historyMode}
                       historyHasOlder={historyHasOlder}

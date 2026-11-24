@@ -88,11 +88,15 @@ export function useChatHistory({
 
   const activeSessionIdRef = useRef<string | null>(null)
   activeSessionIdRef.current = activeSessionId
+  const activePersonaIdRef = useRef<number | null>(activePersonaId)
+  activePersonaIdRef.current = activePersonaId
   const hideScheduledRef = useRef(hideScheduled)
   hideScheduledRef.current = hideScheduled
   const historySeedRef = useRef<ThreadMessageLike[]>([])
   const historyModeRef = useRef<HistoryWindowMode>(historyMode)
   const pendingReplyRef = useRef<PendingReplyQuote | null>(null)
+  /** Bumped on reset/replace so in-flight history fetches cannot clobber a newer thread. */
+  const loadSeqRef = useRef(0)
 
   useEffect(() => {
     historySeedRef.current = historySeed
@@ -106,6 +110,7 @@ export function useChatHistory({
   }, [chatId, activePersonaId, pendingReplyByThreadKey])
 
   const resetHistoryPagination = useCallback(() => {
+    loadSeqRef.current += 1
     setHistoryMode('live')
     setHistoryHasOlder(false)
     setHistoryHasNewer(false)
@@ -177,6 +182,12 @@ export function useChatHistory({
       const isCursor =
         Boolean(opts?.aroundId) || Boolean(opts?.beforeId) || Boolean(opts?.afterId) || Boolean(day)
       const mode = historyModeRef.current
+      if (opts?.replace) {
+        loadSeqRef.current += 1
+      }
+      const requestSeq = loadSeqRef.current
+      const stillCurrent = () =>
+        requestSeq === loadSeqRef.current && activePersonaIdRef.current === pid
 
       // Background poll / run-complete: never overwrite an anchored window unless
       // this call is an explicit cursor/replace navigation.
@@ -191,6 +202,7 @@ export function useChatHistory({
           if (sid) query.set('session_id', sid)
           if (hideScheduledRef.current) query.set('hide_scheduled', '1')
           const data = await api<HistoryApiResponse>(`/api/history?${query.toString()}`)
+          if (!stillCurrent()) return
           const raw = Array.isArray(data.messages) ? data.messages : []
           const newestId = raw.length > 0 ? raw[raw.length - 1]?.id ?? '' : ''
           const seed = historySeedRef.current
@@ -226,6 +238,7 @@ export function useChatHistory({
       }
 
       const data = await api<HistoryApiResponse>(`/api/history?${query.toString()}`)
+      if (!stillCurrent()) return
       const rawMessages = Array.isArray(data.messages) ? data.messages : []
       const mapped = mapBackendHistory(rawMessages)
       const hasOlder = Boolean(data.has_older)
