@@ -1,7 +1,7 @@
 //! Four-column board pipeline: todo, plan, build, verify.
 //!
 //! Dragging a card only changes its column. A stage runs when the operator
-//! presses Deploy, or when that card's Auto flag advances after an explicit pass.
+//! presses Action, or when that card's Auto flag chains the next stage after a pass.
 
 use crate::db::PersonaTodo;
 use crate::db_collab::clip_chars;
@@ -72,8 +72,8 @@ You are running the {stage} stage for board card #{id} in your own thread.\n\n\
 When the stage work is finished, call finish_pipeline_stage with item_id {id} and outcome \"pass\".\n\
 If you cannot finish, call finish_pipeline_stage with outcome \"blocked\" and a blocked_reason.\n\
 Do not change the card status yourself. A status change during this run is ignored.\n\
-Passing the stage does not move the card unless Auto is on for it.\n\
-A note passed to finish_pipeline_stage is appended to the stage notes. It does not replace the deploy prompt.\n",
+Passing the stage moves the card to the next column. Auto also starts the next stage.\n\
+A note passed to finish_pipeline_stage is stored under this column's stage notes. It does not replace the action prompt.\n",
         id = item.id,
         stage = item.status,
         title = item.title,
@@ -112,6 +112,7 @@ mod tests {
             stage_run_id: None,
             stage_outcome: None,
             deploy_prompt: deploy_prompt.map(str::to_string),
+            stage_notes: None,
         }
     }
 

@@ -396,11 +396,17 @@ pub async fn run_hooks_for_event_async(
                 let discovery_hint = signal_u64(input, "discovery_streak_hint_threshold").max(1);
                 let discovery_stall = signal_u64(input, "discovery_streak_stall_threshold").max(2);
                 if discovery_count >= discovery_hint {
-                    out.additional_contexts.push("Routing hint: you are in a discovery/search loop (list tasks, list cursor runs, broad grep/find). For job status use `read_tiered_memory` and `list_cursor_agent_runs`; for files use `glob` with a pattern (e.g. PZ-*.png) or `read_file` on a known path — not recursive shell grep over `shared/`.".to_string());
+                    out.additional_contexts.push(
+                        "Routing hint: you are in a discovery/search loop (list tasks, list cursor runs, broad grep/find). \
+If you already located the target file(s), stop verifying with more searches — answer the user now, or call `finish_pipeline_stage` when this is a `[board_stage]` turn. \
+Otherwise prefer `locate_file` / the `grep` tool on one declared root (with a narrow path + glob), `read_file` on a known path, or `read_tiered_memory` / `list_cursor_agent_runs` for job status — not recursive shell grep over large trees."
+                            .to_string(),
+                    );
                 }
                 if discovery_count >= discovery_stall {
                     out.blocked_reason = Some(
-                        "stall_response: I stopped because this run kept searching without making progress (repeated status/list/grep steps). Tell me what you need in one line — e.g. show the latest PZ image, check a specific background job id, or retry generation — and I will use a direct path (tiered memory, glob, or a single read) instead of scanning the tree."
+                        "stall_response: I stopped because this run kept searching without making progress (repeated status/list/grep steps). \
+Tell me what you need in one line — e.g. open a specific path, check a background job id, finish the board stage, or answer from what was already found — and I will use a direct path (`locate_file`, tool `grep`, `read_file`, or `finish_pipeline_stage`) instead of scanning the tree."
                             .to_string(),
                     );
                     break;

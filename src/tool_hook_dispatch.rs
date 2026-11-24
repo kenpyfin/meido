@@ -247,8 +247,9 @@ pub async fn dispatch_tool_with_hooks(
         *ctx.legacy_edit_without_block_count = 0;
     }
 
-    let iteration_had_progress = is_progress_tool_use(tool_name);
-    let iteration_had_discovery = is_discovery_tool_use(tool_name, &tool_input);
+    let iteration_had_progress = crate::tool_loop_signals::is_progress_tool_use(tool_name);
+    let iteration_had_discovery =
+        crate::tool_loop_signals::is_discovery_tool_use(tool_name, &tool_input);
     if iteration_had_progress {
         *ctx.discovery_streak_count = 0;
     } else if iteration_had_discovery {
@@ -334,57 +335,5 @@ pub async fn run_post_tool_batch_hooks(
     PostToolBatchOutcome {
         hook,
         stall_response,
-    }
-}
-
-fn is_progress_tool_use(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "spawn_background_command"
-            | "write_file"
-            | "edit_file"
-            | "apply_search_replace"
-            | "symbol_edit"
-            | "read_tiered_memory"
-            | "read_memory"
-            | "write_tiered_memory"
-            | "write_memory_state"
-            | "schedule_task"
-            | "register_tracked_job"
-            | "update_bulletin_focus"
-            | "add_todo"
-            | "list_todos"
-    )
-}
-
-fn is_discovery_tool_use(tool_name: &str, input: &serde_json::Value) -> bool {
-    match tool_name {
-        "list_scheduled_tasks" | "list_cursor_agent_runs" => true,
-        "grep" => {
-            let path = input
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".")
-                .trim();
-            let has_glob = input
-                .get("glob")
-                .and_then(|v| v.as_str())
-                .is_some_and(|g| !g.trim().is_empty());
-            !has_glob || path == "." || path.ends_with("shared") || path.ends_with("shared/")
-        }
-        "glob" => {
-            let path = input
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".")
-                .trim();
-            path == "." || path.ends_with("shared") || path.ends_with("shared/")
-        }
-        "bash" => {
-            let cmd = input.get("command").and_then(|v| v.as_str()).unwrap_or("");
-            crate::tools::bash_safety::is_expensive_shell_search(cmd)
-                || cmd.to_ascii_lowercase().contains("find ")
-        }
-        _ => false,
     }
 }

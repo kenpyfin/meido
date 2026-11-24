@@ -121,6 +121,7 @@ impl Tool for UpdateBoardItemTool {
                 auto_advance: None,
                 completed: None,
                 deploy_prompt: None,
+                stage_notes: None,
             };
             db.apply_board_patch(chat_id, item_id, &patch)
                 .map(|item| item.map(|item| (item, status_ignored)))
@@ -426,7 +427,7 @@ impl Tool for FinishPipelineStageTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition::new(
             "finish_pipeline_stage",
-            "Finish the board stage you are running. outcome is pass or blocked. A note is appended to the card description. This does not move the card; Auto does that after a pass.",
+            "Finish the board stage you are running. outcome is pass or blocked. A note is stored under this column's stage notes. Passing moves the card to the next column; Auto also starts the next stage.",
             schema_object(
                 json!({
                     "item_id": {"type": "integer"},

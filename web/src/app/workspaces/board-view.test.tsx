@@ -71,10 +71,23 @@ describe('BoardView', () => {
     host.remove()
   })
 
-  it('shows four columns, deploy and complete on every card, and history only in the detail view', async () => {
+  it('shows four columns, action and complete on every card, and per-column notes in the detail view', async () => {
     const todos = [
-      ticket(),
-      ticket({ id: 13, title: 'Hang the door', status: 'verify', description: 'Checked the swing.', deploy_prompt: '' }),
+      ticket({
+        stage_notes: {
+          todo: 'Captured the latch gap.',
+          plan: 'Plan: replace the strike plate.',
+          build: 'Build: filed the edge.',
+        },
+      }),
+      ticket({
+        id: 13,
+        title: 'Hang the door',
+        status: 'verify',
+        description: 'Checked the swing.',
+        stage_notes: { verify: 'Checked the swing.' },
+        deploy_prompt: '',
+      }),
     ]
     api.mockImplementation(async (path: string) => {
       if (String(path).includes('/api/todos?')) return { todos }
@@ -107,7 +120,7 @@ describe('BoardView', () => {
     expect(text).not.toContain('IMPLEMENT')
     expect(host.querySelectorAll('button').length).toBeGreaterThan(0)
     const buttons = [...host.querySelectorAll('button')].map((button) => button.textContent)
-    expect(buttons.filter((label) => label === 'Deploy')).toHaveLength(2)
+    expect(buttons.filter((label) => label === 'Action')).toHaveLength(2)
     expect(buttons.filter((label) => label === 'Complete')).toHaveLength(2)
     expect(text).not.toContain('Plan: replace the strike plate.')
 
@@ -120,10 +133,13 @@ describe('BoardView', () => {
     const dialogText = document.body.textContent ?? ''
     expect(dialogText).toContain('Ticket #12')
     expect(dialogText).toContain('Plan: replace the strike plate.')
+    expect(dialogText).toContain('Captured the latch gap.')
     expect(dialogText).toContain('TODO → PLAN')
-    const prompt = document.body.querySelector('textarea[aria-label="Deploy prompt"]') as HTMLTextAreaElement | null
+    const prompt = document.body.querySelector('textarea[aria-label="Action prompt"]') as HTMLTextAreaElement | null
     expect(prompt?.value).toBe('Keep the brass hinge.')
-    expect(dialogText).toContain('Deploy')
+    expect(prompt?.getAttribute('rows')).toBe('2')
+    expect(dialogText).toContain('Action')
+    expect(dialogText).not.toContain('Save prompt')
     expect(dialogText).toContain('Complete')
   })
 

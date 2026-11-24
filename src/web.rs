@@ -51,7 +51,9 @@ static WEB_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web/dist");
 #[derive(Clone)]
 pub(crate) struct WebState {
     pub(crate) app_state: Arc<AppState>,
-    pub(crate) auth_token: Option<String>,
+    /// Live web auth token. Updated when `WEB_AUTH_TOKEN` is written via `/api/env-config`
+    /// so a second browser needs the token without waiting for Restart Meido.
+    pub(crate) auth_token: Arc<std::sync::Mutex<Option<String>>>,
     run_hub: RunHub,
     request_hub: RequestHub,
     terminal_hub: TerminalHub,
@@ -59,6 +61,27 @@ pub(crate) struct WebState {
     /// Cache for `ensure_web_binding_for_universal` to avoid repeated DB writes on every
     /// `/api/history` poll while this server process is alive.
     web_binding_universal_done: Arc<Mutex<Option<i64>>>,
+}
+
+impl WebState {
+    pub(crate) fn expected_auth_token(&self) -> Option<String> {
+        self.auth_token
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub(crate) fn set_auth_token(&self, token: Option<String>) {
+        let next = token.and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
+        *self.auth_token.lock().unwrap_or_else(|e| e.into_inner()) = next;
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -292,9 +315,10 @@ fn auth_token_from_headers(headers: &HeaderMap) -> Option<String> {
 
 pub(crate) fn require_auth(
     headers: &HeaderMap,
-    expected_token: Option<&str>,
+    state: &WebState,
 ) -> Result<(), (StatusCode, String)> {
-    let Some(expected) = expected_token else {
+    let expected = state.expected_auth_token();
+    let Some(expected) = expected.as_deref() else {
         return Ok(());
     };
 
@@ -731,7 +755,7 @@ async fn api_health(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     Ok(Json(json!({
         "ok": true,
         "version": env!("CARGO_PKG_VERSION"),
@@ -756,7 +780,7 @@ async fn api_secrets_list(
     State(state): State<WebState>,
     Query(query): Query<SecretsListQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     let data_dir = state.app_state.config.runtime_data_dir();
     let filter_persona = query.persona_id.filter(|id| *id > 0);
@@ -790,7 +814,7 @@ async fn api_secrets_forget(
     State(state): State<WebState>,
     Query(query): Query<SecretsForgetQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     let name = query.name.trim().to_ascii_uppercase();
     crate::secret_vault::forget(
@@ -844,7 +868,7 @@ async fn api_chat(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
@@ -896,7 +920,7 @@ async fn api_history(
     State(state): State<WebState>,
     Query(query): Query<HistoryQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let start = Instant::now();
     let requested_day = query.day.clone();
     let requested_limit = query.limit;
@@ -1085,7 +1109,7 @@ async fn api_history_days(
     State(state): State<WebState>,
     Query(query): Query<HistoryQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(query.chat_id, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
@@ -1112,7 +1136,7 @@ async fn api_send(
     State(state): State<WebState>,
     Json(body): Json<SendRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     enqueue_persona_turn(state, body, None).await.map(Json)
 }
 
@@ -1223,7 +1247,7 @@ async fn enqueue_persona_turn(
                     limits.run_history_limit,
                 )
                 .await;
-            let turn_error = match send_and_store_response_with_events(
+            let turn_result = match send_and_store_response_with_events(
                 state_for_task.clone(),
                 body,
                 None,
@@ -1271,7 +1295,7 @@ async fn enqueue_persona_turn(
                             limits.run_history_limit,
                         )
                         .await;
-                    None
+                    Ok(response_text)
                 }
                 Err((_, err_msg)) => {
                     state_for_task
@@ -1283,11 +1307,15 @@ async fn enqueue_persona_turn(
                             limits.run_history_limit,
                         )
                         .await;
-                    Some(err_msg)
+                    Err(err_msg)
                 }
             };
             if let Some(follow) = stage_follow_up {
-                settle_board_stage(state_for_task.clone(), follow, turn_error).await;
+                let (turn_error, response_text) = match turn_result {
+                    Ok(text) => (None, text),
+                    Err(err) => (Some(err), String::new()),
+                };
+                settle_board_stage(state_for_task.clone(), follow, turn_error, response_text).await;
             }
             state_for_task
                 .run_hub
@@ -1342,10 +1370,23 @@ async fn enqueue_persona_turn(
     }))
 }
 
+fn usable_stage_response(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Loop-guard stalls are not a successful stage result.
+    if trimmed.starts_with("I stopped because") {
+        return None;
+    }
+    Some(trimmed)
+}
+
 async fn settle_board_stage(
     state: WebState,
     follow: BoardStageFollowUp,
     turn_error: Option<String>,
+    response_text: String,
 ) {
     let item_id = follow.item_id;
     if let Some(err) = turn_error {
@@ -1357,19 +1398,73 @@ async fn settle_board_stage(
         db.get_persona_todo(item_id)
     })
     .await;
-    let Ok(Some(todo)) = loaded else {
+    let Ok(Some(mut todo)) = loaded else {
         return;
     };
-    let outcome = todo.stage_outcome.clone().unwrap_or_default();
+    let mut outcome = todo.stage_outcome.clone().unwrap_or_default();
+    let response_note = usable_stage_response(&response_text).map(str::to_string);
+
+    // Turns that never called finish_pipeline_stage but produced a usable reply
+    // (e.g. Cursor engine) count as a pass with the reply as the stage note.
     if outcome.is_empty() || outcome == "running" {
-        let db = state.app_state.db.clone();
-        let _ = call_blocking(db, move |db| {
-            db.mark_board_stage_failed(item_id, "Stage ended without finish_pipeline_stage")
-        })
-        .await;
-        return;
+        if let Some(note) = response_note.clone() {
+            let chat_id = todo.chat_id;
+            let note_for_db = note.clone();
+            let marked = call_blocking(state.app_state.db.clone(), move |db| {
+                db.mark_board_stage_outcome(
+                    chat_id,
+                    item_id,
+                    "passed",
+                    None,
+                    Some(note_for_db.as_str()),
+                )
+            })
+            .await;
+            let Ok(Some(updated)) = marked else {
+                return;
+            };
+            todo = updated;
+            outcome = "passed".into();
+        } else {
+            let db = state.app_state.db.clone();
+            let _ = call_blocking(db, move |db| {
+                db.mark_board_stage_failed(item_id, "Stage ended without finish_pipeline_stage")
+            })
+            .await;
+            return;
+        }
+    } else if matches!(outcome.as_str(), "passed" | "blocked") {
+        // fill missing note from the turn reply when finish_pipeline_stage omitted note
+        let stage = todo.status.clone();
+        let has_stage_note = crate::db_collab::parse_stage_notes(todo.stage_notes.as_deref())
+            .get(&stage)
+            .and_then(|v| v.as_str())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        if !has_stage_note {
+            if let Some(note) = response_note {
+                let chat_id = todo.chat_id;
+                let blocked = todo.blocked_reason.clone();
+                let note_for_db = note;
+                let outcome_for_db = outcome.clone();
+                let marked = call_blocking(state.app_state.db.clone(), move |db| {
+                    db.mark_board_stage_outcome(
+                        chat_id,
+                        item_id,
+                        outcome_for_db.as_str(),
+                        blocked.as_deref(),
+                        Some(note_for_db.as_str()),
+                    )
+                })
+                .await;
+                if let Ok(Some(updated)) = marked {
+                    todo = updated;
+                }
+            }
+        }
     }
-    if outcome == "passed" && todo.auto_advance != 0 && follow.chain_remaining > 0 {
+
+    if outcome == "passed" {
         if let Some(next) = crate::board_pipeline::next_stage(&todo.status) {
             if next != todo.status {
                 let chat_id = todo.chat_id;
@@ -1394,6 +1489,7 @@ async fn settle_board_stage(
                     auto_advance: None,
                     completed: None,
                     deploy_prompt: None,
+                    stage_notes: None,
                 };
                 let moved = call_blocking(state.app_state.db.clone(), move |db| {
                     db.apply_board_patch(chat_id, item_id, &patch)
@@ -1402,16 +1498,20 @@ async fn settle_board_stage(
                 if moved.ok().flatten().is_none() {
                     return;
                 }
-                let remaining = follow.chain_remaining.saturating_sub(1);
-                if let Err((_, message)) =
-                    start_board_stage(state.clone(), &advanced, remaining).await
-                {
-                    let db = state.app_state.db.clone();
-                    let _ =
-                        call_blocking(db, move |db| db.mark_board_stage_failed(item_id, &message))
-                            .await;
+                // Auto chains the next stage run; without Auto the card just moves.
+                if todo.auto_advance != 0 && follow.chain_remaining > 0 {
+                    let remaining = follow.chain_remaining.saturating_sub(1);
+                    if let Err((_, message)) =
+                        start_board_stage(state.clone(), &advanced, remaining).await
+                    {
+                        let db = state.app_state.db.clone();
+                        let _ = call_blocking(db, move |db| {
+                            db.mark_board_stage_failed(item_id, &message)
+                        })
+                        .await;
+                    }
+                    return;
                 }
-                return;
             }
         }
     }
@@ -1483,7 +1583,7 @@ async fn api_send_stream(
     State(state): State<WebState>,
     Json(body): Json<SendRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let start = Instant::now();
 
     let text = body.message.trim().to_string();
@@ -1890,7 +1990,7 @@ async fn api_subthread_stream(
     State(state): State<WebState>,
     Json(body): Json<SubthreadStreamRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let start = Instant::now();
 
     let text = body.message.trim().to_string();
@@ -2421,7 +2521,7 @@ async fn api_stream(
     State(state): State<WebState>,
     Query(query): Query<StreamQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let start = Instant::now();
 
     let Some((mut rx, replay, done, replay_truncated, oldest_event_id)) = state
@@ -2557,7 +2657,7 @@ async fn api_run_status(
     State(state): State<WebState>,
     Query(query): Query<RunStatusQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let run_key = query.run_id.clone();
     let include_timeline_events = query.timeline_events.unwrap_or(false);
     let timeline_count = if include_timeline_events {
@@ -2631,7 +2731,7 @@ async fn api_queue_diagnostics(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let lanes = state.app_state.chat_queue.diagnostics().await;
     let db = state.app_state.db.clone();
     let now = chrono::Utc::now().to_rfc3339();
@@ -2731,7 +2831,7 @@ async fn api_ops_poll(
     State(state): State<WebState>,
     Query(query): Query<OpsPollQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(query.chat_id, &state.app_state.config)?;
     let include_personas = ops_poll_include_personas(query.include_personas.as_deref());
     if include_personas {
@@ -2902,7 +3002,7 @@ async fn api_queue_cancel(
     State(state): State<WebState>,
     Json(body): Json<QueueCancelRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
     let run_id = body.run_id.trim();
     if run_id.is_empty() {
@@ -2933,7 +3033,7 @@ async fn api_queue_remove(
     State(state): State<WebState>,
     Json(body): Json<QueueRemoveRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
     let run_id = body.run_id.trim();
     if run_id.is_empty() {
@@ -2985,7 +3085,7 @@ async fn api_background_job_cancel(
     State(state): State<WebState>,
     Json(body): Json<BackgroundJobCancelRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
     let job_id = body.job_id.trim().to_string();
     if job_id.is_empty() {
@@ -3773,7 +3873,7 @@ async fn api_upload(
     Query(query): Query<UploadQueryParams>,
     mut multipart: Multipart,
 ) -> Result<Json<UploadResponse>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(query.chat_id, &state.app_state.config)?;
     let persona_id = if let Some(pid) = query.persona_id {
@@ -3928,7 +4028,7 @@ async fn api_reset(
     State(state): State<WebState>,
     Json(body): Json<ResetRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
@@ -3958,7 +4058,7 @@ async fn api_delete_session(
     State(state): State<WebState>,
     Json(body): Json<DeleteSessionRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
@@ -4006,7 +4106,7 @@ async fn api_personas(
     State(state): State<WebState>,
     Query(query): Query<PersonasQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(query.chat_id, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
@@ -4110,7 +4210,7 @@ async fn api_personas_read(
     State(state): State<WebState>,
     Json(body): Json<PersonaReadCursorsRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     if body.items.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "items is required".into()));
     }
@@ -4163,7 +4263,7 @@ async fn api_personas_switch(
     State(state): State<WebState>,
     Json(body): Json<PersonasSwitchRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
@@ -4389,7 +4489,7 @@ async fn api_chat_sessions_list(
     State(state): State<WebState>,
     Query(query): Query<ChatSessionsListQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(query.chat_id, &state.app_state.config)?;
     let cid = chat_id;
     let persona_id = if let Some(pid) = query.persona_id {
@@ -4716,7 +4816,7 @@ async fn api_chat_sessions_create(
     State(state): State<WebState>,
     Json(body): Json<CreateChatSessionRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
     let cid = chat_id;
     let persona_id = if let Some(pid) = body.persona_id {
@@ -4813,7 +4913,7 @@ async fn api_chat_sessions_get(
     State(state): State<WebState>,
     Path(session_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let session = call_blocking(state.app_state.db.clone(), move |db| {
         db.get_chat_session(&session_id)
     })
@@ -4849,7 +4949,7 @@ async fn api_chat_sessions_patch(
     Path(session_id): Path<String>,
     Json(body): Json<PatchChatSessionRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     if let Some(ref status) = body.status {
         match status.as_str() {
@@ -4905,7 +5005,7 @@ async fn api_chat_sessions_delete(
     State(state): State<WebState>,
     Path(session_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let deleted = call_blocking(state.app_state.db.clone(), move |db| {
         db.delete_chat_session(&session_id)
     })
@@ -4926,7 +5026,7 @@ async fn api_skills_get(
     State(state): State<WebState>,
     Query(query): Query<SkillsQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     let persona_skill_policy = if let Some(pid) = query.persona_id {
@@ -5024,7 +5124,7 @@ async fn api_hooks_get(
     State(state): State<WebState>,
     Query(query): Query<HooksQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let persona_id = query.persona_id;
     let chat_id = if persona_id.is_some() {
         let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
@@ -5074,7 +5174,7 @@ async fn api_hooks_post(
     State(state): State<WebState>,
     Json(body): Json<HookDefinitionUpsertBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     let payload_json = body
@@ -5185,7 +5285,7 @@ async fn api_hooks_delete(
     State(state): State<WebState>,
     Path(path): Path<HookDefinitionDeletePathParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let deleted = call_blocking(state.app_state.db.clone(), move |db| {
         db.delete_hook_definition(path.id)
     })
@@ -5199,7 +5299,7 @@ async fn api_persona_policy_get(
     State(state): State<WebState>,
     Path(path): Path<PersonaPolicyPathParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     let pid = path.persona_id;
@@ -5234,7 +5334,7 @@ async fn api_persona_policy_patch(
     Path(path): Path<PersonaPolicyPathParams>,
     Json(body): Json<PersonaPolicyPatchBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     let pid = path.persona_id;
@@ -5305,7 +5405,7 @@ async fn api_persona_bulletin_get(
     State(state): State<WebState>,
     Path(path): Path<PersonaBookmarkPathParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
 
@@ -5428,7 +5528,7 @@ async fn api_persona_bulletin_patch(
     Path(path): Path<PersonaBookmarkPathParams>,
     Json(body): Json<PersonaBulletinPatchBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
 
@@ -5616,7 +5716,7 @@ async fn api_persona_bookmarks_get(
     State(state): State<WebState>,
     Path(path): Path<PersonaBookmarkPathParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
 
@@ -5653,7 +5753,7 @@ async fn api_persona_bookmarks_post(
     Path(path): Path<PersonaBookmarkPathParams>,
     Json(body): Json<PersonaBookmarkUpsertBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     if body.message_id.trim().is_empty() {
@@ -5732,7 +5832,7 @@ async fn api_persona_bookmarks_delete(
     State(state): State<WebState>,
     Path(path): Path<PersonaBookmarkDeletePathParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     let pid = path.persona_id;
@@ -5858,7 +5958,7 @@ async fn ensure_persona(
     headers: &HeaderMap,
     persona_id: i64,
 ) -> Result<i64, (StatusCode, String)> {
-    require_auth(headers, state.auth_token.as_deref())?;
+    require_auth(headers, state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(state, chat_id).await?;
     let exists = call_blocking(state.app_state.db.clone(), move |db| {
@@ -6311,7 +6411,7 @@ async fn api_persona_side_chats_list(
     State(state): State<WebState>,
     Path(path): Path<PersonaSideChatPathParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     let pid = path.persona_id;
@@ -6342,7 +6442,7 @@ async fn api_persona_side_chats_ensure(
     Path(path): Path<PersonaSideChatPathParams>,
     Json(body): Json<SideChatEnsureBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     let anchor_message_id = body.anchor_message_id.trim().to_string();
@@ -6433,7 +6533,7 @@ async fn api_persona_side_chat_get(
     State(state): State<WebState>,
     Path(path): Path<PersonaSideChatIdPathParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     let side_chat_id = path.side_chat_id.trim().to_string();
@@ -6479,7 +6579,7 @@ async fn api_persona_side_chat_patch(
     Path(path): Path<PersonaSideChatIdPathParams>,
     Json(body): Json<SideChatPatchBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     let side_chat_id = path.side_chat_id.trim().to_string();
@@ -6533,7 +6633,7 @@ async fn api_persona_side_chat_delete(
     State(state): State<WebState>,
     Path(path): Path<PersonaSideChatIdPathParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     let side_chat_id = path.side_chat_id.trim().to_string();
@@ -6560,7 +6660,7 @@ async fn api_persona_side_chat_promote_turn(
     Path(path): Path<PersonaSideChatIdPathParams>,
     Json(body): Json<SideChatPromoteTurnBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
 
@@ -6666,7 +6766,7 @@ async fn api_persona_message_get(
     State(state): State<WebState>,
     Path(path): Path<PersonaMessagePathParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
 
@@ -6730,7 +6830,7 @@ async fn api_persona_message_patch(
     Path(path): Path<PersonaMessagePathParams>,
     Json(body): Json<PatchPersonaMessageBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
 
@@ -6787,7 +6887,7 @@ async fn api_persona_message_delete(
     State(state): State<WebState>,
     Path(path): Path<PersonaMessagePathParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
 
@@ -6853,7 +6953,7 @@ async fn api_persona_memory_get(
     State(state): State<WebState>,
     Path(path): Path<PersonaMemoryPathParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
 
@@ -6900,7 +7000,7 @@ async fn api_persona_memory_put(
     Path(path): Path<PersonaMemoryPathParams>,
     Json(body): Json<PersonaMemoryPutBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
 
@@ -6974,7 +7074,7 @@ async fn api_workspace_agents_md_get(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
 
@@ -7004,7 +7104,7 @@ async fn api_workspace_agents_md_put(
     State(state): State<WebState>,
     Json(body): Json<WorkspaceAgentsMdPutBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
 
@@ -7044,7 +7144,7 @@ async fn api_persona_agent_history_latest(
     State(state): State<WebState>,
     Path(path): Path<PersonaMemoryPathParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
 
@@ -7088,7 +7188,7 @@ async fn api_persona_agent_history_optimize(
     Path(path): Path<PersonaMemoryPathParams>,
     body: Option<Json<AgentHistoryOptimizeRequest>>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
 
@@ -7180,7 +7280,7 @@ async fn api_personas_create(
     State(state): State<WebState>,
     Json(body): Json<PersonaCreateRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
@@ -7362,7 +7462,7 @@ async fn api_persona_local_get(
     State(state): State<WebState>,
     Query(query): Query<PersonaLocalQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     let pid = query.persona_id;
     let persona = call_blocking(state.app_state.db.clone(), move |db| db.get_persona(pid))
@@ -7383,7 +7483,7 @@ async fn api_persona_local_patch(
     State(state): State<WebState>,
     Json(body): Json<PersonaLocalPatch>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     let base_url = crate::local_delegate::normalize_base_url_for_provider(body.base_url.trim(), "");
     let model = body.model.trim().to_string();
@@ -7452,7 +7552,7 @@ async fn api_persona_external_paths_get(
     State(state): State<WebState>,
     Path(path): Path<PersonaBookmarkPathParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     let pid = path.persona_id;
@@ -7475,7 +7575,7 @@ async fn api_persona_external_paths_put(
     Path(path): Path<PersonaBookmarkPathParams>,
     Json(body): Json<PersonaExternalPathsBody>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     let pid = path.persona_id;
@@ -7507,7 +7607,7 @@ async fn api_personas_delete(
     State(state): State<WebState>,
     Json(body): Json<PersonaDeleteRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
@@ -7535,7 +7635,7 @@ async fn api_personas_rename(
     State(state): State<WebState>,
     Json(body): Json<PersonaRenameRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
@@ -7567,7 +7667,7 @@ async fn api_contacts_bind(
     State(state): State<WebState>,
     Json(body): Json<ContactsBindRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let contact_chat_id = body.contact_chat_id;
     call_blocking(state.app_state.db.clone(), move |db| {
@@ -7588,7 +7688,7 @@ async fn api_contacts_unlink(
     State(state): State<WebState>,
     Json(_body): Json<ContactsUnlinkRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let removed = call_blocking(state.app_state.db.clone(), move |db| {
         db.unlink_channel(BOT_INSTANCE_WEB, "web", "default")
@@ -7608,7 +7708,7 @@ async fn api_schedules_list(
     State(state): State<WebState>,
     Query(query): Query<SchedulesQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(query.chat_id, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
@@ -7667,6 +7767,11 @@ fn persona_todo_to_json(t: &crate::db::PersonaTodo) -> serde_json::Value {
         "stage_run_id": t.stage_run_id,
         "stage_outcome": t.stage_outcome,
         "deploy_prompt": t.deploy_prompt,
+        "stage_notes": t
+            .stage_notes
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .unwrap_or(serde_json::Value::Object(serde_json::Map::new())),
     })
 }
 
@@ -7675,7 +7780,7 @@ async fn api_todos_list(
     State(state): State<WebState>,
     Query(query): Query<TodosQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(query.chat_id, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
@@ -7717,7 +7822,7 @@ async fn api_todos_patch(
     Path(path): Path<TodoPathParams>,
     Json(body): Json<TodoPatchRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
@@ -7739,6 +7844,7 @@ async fn api_todos_patch(
         auto_advance: body.auto_advance,
         completed: body.completed,
         deploy_prompt: body.deploy_prompt,
+        stage_notes: None,
     };
     let updated = call_blocking(state.app_state.db.clone(), move |db| {
         db.apply_board_patch(chat_id, todo_id, &patch)
@@ -7761,7 +7867,7 @@ async fn api_todos_create(
     State(state): State<WebState>,
     Json(body): Json<TodoCreateRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let title = body.title.trim().to_string();
     if title.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "title is required".into()));
@@ -7806,6 +7912,7 @@ async fn api_todos_create(
             auto_advance: None,
             completed: None,
             deploy_prompt: None,
+            stage_notes: None,
         };
         call_blocking(state.app_state.db.clone(), move |db| {
             db.apply_board_patch(chat_id, todo_id, &patch)
@@ -7827,7 +7934,7 @@ async fn api_todos_events(
     State(state): State<WebState>,
     Path(path): Path<TodoPathParams>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     let todo_id = path.id;
@@ -7864,7 +7971,7 @@ async fn api_todos_run(
     Path(path): Path<TodoPathParams>,
     Json(body): Json<TodoRunRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     let todo_id = path.id;
@@ -7893,6 +8000,7 @@ async fn api_todos_run(
             auto_advance: None,
             completed: None,
             deploy_prompt: Some(prompt),
+            stage_notes: None,
         };
         let updated = call_blocking(state.app_state.db.clone(), move |db| {
             db.apply_board_patch(chat_id, todo_id, &patch)
@@ -7913,7 +8021,7 @@ async fn api_schedules_create(
     State(state): State<WebState>,
     Json(body): Json<ScheduleCreateRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
@@ -7985,7 +8093,7 @@ async fn api_schedules_update(
     axum::extract::Path(task_id): axum::extract::Path<i64>,
     Json(body): Json<ScheduleUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
 
@@ -8181,7 +8289,7 @@ async fn api_background_jobs_list(
     State(state): State<WebState>,
     Query(query): Query<BackgroundJobsQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(query.chat_id, &state.app_state.config)?;
     let limit = query.limit.unwrap_or(20).min(100);
@@ -8251,7 +8359,7 @@ async fn api_background_job_get(
     Path(job_id): Path<String>,
     Query(query): Query<BackgroundJobsQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(query.chat_id, &state.app_state.config)?;
     let job = call_blocking(state.app_state.db.clone(), {
@@ -8368,7 +8476,7 @@ async fn api_contacts_bindings(
     State(state): State<WebState>,
     Query(query): Query<ContactsBindingsQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
 
     let chat_id = resolve_chat_id_for_web(query.chat_id, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
@@ -8604,7 +8712,7 @@ async fn api_connections_get(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     // Same disk refresh as GET /api/env-config, so Reload from .env sees hand edits.
     env_config::load_env(&state).await?;
     Ok(Json(connections_json(&state.app_state)))
@@ -8615,7 +8723,7 @@ async fn api_connections_patch(
     State(state): State<WebState>,
     Json(body): Json<ConnectionsPatch>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let def = crate::engine_connections::find_connection(body.id.trim())
         .ok_or((StatusCode::BAD_REQUEST, "Unknown connection.".into()))?;
     let data_dir = state.app_state.config.runtime_data_dir();
@@ -8828,7 +8936,7 @@ async fn api_topics_model_get(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let (choice, saved, provider, model, local_base_url) =
         read_topics_model(&state.app_state).await?;
     let jobs = system_llm_job_rows(&state.app_state).await?;
@@ -8848,7 +8956,7 @@ async fn api_topics_model_patch(
     State(state): State<WebState>,
     Json(body): Json<TopicsModelPatch>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let source = body
         .provider
         .as_deref()
@@ -8974,7 +9082,7 @@ async fn api_runtime_get(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let sources = call_blocking(state.app_state.db.clone(), |db| {
         Ok::<_, crate::error::FinallyAValueBotError>((
             crate::runtime_toggles::RuntimeToggles::tool_output_debug_from_app_settings(db)?,
@@ -9027,7 +9135,7 @@ async fn api_runtime_patch(
     State(state): State<WebState>,
     Json(body): Json<RuntimePatchRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     if let Some(requested) = body.max_tool_iterations {
         if !(1..=crate::config::MAX_TOOL_ITERATIONS_HARD_CAP).contains(&requested) {
             return Err((
@@ -9258,7 +9366,7 @@ async fn api_gemini_adk_get(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let settings = state
         .app_state
         .gemini_adk_settings
@@ -9297,7 +9405,7 @@ async fn api_gemini_adk_patch(
     State(state): State<WebState>,
     Json(body): Json<GeminiAdkPatchRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     if body.default_model.is_none() && body.max_iterations.is_none() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -9375,7 +9483,7 @@ async fn api_gemini_adk_topology_get(
     State(state): State<WebState>,
     Query(query): Query<GeminiAdkTopologyQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     let global = state
         .app_state
@@ -9450,7 +9558,7 @@ async fn api_gemini_adk_topology_patch(
     State(state): State<WebState>,
     Json(body): Json<GeminiAdkTopologyPatchRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
 
     if let Some(pid) = body.persona_id {
@@ -9556,7 +9664,7 @@ async fn api_llm_get(
     State(state): State<WebState>,
     Query(query): Query<LlmGetQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     let mut persona_id_out: Option<i64> = None;
     let mut model_scope = "global";
@@ -9772,7 +9880,7 @@ async fn api_llm_models_get(
     State(state): State<WebState>,
     Query(query): Query<LlmModelsQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let provider_id = query
         .provider
         .as_deref()
@@ -9863,7 +9971,7 @@ async fn api_llm_patch(
     State(state): State<WebState>,
     Json(body): Json<LlmModelPatchRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let model = body.model.trim().to_string();
     let thinking_only = body.persona_id.is_none()
         && model.is_empty()
@@ -10017,7 +10125,7 @@ async fn api_multimodel_models_get(
     State(state): State<WebState>,
     Query(query): Query<MultimodelModelsQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let base_url_raw = query.base_url.trim();
     if base_url_raw.is_empty() {
         return Err((
@@ -10046,7 +10154,7 @@ async fn api_multimodel_get(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let cfg = state.app_state.llm.local_delegate_config();
     let strategy_provider =
         crate::llm_catalog::resolve_catalog_provider_id(&state.app_state.llm.current_provider());
@@ -10075,7 +10183,7 @@ async fn api_multimodel_patch(
     State(state): State<WebState>,
     Json(body): Json<crate::local_delegate::LocalDelegatePatchRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let old = state.app_state.llm.local_delegate_config();
     let mut cfg = old.clone();
     if let Some(routing) = body.routing_enabled.or(body.enabled) {
@@ -10153,7 +10261,7 @@ async fn api_multimodel_test_post(
     State(state): State<WebState>,
     Json(body): Json<MultimodelTestRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let tier = match body.tier.trim().to_ascii_lowercase().as_str() {
         "local" | "technical" | "tier1" | "1" | "knowledge" | "tier2" | "2" => {
             crate::local_delegate::ModelTier::LocalReadOnly
@@ -10287,7 +10395,7 @@ async fn api_cursor_engine_get(
     State(state): State<WebState>,
     Query(query): Query<CursorEngineQuery>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     let mut cfg = state
         .app_state
@@ -10361,7 +10469,7 @@ async fn api_cursor_engine_patch(
     State(state): State<WebState>,
     Json(body): Json<crate::cursor_engine_config::CursorEnginePatchRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(None, &state.app_state.config)?;
     let mut cfg = state
         .app_state
@@ -10569,7 +10677,7 @@ async fn api_cursor_engine_health_post(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let mut cfg = state
         .app_state
         .cursor_settings
@@ -10642,7 +10750,7 @@ async fn api_cursor_engine_models_get(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let cfg = state
         .app_state
         .cursor_settings
@@ -10662,7 +10770,7 @@ async fn api_settings_get(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let settings = call_blocking(state.app_state.db.clone(), move |db| db.list_app_settings())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -10776,7 +10884,7 @@ async fn api_settings_patch(
     State(state): State<WebState>,
     Json(_): Json<SettingsPatchRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     Err((
         StatusCode::NOT_IMPLEMENTED,
         "Persisting generic key/value settings to SQLite is disabled. Configure the process via repo-root .env (or process environment). The app_settings table is legacy and not merged at startup.".to_string(),
@@ -10788,7 +10896,7 @@ async fn api_restart_post(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     crate::daemon::schedule_app_restart();
     Ok((
         StatusCode::ACCEPTED,
@@ -10976,7 +11084,7 @@ async fn api_channel_bot_instances_get(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let list = call_blocking(state.app_state.db.clone(), move |db| {
         db.list_all_channel_bot_instances()
     })
@@ -10994,7 +11102,7 @@ async fn api_channel_bot_instances_post(
     State(state): State<WebState>,
     Json(body): Json<ChannelBotInstanceCreateRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let platform = body.platform;
     let platform_for_provision = platform.clone();
     let label = body.label;
@@ -11071,7 +11179,7 @@ async fn api_channel_bot_instances_patch(
     Path(id): Path<i64>,
     Json(body): Json<ChannelBotInstanceUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let label = body.label;
     let token = body.token;
     let bot_username = body.bot_username.map(|v| v.trim().to_string());
@@ -11164,7 +11272,7 @@ async fn api_channel_bot_instances_delete(
     State(state): State<WebState>,
     Path(id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let deleted = call_blocking(state.app_state.db.clone(), move |db| {
         db.delete_channel_bot_instance(id)
     })
@@ -11221,7 +11329,7 @@ async fn api_channels_integration_get(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let config = state.app_state.config.clone();
     let (settings, instances) = call_blocking(state.app_state.db.clone(), move |db| {
         let settings = crate::channel_integration_config::load_from_db(db, &config)?;
@@ -11240,7 +11348,7 @@ async fn api_channels_integration_patch(
     State(state): State<WebState>,
     Json(body): Json<crate::channel_integration_config::ChannelIntegrationPatch>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let config = state.app_state.config.clone();
     let (settings, instances) = call_blocking(state.app_state.db.clone(), move |db| {
         let settings = body.apply_and_save(db, &config)?;
@@ -11264,7 +11372,7 @@ async fn api_channel_persona_policy_upsert(
     State(state): State<WebState>,
     Json(body): Json<ChannelPersonaPolicyUpsertRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     let mode = match body.mode.as_str() {
@@ -11299,7 +11407,7 @@ async fn api_channel_persona_policy_delete(
     State(state): State<WebState>,
     Json(body): Json<ChannelPersonaPolicyDeleteRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let chat_id = resolve_chat_id_for_web(body.chat_id, &state.app_state.config)?;
     ensure_web_binding_for_universal(&state, chat_id).await?;
     let removed = call_blocking(state.app_state.db.clone(), move |db| {
@@ -11373,7 +11481,7 @@ pub async fn bind_web_listener(
 pub async fn start_web_server(state: Arc<AppState>, listener: tokio::net::TcpListener) {
     let limits = WebLimits::from_config(&state.config);
     let web_state = WebState {
-        auth_token: state.config.web_auth_token.clone(),
+        auth_token: Arc::new(std::sync::Mutex::new(state.config.web_auth_token.clone())),
         app_state: state.clone(),
         run_hub: RunHub::default(),
         request_hub: RequestHub::default(),
@@ -12400,7 +12508,7 @@ mod tests {
         let state = test_state(llm);
         WebState {
             app_state: state,
-            auth_token,
+            auth_token: Arc::new(std::sync::Mutex::new(auth_token)),
             run_hub: RunHub::default(),
             request_hub: RequestHub::default(),
             terminal_hub: TerminalHub::default(),

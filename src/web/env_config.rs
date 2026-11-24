@@ -402,7 +402,7 @@ pub(super) async fn api_env_config_get(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let loaded = load_env(&state).await?;
     let extras = readiness(&state, &loaded.values).await;
     Ok(Json(env_view(
@@ -418,7 +418,7 @@ pub(super) async fn api_env_config_patch(
     State(state): State<WebState>,
     Json(body): Json<EnvConfigPatch>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let mut updates = Vec::new();
     for key in &body.clear {
         updates.push(EnvUpdate {
@@ -450,7 +450,15 @@ pub(super) async fn api_env_config_patch(
             format!("Save {key} under Settings → Connections."),
         ));
     }
+    let auth_token_update = updates
+        .iter()
+        .find(|update| update.key.eq_ignore_ascii_case("WEB_AUTH_TOKEN"))
+        .map(|update| update.value.clone());
     persist_env(updates).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    if let Some(token) = auth_token_update {
+        // Live-apply so a second browser needs the token without Restart Meido.
+        state.set_auth_token(token);
+    }
     if let (Ok(provider), Ok(model)) = (
         std::env::var("SYSTEM_LLM_PROVIDER"),
         std::env::var("SYSTEM_LLM_MODEL"),
@@ -475,7 +483,7 @@ pub(super) async fn api_setup_action_post(
     State(state): State<WebState>,
     Json(body): Json<SetupActionBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let action = body.action.trim().to_string();
     let message = match action.as_str() {
         "install_mempalace" => install_mempalace_if_missing(state.app_state.config.clone()).await?,

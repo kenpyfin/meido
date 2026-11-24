@@ -68,6 +68,7 @@ pub mod social_oauth;
 pub mod sop_context_gate;
 pub mod steel_browser_sidecar;
 pub mod tool_hook_dispatch;
+pub mod tool_loop_signals;
 pub mod tools;
 pub mod topics;
 pub mod transcribe;

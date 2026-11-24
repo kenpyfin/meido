@@ -34,6 +34,7 @@ export function useConversationTopics(
   useEffect(() => {
     if (turnWasActive.current && !turnActive && personaId != null) {
       void queryClient.invalidateQueries({ queryKey: conversationTopicsKey(personaId, sessionId) })
+      void queryClient.invalidateQueries({ queryKey: ['topicDossier', personaId] })
     }
     turnWasActive.current = turnActive
   }, [personaId, queryClient, sessionId, turnActive])

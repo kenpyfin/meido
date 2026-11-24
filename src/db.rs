@@ -801,11 +801,13 @@ pub struct PersonaTodo {
     pub auto_advance: i64,
     pub stage_run_id: Option<String>,
     pub stage_outcome: Option<String>,
-    /// Operator instruction sent on Deploy. Stage output stays in `description`.
+    /// Operator instruction sent on Action. Stage output stays in `description` / `stage_notes`.
     pub deploy_prompt: Option<String>,
+    /// JSON map of column → note (`{"todo":"...","plan":"...","build":"...","verify":"..."}`).
+    pub stage_notes: Option<String>,
 }
 
-pub(crate) const PERSONA_TODO_COLS: &str = "id, chat_id, persona_id, title, status, source_hint, created_at, updated_at, completed_at, description, owner_persona_id, priority, due_at, blocked_reason, position, source_kind, source_ref, auto_advance, stage_run_id, stage_outcome, deploy_prompt";
+pub(crate) const PERSONA_TODO_COLS: &str = "id, chat_id, persona_id, title, status, source_hint, created_at, updated_at, completed_at, description, owner_persona_id, priority, due_at, blocked_reason, position, source_kind, source_ref, auto_advance, stage_run_id, stage_outcome, deploy_prompt, stage_notes";
 
 pub(crate) fn map_persona_todo(row: &rusqlite::Row<'_>) -> rusqlite::Result<PersonaTodo> {
     Ok(PersonaTodo {
@@ -833,6 +835,7 @@ pub(crate) fn map_persona_todo(row: &rusqlite::Row<'_>) -> rusqlite::Result<Pers
         stage_run_id: row.get(18)?,
         stage_outcome: row.get(19)?,
         deploy_prompt: row.get(20)?,
+        stage_notes: row.get(21)?,
     })
 }
 
@@ -6732,7 +6735,7 @@ impl Database {
                  WHERE chat_id = ?1 AND persona_id = ?2 AND (
                    (?3 = 'open' AND completed_at IS NULL)
                    OR (?3 = 'done' AND completed_at IS NOT NULL)
-                   OR (?3 NOT IN ('open', 'done') AND status = ?3)
+                   OR (?3 NOT IN ('open', 'done') AND status = ?3 AND completed_at IS NULL)
                  )
                  ORDER BY updated_at DESC
                  LIMIT ?4"
@@ -6779,7 +6782,7 @@ impl Database {
                  WHERE chat_id = ?1 AND (
                    (?2 = 'open' AND completed_at IS NULL)
                    OR (?2 = 'done' AND completed_at IS NOT NULL)
-                   OR (?2 NOT IN ('open', 'done') AND status = ?2)
+                   OR (?2 NOT IN ('open', 'done') AND status = ?2 AND completed_at IS NULL)
                  )
                  ORDER BY position ASC, updated_at DESC
                  LIMIT ?3"
@@ -7320,10 +7323,7 @@ impl Database {
                AND status IN ('running', 'completed_raw', 'main_agent_processing')",
             params![lease_expires, now, stage, id],
         )?;
-        if rows == 0 {
-            return Ok(false);
-        }
-        Ok(true)
+        Ok(rows != 0)
     }
 
     pub fn mark_background_job_completed_raw(

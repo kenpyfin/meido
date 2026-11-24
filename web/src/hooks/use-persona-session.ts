@@ -250,7 +250,8 @@ export function usePersonaSession({
         })
         const p = personas.find((x) => x.name === personaName)
         if (p) writeStoredPersonaId(p.id)
-        await loadPersonas(chatId)
+        // Resolve session for the target persona before committing activePersonaId so
+        // ThreadPane does not remount with a mismatched (persona, session, history) tuple.
         const sessions = await loadSessions(chatId, p?.id)
         let targetSessionId: string | null
         if (opts !== undefined && 'sessionId' in opts) {
@@ -264,11 +265,18 @@ export function usePersonaSession({
         } else {
           targetSessionId = p ? resolveStoredSessionId(sessions, p.id) : null
         }
+        resetHistoryPagination()
         setActiveSessionId(targetSessionId)
         if (p) writeStoredSessionForPersona(p.id, targetSessionId)
-        resetHistoryPagination()
+        if (p) {
+          setActivePersonaId(p.id)
+        } else {
+          setActivePersonaId(null)
+        }
+        await loadPersonas(chatId)
         await loadHistory(chatId, p?.id ?? undefined, null, {
           force: true,
+          replace: true,
           limitOverride: HISTORY_PAGE_SIZE,
           sessionId: targetSessionId,
         })

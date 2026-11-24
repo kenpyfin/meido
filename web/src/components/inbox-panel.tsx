@@ -88,7 +88,8 @@ export function InboxPanel({
 
         <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
           <span>
-            {unread.length} unread · {todos.length} open todos
+            {unread.length} unread ·{' '}
+            {todos.filter((todo) => todo.status === 'todo' && !todo.completed_at).length} open todos
           </span>
           <Button size="sm" variant="secondary" disabled={loading} onClick={onRefresh}>
             {loading ? 'Refreshing…' : 'Refresh'}
@@ -145,13 +146,15 @@ export function InboxPanel({
               Todos
             </span>
             <div className="rounded-lg border p-3" style={borderStyle}>
-              {todos.length === 0 ? (
+              {todos.filter((todo) => todo.status === 'todo' && !todo.completed_at).length === 0 ? (
                 <span>
                   No open todos. The agent can create them with add_todo.
                 </span>
               ) : (
                 <ul className="list-none space-y-2">
-                  {todos.map((todo) => {
+                  {todos
+                    .filter((todo) => todo.status === 'todo' && !todo.completed_at)
+                    .map((todo) => {
                     const persona = personaMeta(personas, todo.persona_id)
                     const sessionId = persona?.last_bot_message_session_id ?? null
                     const sessionTitle = persona?.last_bot_message_session_title ?? null

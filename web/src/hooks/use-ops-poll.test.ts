@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { pickQueueLaneForPersona } from '../api/ops-fetch'
 import { personasSnapshotEqual } from './use-ops-poll'
-import type { Persona } from '../types'
+import type { Persona, QueueLane } from '../types'
 
 function persona(partial: Partial<Persona> & Pick<Persona, 'id' | 'name'>): Persona {
   return {
@@ -62,5 +63,42 @@ describe('personasSnapshotEqual', () => {
 
   it('returns false when lengths differ', () => {
     expect(personasSnapshotEqual([persona({ id: 1, name: 'A' })], [])).toBe(false)
+  })
+})
+
+describe('pickQueueLaneForPersona', () => {
+  const lane = (personaId: number, pending = 1): QueueLane => ({
+    chat_id: 1,
+    persona_id: personaId,
+    pending,
+    active_for_ms: 0,
+    oldest_wait_ms: 0,
+    items: [
+      {
+        run_id: `run-${personaId}`,
+        persona_id: personaId,
+        persona_name: `P${personaId}`,
+        source: 'web',
+        label: 'hi',
+        state: 'running',
+        position: 1,
+      },
+    ],
+  })
+
+  it('returns the matching persona lane when present', () => {
+    const lanes = [lane(10), lane(20)]
+    expect(pickQueueLaneForPersona(lanes, 20)?.persona_id).toBe(20)
+  })
+
+  it('does not fall back to another persona when the active persona is idle', () => {
+    const lanes = [lane(10)]
+    expect(pickQueueLaneForPersona(lanes, 20)).toBeNull()
+  })
+
+  it('falls back to the first lane only when no persona is selected', () => {
+    const lanes = [lane(10), lane(20)]
+    expect(pickQueueLaneForPersona(lanes, null)?.persona_id).toBe(10)
+    expect(pickQueueLaneForPersona(lanes, 0)?.persona_id).toBe(10)
   })
 })

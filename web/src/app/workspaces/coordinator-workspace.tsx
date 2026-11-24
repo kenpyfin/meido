@@ -18,6 +18,7 @@ type Props = {
   onOpenPersona: (personaId: number, sessionId: string | null) => void
   focusTodoId?: number | null
   onFocusTodoHandled?: () => void
+  onBoardChange?: () => void
 }
 
 function formatWhen(iso: string | null | undefined): string {
@@ -157,6 +158,7 @@ export function CoordinatorWorkspace({
   onOpenPersona,
   focusTodoId = null,
   onFocusTodoHandled,
+  onBoardChange,
 }: Props) {
   const [overview, setOverview] = useState<Overview | null>(null)
   const [loading, setLoading] = useState(false)
@@ -224,6 +226,7 @@ export function CoordinatorWorkspace({
         onOpenPersona={onOpenPersona}
         focusTodoId={focusTodoId}
         onFocusTodoHandled={onFocusTodoHandled}
+        onBoardChange={onBoardChange}
       />
     </div>
   )
