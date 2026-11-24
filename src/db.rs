@@ -7323,10 +7323,7 @@ impl Database {
                AND status IN ('running', 'completed_raw', 'main_agent_processing')",
             params![lease_expires, now, stage, id],
         )?;
-        if rows == 0 {
-            return Ok(false);
-        }
-        Ok(true)
+        Ok(rows != 0)
     }
 
     pub fn mark_background_job_completed_raw(

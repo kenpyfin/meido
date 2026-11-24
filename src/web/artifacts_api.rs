@@ -52,7 +52,7 @@ pub(super) async fn list(
     State(state): State<WebState>,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let started = Instant::now();
     let (cid, pid) = scope(&state, q.chat_id, q.persona_id).await?;
     let root = state.app_state.config.workspace_root_absolute();
@@ -285,18 +285,16 @@ pub(super) async fn media_session(
     headers: HeaderMap,
     State(state): State<WebState>,
 ) -> Result<Response, ApiError> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let token = uuid::Uuid::new_v4().to_string();
     let mut sessions = MEDIA_SESSIONS.lock().map_err(error)?;
     sessions.retain(|_, (t, _)| t.elapsed() < Duration::from_secs(3600));
+    let auth_digest = state.expected_auth_token().unwrap_or_default();
     sessions.insert(
         token.clone(),
         (
             Instant::now(),
-            format!(
-                "{:x}",
-                Sha256::digest(state.auth_token.as_deref().unwrap_or("").as_bytes())
-            ),
+            format!("{:x}", Sha256::digest(auth_digest.as_bytes())),
         ),
     );
     let secure = headers
@@ -310,7 +308,7 @@ pub(super) async fn media_session(
     Ok(([("set-cookie", cookie)], Json(json!({"ok":true}))).into_response())
 }
 pub(super) fn media_auth(headers: &HeaderMap, state: &WebState) -> Result<(), ApiError> {
-    if require_auth(headers, state.auth_token.as_deref()).is_ok() {
+    if require_auth(headers, state).is_ok() {
         return Ok(());
     }
     let token = headers
@@ -322,17 +320,14 @@ pub(super) fn media_auth(headers: &HeaderMap, state: &WebState) -> Result<(), Ap
                 .find_map(|p| p.strip_prefix("artifact_session="))
         });
     if let Some(token) = token {
+        let auth_digest = state.expected_auth_token().unwrap_or_default();
+        let expected = format!("{:x}", Sha256::digest(auth_digest.as_bytes()));
         if MEDIA_SESSIONS
             .lock()
             .map_err(error)?
             .get(token)
             .is_some_and(|(t, digest)| {
-                t.elapsed() < Duration::from_secs(3600)
-                    && *digest
-                        == format!(
-                            "{:x}",
-                            Sha256::digest(state.auth_token.as_deref().unwrap_or("").as_bytes())
-                        )
+                t.elapsed() < Duration::from_secs(3600) && *digest == expected
             })
         {
             return Ok(());
@@ -355,7 +350,7 @@ pub(super) async fn detail(
     State(state): State<WebState>,
     Path(id): Path<String>,
 ) -> Result<Json<Artifact>, ApiError> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     Ok(Json(get_item(&state, id).await?))
 }
 #[derive(Deserialize)]
@@ -404,7 +399,7 @@ pub(super) async fn update(
     Path(id): Path<String>,
     Json(change): Json<Change>,
 ) -> Result<Json<Artifact>, ApiError> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let a = get_item(&state, id.clone()).await?;
     if change.status.as_deref() == Some("trash") {
         check_idle(&state, &a).await?;
@@ -426,7 +421,7 @@ pub(super) async fn review(
     State(state): State<WebState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     let a = get_item(&state, id.clone()).await?;
     check_idle(&state, &a).await?;
     Ok(Json(
@@ -448,7 +443,7 @@ pub(super) async fn remove(
     Path(id): Path<String>,
     Json(body): Json<DeleteRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_auth(&headers, state.auth_token.as_deref())?;
+    require_auth(&headers, &state)?;
     if !body.confirmed {
         return Err(error("Review and confirm permanent deletion"));
     }

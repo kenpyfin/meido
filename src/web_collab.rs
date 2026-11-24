@@ -50,7 +50,7 @@ async fn chat(
     state: &WebState,
     requested: Option<i64>,
 ) -> Result<i64, (StatusCode, String)> {
-    require_auth(headers, state.auth_token.as_deref())?;
+    require_auth(headers, state)?;
     let chat_id = resolve_chat_id_for_web(requested, &state.app_state.config)?;
     ensure_web_binding_for_universal(state, chat_id).await?;
     Ok(chat_id)

@@ -27,22 +27,14 @@ import { MemoryDialog } from './dialogs/memory-dialog'
 import { AgentHistoryDialog } from './dialogs/agent-history-dialog'
 import { TerminalDialog } from './dialogs/terminal-dialog'
 import { SetupWizardDialog } from '../components/setup-wizard-dialog'
+import { useAuth } from '../context/AuthContext'
 
+/** Auto-open only on a true fresh install (workspace not configured yet). */
 export function setupWizardShouldOpen(
-  status: { needs_initialization?: boolean; workspace_configured?: boolean } | null | undefined,
-  sessionDismissed: boolean,
+  status: { workspace_configured?: boolean } | null | undefined,
 ): boolean {
   if (!status) return false
-  if (status.workspace_configured === false) return true
-  return status.needs_initialization === true && !sessionDismissed
-}
-
-function readSetupWizardDismissed(): boolean {
-  try {
-    return sessionStorage.getItem('meido_setup_wizard_dismissed') === '1'
-  } catch {
-    return true
-  }
+  return status.workspace_configured === false
 }
 
 export function AppDialogs(props: AppDialogsProps) {
@@ -65,26 +57,13 @@ export function AppDialogs(props: AppDialogsProps) {
     agentHistory,
     terminal,
   } = props
+  const { authRequired } = useAuth()
   const [wizardOpen, setWizardOpen] = React.useState(false)
-  const wizardDismissed = React.useRef(false)
   React.useEffect(() => {
-    if (wizardDismissed.current) return
-    const status = settings.installationStatus
-    if (!setupWizardShouldOpen(status, readSetupWizardDismissed())) return
+    if (authRequired) return
+    if (!setupWizardShouldOpen(settings.installationStatus)) return
     setWizardOpen(true)
-  }, [settings.installationStatus])
-
-  function setWizard(open: boolean) {
-    setWizardOpen(open)
-    if (!open) {
-      wizardDismissed.current = true
-      try {
-        sessionStorage.setItem('meido_setup_wizard_dismissed', '1')
-      } catch {
-        /* session storage can be unavailable */
-      }
-    }
-  }
+  }, [authRequired, settings.installationStatus])
 
   return (
     <>
@@ -101,7 +80,7 @@ export function AppDialogs(props: AppDialogsProps) {
       <SetupWizardDialog
         api={api}
         open={wizardOpen}
-        onOpenChange={setWizard}
+        onOpenChange={setWizardOpen}
         onRestart={() => void settings.requestRestart()}
         restartBusy={settings.restartBusy}
       />

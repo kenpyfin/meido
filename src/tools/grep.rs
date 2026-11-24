@@ -634,7 +634,7 @@ mod tests {
             &root,
             &root.join("shared").join("ORIGIN"),
             None,
-            &[allowed.clone()],
+            std::slice::from_ref(&allowed),
         );
         assert!(msg.contains("Declared external paths"));
         assert!(msg.contains(allowed.to_string_lossy().as_ref()));

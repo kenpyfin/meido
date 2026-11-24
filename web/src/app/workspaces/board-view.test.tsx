@@ -137,7 +137,7 @@ describe('BoardView', () => {
     expect(dialogText).toContain('TODO → PLAN')
     const prompt = document.body.querySelector('textarea[aria-label="Action prompt"]') as HTMLTextAreaElement | null
     expect(prompt?.value).toBe('Keep the brass hinge.')
-    expect(prompt?.rows).toBe(2)
+    expect(prompt?.getAttribute('rows')).toBe('2')
     expect(dialogText).toContain('Action')
     expect(dialogText).not.toContain('Save prompt')
     expect(dialogText).toContain('Complete')
