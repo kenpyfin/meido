@@ -225,9 +225,10 @@ pub fn check_self_repo_git(
     )
 }
 
-/// Recursive `grep -r` / `grep -rn` is expensive unless every search root is under a declared
-/// allowed root (or is a relative cwd-scoped path). Narrow greps like
-/// `grep -rn pattern /allowed/root/*.py` stay allowed.
+/// Recursive `grep -r` / `grep -rn` is expensive unless every search root is an absolute path
+/// under a declared allowed root. Relative targets (`./shared/`, `.`) stay expensive — cwd
+/// scoping is not enough for recursive shell greps. Narrow greps like
+/// `grep -rn pattern /allowed/root/*.py` stay allowed when that root is declared.
 fn is_recursive_grep_command_scoped(command: &str, allowed_roots: &[PathBuf]) -> bool {
     let lower = command.to_ascii_lowercase();
     if !lower.contains("grep") {
@@ -247,22 +248,55 @@ fn is_recursive_grep_command_scoped(command: &str, allowed_roots: &[PathBuf]) ->
     if !recursive {
         return false;
     }
+    // No declared roots → every recursive grep stays expensive (legacy `is_expensive_shell_search`).
+    if allowed_roots.is_empty() {
+        return true;
+    }
     let tokens = grep_path_tokens(command);
     if tokens.is_empty() {
-        // `grep -rn pattern` with implicit `.` — relative/cwd scoped when allowed_roots empty
-        // still counts as expensive (shared/ workspace walks). With allowed roots, cwd is
-        // persona-scoped and relative `.` is treated as allowed.
-        return allowed_roots.is_empty();
+        // Implicit `.` is not under a declared absolute root.
+        return true;
     }
     for token in tokens {
         if is_broad_search_root(&token) {
             return true;
         }
-        if !find_root_is_allowed(&token, allowed_roots) {
+        if !grep_root_is_under_allowed(&token, allowed_roots) {
             return true;
         }
     }
     false
+}
+
+/// Absolute path (or glob under one) must sit under a declared allowed root.
+/// Relative paths are never treated as declared-root scoped for recursive grep.
+fn grep_root_is_under_allowed(raw: &str, allowed_roots: &[PathBuf]) -> bool {
+    let trimmed = raw.trim().trim_matches('"').trim_matches('\'');
+    if trimmed.is_empty() {
+        return false;
+    }
+    // Skip shell redirects that `grep_path_tokens` may still capture (`2>/dev/null`).
+    if trimmed.contains('>')
+        && (trimmed.starts_with('>')
+            || trimmed.starts_with("&>")
+            || trimmed.chars().next().is_some_and(|c| c.is_ascii_digit()))
+    {
+        return true;
+    }
+    let rooted = Path::new(trimmed).is_absolute()
+        || trimmed.starts_with('/')
+        || trimmed.starts_with('\\')
+        || trimmed.starts_with('~')
+        || trimmed.eq_ignore_ascii_case("$home")
+        || trimmed.to_ascii_lowercase().starts_with("$home/")
+        || trimmed.to_ascii_lowercase().starts_with("${home}");
+    if !rooted {
+        return false;
+    }
+    let abs = Path::new(trimmed);
+    allowed_roots
+        .iter()
+        .any(|root| crate::tools::path_under_root(abs, root))
 }
 
 /// Extract path-like arguments after the pattern in a grep invocation.
