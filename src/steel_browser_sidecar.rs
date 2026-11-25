@@ -252,9 +252,14 @@ pub fn image_present(image: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Managed mode, a local image, and the skill venv are all present.
+/// Local install pieces are present: Docker image and the Steel skill venv.
+pub fn files_installed(workspace: &str, image: &str) -> bool {
+    image_present(image) && skill_venv_installed(workspace)
+}
+
+/// Managed mode with a local image and the skill venv (ready for Meido to start the container).
 pub fn runtime_installed(workspace: &str, image: &str, managed: bool) -> bool {
-    managed && image_present(image) && skill_venv_installed(workspace)
+    managed && files_installed(workspace, image)
 }
 
 /// Create the Steel skill venv and install its requirements only when the package is missing.
@@ -406,5 +411,15 @@ mod tests {
         let urls = steel_health_urls("http://127.0.0.1:13920/");
         assert_eq!(urls[0], "http://127.0.0.1:13920/v1/health");
         assert_eq!(urls[1], "http://127.0.0.1:13920/api/health");
+    }
+
+    #[test]
+    fn runtime_installed_requires_managed_mode() {
+        assert!(!runtime_installed(
+            "/tmp/missing-steel-workspace",
+            "",
+            false
+        ));
+        assert!(!runtime_installed("/tmp/missing-steel-workspace", "", true));
     }
 }

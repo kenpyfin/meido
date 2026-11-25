@@ -194,12 +194,17 @@ async fn readiness(state: &WebState, values: &HashMap<String, String>) -> Readin
     let mempalace = crate::mempalace_setup::is_installed(&state.app_state.config);
     let workspace = steel_workspace(state);
     let image = steel_image_name(state);
-    let managed = browser_managed_now(state);
-    let steel_installed = tokio::task::spawn_blocking(move || {
-        crate::steel_browser_sidecar::runtime_installed(&workspace, &image, managed)
+    let steel_api_url = steel_api_url_now(state);
+    let files_ready = tokio::task::spawn_blocking(move || {
+        crate::steel_browser_sidecar::files_installed(&workspace, &image)
     })
     .await
     .unwrap_or(false);
+    // Match doctor: a reachable Steel API counts as installed even when the
+    // skill venv lives outside the configured WORKSPACE_DIR (or managed mode
+    // is off because the operator started Docker themselves).
+    let steel_installed =
+        files_ready || crate::steel_browser_sidecar::probe_steel_health(&steel_api_url).await;
     ReadinessExtras {
         system_llm_saved,
         provider_key_saved,
@@ -211,10 +216,19 @@ async fn readiness(state: &WebState, values: &HashMap<String, String>) -> Readin
 }
 
 fn steel_workspace(state: &WebState) -> String {
-    std::env::var("WORKSPACE_DIR")
+    state
+        .app_state
+        .config
+        .workspace_root_absolute()
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn steel_api_url_now(state: &WebState) -> String {
+    std::env::var("STEEL_API_URL")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| state.app_state.config.workspace_dir.clone())
+        .unwrap_or_else(|| state.app_state.config.steel_api_url())
 }
 
 fn steel_image_name(state: &WebState) -> String {
